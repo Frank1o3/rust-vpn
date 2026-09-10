@@ -7,6 +7,22 @@ name = "rvpn-client"
 version = "0.0.1"
 
 [[package]]
+name = "rvpn-config"
+version = "0.0.1"
+
+[[package]]
+name = "rvpn-core"
+version = "0.0.1"
+
+[[package]]
+name = "rvpn-crypto"
+version = "0.0.1"
+
+[[package]]
+name = "rvpn-protocol"
+version = "0.0.1"
+
+[[package]]
 name = "rvpn-server"
 version = "0.0.1"
 
