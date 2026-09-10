@@ -1,4 +1,6 @@
 [workspace]
+    members=["apps/rvpn-client", "apps/rvpn-server", "crates/rvpn-transport"]
+    resolver="3"
 
     [workspace.package]
         authors=["Frank1o3"]
