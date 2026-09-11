@@ -1,8 +1,13 @@
 [package]
-    authors.workspace=true
-    edition.workspace=true
-    license.workspace=true
-    name="rvpn-transport"
-    version.workspace=true
+name = "rvpn-transport"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
+bytes.workspace = true
+rvpn-core = { path = "../rvpn-core" }
+socket2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

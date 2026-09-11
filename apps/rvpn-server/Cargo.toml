@@ -6,3 +6,12 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+rvpn-config = { path = "../../crates/rvpn-config" }
+rvpn-core = { path = "../../crates/rvpn-core" }
+rvpn-crypto = { path = "../../crates/rvpn-crypto" }
+rvpn-protocol = { path = "../../crates/rvpn-protocol" }
+rvpn-transport = { path = "../../crates/rvpn-transport" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -6,3 +6,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+bytes.workspace = true
+rvpn-core = { path = "../rvpn-core" }
+thiserror.workspace = true

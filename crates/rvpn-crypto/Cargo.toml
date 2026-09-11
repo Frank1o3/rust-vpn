@@ -6,3 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+rand.workspace = true
+rvpn-core = { path = "../rvpn-core" }
+thiserror.workspace = true
+zeroize.workspace = true
