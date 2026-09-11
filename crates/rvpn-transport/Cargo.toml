@@ -7,7 +7,5 @@ version.workspace = true
 
 [dependencies]
 bytes.workspace = true
-rvpn-core = { path = "../rvpn-core" }
-socket2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

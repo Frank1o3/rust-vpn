@@ -1,63 +1,126 @@
-//! Reusable unencrypted datagram transport abstractions.
+//! Reusable, asynchronous transport for opaque UDP datagrams.
+//!
+//! This crate neither parses RVPN packets nor protects them cryptographically.
+//! It currently implements bounded UDP I/O and received-packet events. Reliable
+//! delivery, acknowledgements, retransmission, and ordered receive buffers are
+//! intentionally future work.
 
-use bytes::Bytes;
-use std::net::SocketAddr;
-use thiserror::Error;
-use tokio::net::UdpSocket;
+mod config;
+mod delivery;
+mod error;
+mod events;
+mod packet;
+mod transport;
 
-/// Bytes received from a peer.
-#[derive(Clone, Debug)]
-pub struct ReceivedDatagram {
-    /// Source address reported by UDP.
-    pub peer: SocketAddr,
-    /// Exact opaque payload received from UDP.
-    pub bytes: Bytes,
-}
+pub use config::{MAX_UDP_PAYLOAD_SIZE, TransportConfig};
+pub use delivery::{DeliveryMode, Ordering, Priority, Reliability, SendOptions};
+pub use error::TransportError;
+pub use events::{EventTransport, TransportEvent, TransportEvents};
+pub use packet::{PacketId, ReceivedDatagram, TransportPacket};
+pub use transport::UdpTransport;
 
-/// A UDP transport that only moves opaque bytes. It performs no encryption.
-#[derive(Debug)]
-pub struct UdpTransport {
-    socket: UdpSocket,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use tokio::time::{Duration, timeout};
 
-impl UdpTransport {
-    /// Binds a UDP socket to `address`.
-    pub async fn bind(address: SocketAddr) -> Result<Self, TransportError> {
-        Ok(Self {
-            socket: UdpSocket::bind(address).await?,
-        })
+    fn localhost() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
     }
 
-    /// Returns the bound local address.
-    pub fn local_addr(&self) -> Result<SocketAddr, TransportError> {
-        Ok(self.socket.local_addr()?)
+    #[test]
+    fn delivery_dimensions_are_independent() {
+        assert_eq!(DeliveryMode::ORDERED.reliability, Reliability::Unreliable);
+        assert_eq!(DeliveryMode::RELIABLE.ordering, Ordering::Unordered);
+        assert!(Priority::High > Priority::Normal);
     }
 
-    /// Sends opaque bytes to `peer`.
-    pub async fn send(&self, peer: SocketAddr, bytes: &[u8]) -> Result<usize, TransportError> {
-        Ok(self.socket.send_to(bytes, peer).await?)
+    #[test]
+    fn rejects_invalid_datagram_limit() {
+        let mut config = TransportConfig::new(localhost());
+        config.max_datagram_size = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(TransportError::InvalidDatagramSize { .. })
+        ));
     }
 
-    /// Receives one datagram, up to `max_size` bytes.
-    pub async fn receive(&self, max_size: usize) -> Result<ReceivedDatagram, TransportError> {
-        if max_size == 0 {
-            return Err(TransportError::InvalidReceiveSize);
-        }
-        let mut buffer = vec![0; max_size];
-        let (length, peer) = self.socket.recv_from(&mut buffer).await?;
-        buffer.truncate(length);
-        Ok(ReceivedDatagram {
-            peer,
-            bytes: Bytes::from(buffer),
-        })
+    #[tokio::test]
+    async fn sends_and_receives_opaque_bytes_over_udp() {
+        let receiver = UdpTransport::bind(localhost()).await.unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+        sender
+            .send_to(
+                receiver.local_addr().unwrap(),
+                Bytes::from_static(b"opaque"),
+                SendOptions::default(),
+            )
+            .await
+            .unwrap();
+        let received = timeout(Duration::from_secs(1), receiver.receive())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.payload, Bytes::from_static(b"opaque"));
+        assert_eq!(received.peer, sender.local_addr().unwrap());
     }
-}
 
-/// Transport-level failures. Packet format and cryptographic failures never appear here.
-#[derive(Debug, Error)]
-pub enum TransportError {
-    #[error("UDP I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("receive buffer size must be greater than zero")]
-    InvalidReceiveSize,
+    #[tokio::test]
+    async fn emits_received_packet_events() {
+        let receiver = UdpTransport::bind(localhost()).await.unwrap();
+        let receiver_address = receiver.local_addr().unwrap();
+        let (_transport, mut events) = EventTransport::new(receiver, 4).unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+        sender
+            .send_to(
+                receiver_address,
+                Bytes::from_static(b"event"),
+                SendOptions::default(),
+            )
+            .await
+            .unwrap();
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(event, TransportEvent::PacketReceived(packet) if packet.payload == b"event"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_peer_and_size_limit_are_enforced() {
+        let receiver = UdpTransport::bind(localhost()).await.unwrap();
+        let mut config = TransportConfig::new(localhost());
+        config.remote_address = Some(receiver.local_addr().unwrap());
+        config.max_datagram_size = 3;
+        let sender = UdpTransport::open(config).await.unwrap();
+
+        assert!(matches!(
+            sender
+                .send(Bytes::from_static(b"four"), SendOptions::default())
+                .await,
+            Err(TransportError::DatagramTooLarge { .. })
+        ));
+        assert!(matches!(
+            sender
+                .send(
+                    Bytes::from_static(b"ok"),
+                    SendOptions {
+                        delivery: DeliveryMode::RELIABLE,
+                        ..SendOptions::default()
+                    }
+                )
+                .await,
+            Err(TransportError::UnsupportedDeliveryMode)
+        ));
+
+        sender
+            .send(Bytes::from_static(b"ok"), SendOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(receiver.receive().await.unwrap().payload, b"ok"[..]);
+    }
 }

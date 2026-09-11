@@ -235,8 +235,6 @@ name = "rvpn-transport"
 version = "0.0.1"
 dependencies = [
  "bytes",
- "rvpn-core",
- "socket2",
  "thiserror",
  "tokio",
 ]
