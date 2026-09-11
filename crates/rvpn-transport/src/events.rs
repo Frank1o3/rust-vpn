@@ -8,6 +8,13 @@ use tokio::{sync::mpsc, task::JoinHandle};
 pub enum TransportEvent {
     /// An opaque UDP datagram arrived from a peer.
     PacketReceived(TransportPacket),
+    /// An inbound datagram exceeded the configured maximum and was discarded.
+    DatagramDropped {
+        /// Received size, or at least one byte beyond the configured maximum.
+        size: usize,
+        /// Maximum configured payload size.
+        maximum: usize,
+    },
     /// Receiving from UDP failed and the event loop stopped.
     ReceiveFailed(TransportError),
 }
@@ -47,6 +54,9 @@ impl EventTransport {
             loop {
                 let event = match receive_from(&socket, maximum).await {
                     Ok(packet) => TransportEvent::PacketReceived(packet),
+                    Err(TransportError::DatagramTooLarge { size, maximum }) => {
+                        TransportEvent::DatagramDropped { size, maximum }
+                    }
                     Err(error) => TransportEvent::ReceiveFailed(error),
                 };
                 let terminal = matches!(event, TransportEvent::ReceiveFailed(_));

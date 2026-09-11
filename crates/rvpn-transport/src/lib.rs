@@ -123,4 +123,53 @@ mod tests {
             .unwrap();
         assert_eq!(receiver.receive().await.unwrap().payload, b"ok"[..]);
     }
+
+    #[tokio::test]
+    async fn oversized_inbound_datagram_is_rejected_without_truncation() {
+        let mut config = TransportConfig::new(localhost());
+        config.max_datagram_size = 3;
+        let receiver = UdpTransport::open(config).await.unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+        sender
+            .send_to(
+                receiver.local_addr().unwrap(),
+                Bytes::from_static(b"four"),
+                SendOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            receiver.receive().await,
+            Err(TransportError::DatagramTooLarge {
+                size: 4,
+                maximum: 3
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn oversized_event_does_not_stop_event_loop() {
+        let mut config = TransportConfig::new(localhost());
+        config.max_datagram_size = 3;
+        let receiver = UdpTransport::open(config).await.unwrap();
+        let receiver_address = receiver.local_addr().unwrap();
+        let (_transport, mut events) = EventTransport::new(receiver, 4).unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+        for payload in [Bytes::from_static(b"four"), Bytes::from_static(b"ok")] {
+            sender
+                .send_to(receiver_address, payload, SendOptions::default())
+                .await
+                .unwrap();
+        }
+        let first = events.recv().await.unwrap();
+        let second = events.recv().await.unwrap();
+        assert!(
+            matches!(&first, TransportEvent::DatagramDropped { .. })
+                || matches!(&second, TransportEvent::DatagramDropped { .. })
+        );
+        assert!(
+            matches!(&first, TransportEvent::PacketReceived(packet) if packet.payload == b"ok"[..])
+                || matches!(&second, TransportEvent::PacketReceived(packet) if packet.payload == b"ok"[..])
+        );
+    }
 }

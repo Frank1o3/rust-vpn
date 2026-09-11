@@ -4,7 +4,7 @@ use std::{net::SocketAddr, sync::Arc, time::Instant};
 use tokio::net::UdpSocket;
 
 /// An asynchronous UDP endpoint for opaque byte payloads.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct UdpTransport {
     socket: Arc<UdpSocket>,
     config: TransportConfig,
@@ -66,6 +66,10 @@ impl UdpTransport {
     }
 
     /// Receives one bounded opaque UDP datagram.
+    ///
+    /// Callers must choose either this method or [`crate::EventTransport`] as
+    /// the receive strategy for an endpoint. Concurrent receives intentionally
+    /// have UDP's normal nondeterministic packet distribution semantics.
     pub async fn receive(&self) -> Result<ReceivedDatagram, TransportError> {
         receive_from(&self.socket, self.config.max_datagram_size).await
     }
@@ -98,8 +102,16 @@ pub(crate) async fn receive_from(
     socket: &UdpSocket,
     maximum: usize,
 ) -> Result<ReceivedDatagram, TransportError> {
-    let mut buffer = vec![0; maximum];
+    // Request one extra byte so an oversized datagram cannot be mistaken for a
+    // valid datagram truncated to exactly `maximum` bytes by the OS.
+    let mut buffer = vec![0; maximum + 1];
     let (length, peer) = socket.recv_from(&mut buffer).await?;
+    if length > maximum {
+        return Err(TransportError::DatagramTooLarge {
+            size: length,
+            maximum,
+        });
+    }
     buffer.truncate(length);
     Ok(ReceivedDatagram {
         peer,
