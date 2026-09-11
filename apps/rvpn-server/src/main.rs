@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::ServerConfig;
-use rvpn_crypto::HandshakePsk;
-use rvpn_protocol::{HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
+use rvpn_crypto::{AEAD_TAG_LEN, HandshakePsk};
+use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
+use rvpn_protocol::{HEADER_LEN, HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
 use rvpn_transport::{SendOptions, TransportConfig, UdpTransport};
 use std::{env, fs};
 
@@ -12,7 +13,16 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: rvpn-server <server.toml>")?;
     let config = ServerConfig::from_toml(&fs::read_to_string(path)?)?;
-    let transport = UdpTransport::open(TransportConfig::new(config.bind)).await?;
+    let tun_config = TunConfig {
+        name: config.interface.name.clone(),
+        mtu: config.interface.mtu.unwrap_or(DEFAULT_MTU),
+    };
+    let transport = UdpTransport::open(TransportConfig {
+        local_address: config.bind,
+        remote_address: None,
+        max_datagram_size: usize::from(tun_config.mtu) + HEADER_LEN + AEAD_TAG_LEN,
+    })
+    .await?;
     tracing::info!(bind = %transport.local_addr()?, "rvpn server waiting for one handshake");
     let initiation_datagram = transport.receive().await?;
     let initiation_packet = Packet::decode(initiation_datagram.payload)?;
@@ -58,7 +68,40 @@ async fn main() -> Result<()> {
     {
         bail!("invalid RVPN handshake finish");
     }
-    let session = handshake.finish(HandshakeMessage::decode(finish_packet.payload)?)?;
-    tracing::info!(session_id = ?session.session_id(), peer = %finish_datagram.peer, "authenticated RVPN session established; packet forwarding is not implemented yet");
-    Ok(())
+    let mut session = handshake.finish(HandshakeMessage::decode(finish_packet.payload)?)?;
+    let peer = finish_datagram.peer;
+    let tun = TunDevice::create(tun_config).await?;
+    tracing::info!(session_id = ?session.session_id(), %peer, interface = %tun.name(), mtu = tun.mtu(), "authenticated RVPN server data plane started for one peer");
+
+    loop {
+        tokio::select! {
+            packet = tun.recv() => {
+                let packet = packet?;
+                tracing::debug!(bytes = packet.len(), "received IP packet from TUN");
+                let packet = session.seal(PacketKind::Data, &packet)?;
+                tracing::debug!(bytes = packet.payload.len(), sequence = packet.header.sequence, "sending protected packet over UDP");
+                transport.send_to(peer, packet.encode(), SendOptions::default()).await?;
+            }
+            datagram = transport.receive() => {
+                let datagram = datagram?;
+                tracing::debug!(peer = %datagram.peer, bytes = datagram.payload.len(), "received UDP datagram");
+                if datagram.peer != peer {
+                    tracing::warn!(peer = %datagram.peer, "discarding packet from an unexpected peer");
+                    continue;
+                }
+                let packet = match Packet::decode(datagram.payload) {
+                    Ok(packet) if packet.header.kind == PacketKind::Data => packet,
+                    Ok(_) => { tracing::warn!("discarding non-data packet after handshake"); continue; }
+                    Err(error) => { tracing::warn!(%error, "discarding malformed RVPN packet"); continue; }
+                };
+                match session.open(packet) {
+                    Ok(packet) => {
+                        tracing::debug!(bytes = packet.len(), "writing authenticated IP packet to TUN");
+                        tun.send(&packet).await?
+                    }
+                    Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed RVPN packet"),
+                }
+            }
+        }
+    }
 }

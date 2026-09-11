@@ -1,0 +1,8 @@
+# client.toml
+bind="192.0.2.1:9000"
+pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
+server="192.0.2.1:9000"
+
+[interface]
+    mtu=1400
+    name="rvpn-client0"

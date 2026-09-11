@@ -37,6 +37,9 @@ pub struct ClientConfig {
     pub server: SocketAddr,
     /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
     pub pre_shared_key: String,
+    /// Local TUN device settings used after session establishment.
+    #[serde(default)]
+    pub interface: InterfaceConfig,
 }
 
 impl ClientConfig {
@@ -50,7 +53,8 @@ impl ClientConfig {
     /// Checks endpoint and PSK encoding without logging secret material.
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.server)?;
-        validate_psk(&self.pre_shared_key)
+        validate_psk(&self.pre_shared_key)?;
+        self.interface.validate()
     }
 
     /// Decodes the provisioned PSK for handoff to the crypto layer.
@@ -66,6 +70,9 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
     pub pre_shared_key: String,
+    /// Local TUN device settings used after session establishment.
+    #[serde(default)]
+    pub interface: InterfaceConfig,
 }
 
 impl ServerConfig {
@@ -79,12 +86,41 @@ impl ServerConfig {
     /// Checks bind endpoint and PSK encoding.
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.bind)?;
-        validate_psk(&self.pre_shared_key)
+        validate_psk(&self.pre_shared_key)?;
+        self.interface.validate()
     }
 
     /// Decodes the provisioned PSK for handoff to the crypto layer.
     pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
         decode_psk(&self.pre_shared_key)
+    }
+}
+
+/// Platform-neutral settings for a local Layer-3 tunnel device.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct InterfaceConfig {
+    /// Requested interface name; omit it to let Linux choose one.
+    pub name: Option<String>,
+    /// Maximum IP packet size. App transport buffers include protocol overhead.
+    pub mtu: Option<u16>,
+}
+
+impl Default for InterfaceConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            mtu: None,
+        }
+    }
+}
+
+impl InterfaceConfig {
+    /// Rejects an obviously unusable configured IP MTU.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if matches!(self.mtu, Some(mtu) if mtu < 576) {
+            return Err(ConfigError::Invalid("interface MTU must be at least 576"));
+        }
+        Ok(())
     }
 }
 

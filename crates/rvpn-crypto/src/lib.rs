@@ -19,6 +19,8 @@ use zeroize::Zeroize;
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
+/// ChaCha20-Poly1305 authentication-tag bytes appended to ciphertext.
+pub const AEAD_TAG_LEN: usize = 16;
 const INFO_C2S: &[u8] = b"rvpn-v1/session/client-to-server";
 const INFO_S2C: &[u8] = b"rvpn-v1/session/server-to-client";
 const PSK_LEN: usize = 32;
