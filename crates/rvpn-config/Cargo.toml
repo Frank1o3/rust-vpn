@@ -6,6 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+hex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 toml.workspace = true

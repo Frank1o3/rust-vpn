@@ -10,8 +10,9 @@ use chacha20poly1305::{
     aead::{Aead, Payload},
 };
 use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use rand::{TryRng, rngs::SysRng};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
@@ -20,6 +21,7 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const INFO_C2S: &[u8] = b"rvpn-v1/session/client-to-server";
 const INFO_S2C: &[u8] = b"rvpn-v1/session/server-to-client";
+const PSK_LEN: usize = 32;
 
 /// Memory-cleared secret bytes.
 pub struct Secret<const N: usize>([u8; N]);
@@ -41,6 +43,16 @@ impl<const N: usize> Secret<N> {
     fn as_bytes(&self) -> &[u8; N] {
         &self.0
     }
+}
+
+/// Generates non-secret random protocol bytes from the operating-system CSPRNG.
+pub fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
+    Ok(Secret::<N>::random()?.0)
+}
+
+/// Computes the SHA-256 transcript hash supplied to session-key derivation.
+pub fn transcript_hash(transcript: &[u8]) -> [u8; KEY_LEN] {
+    Sha256::digest(transcript).into()
 }
 
 impl<const N: usize> Drop for Secret<N> {
@@ -112,6 +124,47 @@ pub struct SharedSecret(Secret<KEY_LEN>);
 impl core::fmt::Debug for SharedSecret {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SharedSecret([REDACTED])")
+    }
+}
+
+/// A 256-bit pre-shared key used to authenticate the initial RVPN handshake.
+///
+/// This is a bootstrap authentication mechanism for the first client/server
+/// implementation. A later identity system may replace it without changing
+/// the X25519, HKDF, or packet-AEAD boundaries.
+pub struct HandshakePsk(Secret<PSK_LEN>);
+
+impl HandshakePsk {
+    /// Constructs a PSK from securely provisioned 32-byte key material.
+    pub fn from_bytes(bytes: [u8; PSK_LEN]) -> Self {
+        Self(Secret::from_bytes(bytes))
+    }
+
+    /// Generates a fresh PSK for secure out-of-band provisioning.
+    pub fn generate() -> Result<Self, CryptoError> {
+        Ok(Self(Secret::random()?))
+    }
+
+    /// Computes a 32-byte HMAC-SHA-256 over canonical handshake data.
+    pub fn authenticate(&self, data: &[u8]) -> [u8; PSK_LEN] {
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_bytes())
+            .expect("fixed-length HMAC keys are always accepted");
+        mac.update(data);
+        mac.finalize().into_bytes().into()
+    }
+
+    /// Verifies a handshake authenticator in constant time.
+    pub fn verify(&self, data: &[u8], tag: &[u8; PSK_LEN]) -> bool {
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_bytes())
+            .expect("fixed-length HMAC keys are always accepted");
+        mac.update(data);
+        mac.verify_slice(tag).is_ok()
+    }
+}
+
+impl core::fmt::Debug for HandshakePsk {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("HandshakePsk([REDACTED])")
     }
 }
 

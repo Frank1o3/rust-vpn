@@ -1,11 +1,11 @@
 [package]
-name = "rvpn-transport"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-transport"
+    version.workspace=true
 
 [dependencies]
-bytes.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
+    bytes.workspace=true
+    thiserror.workspace=true
+    tokio.workspace=true

@@ -1,11 +1,12 @@
 [package]
-name = "rvpn-protocol"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-protocol"
+    version.workspace=true
 
 [dependencies]
-bytes.workspace = true
-rvpn-core = { path = "../rvpn-core" }
-thiserror.workspace = true
+    bytes.workspace=true
+    rvpn-core={path="../rvpn-core"}
+    rvpn-crypto={path="../rvpn-crypto"}
+    thiserror.workspace=true
