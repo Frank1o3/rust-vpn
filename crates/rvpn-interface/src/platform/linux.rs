@@ -12,7 +12,6 @@ use std::{
 };
 use tokio::io::unix::AsyncFd;
 
-
 const TUN_PATH: &str = "/dev/net/tun";
 const IFREQ_UNION_SIZE: usize = 24;
 
@@ -118,7 +117,6 @@ impl TunDevice {
             mode,
         })
     }
-
 
     /// Kernel-assigned interface name.
     pub fn name(&self) -> &str {
@@ -237,7 +235,7 @@ fn set_mtu(name: &str, mtu: u16) -> Result<(), InterfaceError> {
     let mut request = IfReq::new(Some(name));
     request.data[..4].copy_from_slice(&(mtu as libc::c_int).to_ne_bytes());
     // SAFETY: the socket and `ifreq` are valid for this ioctl call.
-    let result = unsafe { libc::ioctl(socket, libc::SIOCSIFMTU, &mut request) };
+    let result = unsafe { libc::ioctl(socket, libc::SIOCSIFMTU as libc::Ioctl, &mut request) };
     let error = if result < 0 {
         Some(std::io::Error::last_os_error())
     } else {
@@ -255,7 +253,7 @@ fn set_up(name: &str) -> Result<(), InterfaceError> {
     }
     let mut request = IfReq::new(Some(name));
     // SAFETY: the socket and `ifreq` are valid for this ioctl call.
-    if unsafe { libc::ioctl(socket, libc::SIOCGIFFLAGS, &mut request) } < 0 {
+    if unsafe { libc::ioctl(socket, libc::SIOCGIFFLAGS as libc::Ioctl, &mut request) } < 0 {
         let error = std::io::Error::last_os_error();
         unsafe { libc::close(socket) };
         return Err(error.into());
@@ -263,7 +261,7 @@ fn set_up(name: &str) -> Result<(), InterfaceError> {
     let mut flags = i16::from_ne_bytes(request.data[..2].try_into().unwrap());
     flags |= (libc::IFF_UP | libc::IFF_RUNNING) as i16;
     request.data[..2].copy_from_slice(&flags.to_ne_bytes());
-    let result = unsafe { libc::ioctl(socket, libc::SIOCSIFFLAGS, &mut request) };
+    let result = unsafe { libc::ioctl(socket, libc::SIOCSIFFLAGS as libc::Ioctl, &mut request) };
     let error = if result < 0 {
         Some(std::io::Error::last_os_error())
     } else {
@@ -337,4 +335,3 @@ mod tests {
         unsafe { libc::close(fds[1]) };
     }
 }
-
