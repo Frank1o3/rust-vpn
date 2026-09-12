@@ -31,36 +31,83 @@ pub async fn configure_client_network(
             .gateway
             .as_deref()
             .expect("validated gateway");
-        if server.is_ipv4() {
-            let endpoint_gateway = config
-                .routing
-                .endpoint_gateway
-                .as_deref()
-                .expect("validated endpoint gateway");
-            let endpoint = format!("{}/32", server.ip());
-            route_replace(&endpoint, Some(endpoint_gateway), "").await?;
-        }
+
+        preserve_server_route(server).await?;
+
         route_replace("0.0.0.0/1", Some(gateway), dev.name()).await?;
         route_replace("128.0.0.0/1", Some(gateway), dev.name()).await?;
     }
+
     if config.routing.default_route_v6 {
         let gateway = config
             .routing
             .gateway_v6
             .as_deref()
             .expect("validated gateway");
-        if server.is_ipv6() {
-            let endpoint_gateway = config
-                .routing
-                .endpoint_gateway_v6
-                .as_deref()
-                .expect("validated endpoint gateway");
-            let endpoint = format!("{}/128", server.ip());
-            route_replace(&endpoint, Some(endpoint_gateway), "").await?;
-        }
+
+        preserve_server_route(server).await?;
+
         route_replace("::/1", Some(gateway), dev.name()).await?;
         route_replace("8000::/1", Some(gateway), dev.name()).await?;
     }
+    Ok(())
+}
+
+async fn preserve_server_route(server: SocketAddr) -> Result<()> {
+    let output = Command::new("ip")
+        .args([
+            if server.is_ipv6() { "-6" } else { "-4" },
+            "route",
+            "get",
+            &server.ip().to_string(),
+        ])
+        .output()
+        .await
+        .context("querying existing route to RVPN server")?;
+
+    if !output.status.success() {
+        bail!(
+            "ip route get failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let route = String::from_utf8_lossy(&output.stdout);
+    let fields: Vec<&str> = route.split_whitespace().collect();
+
+    let gateway = fields
+        .windows(2)
+        .find(|window| window[0] == "via")
+        .map(|window| window[1]);
+
+    let device = fields
+        .windows(2)
+        .find(|window| window[0] == "dev")
+        .map(|window| window[1]);
+
+    let Some(device) = device else {
+        bail!("could not determine physical interface for RVPN server route");
+    };
+
+    let destination = if server.is_ipv6() {
+        format!("{}/128", server.ip())
+    } else {
+        format!("{}/32", server.ip())
+    };
+
+    if let Some(gateway) = gateway {
+        route_replace(&destination, Some(gateway), device).await?;
+    } else {
+        route_replace(&destination, None, device).await?;
+    }
+
+    tracing::info!(
+        server = %server,
+        gateway = gateway.unwrap_or("<direct>"),
+        device,
+        "preserved physical route to RVPN server"
+    );
+
     Ok(())
 }
 
