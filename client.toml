@@ -1,7 +1,7 @@
 # RVPN Client configuration
 # Run on the main PC (connecting to the laptop at 10.0.0.91:9000)
 pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
-server="cachyos-pc:9000"
+server="192.168.88.254:9000"
 
 [interface]
     name="rvpn-client0"

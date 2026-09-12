@@ -24,9 +24,29 @@ pub async fn run_data_plane(
         tokio::select! {
             signal = &mut shutdown_signal => {
                 signal?;
+
                 let close = session.seal(PacketKind::Close, b"")?;
-                let _ = transport.send_to(server, close.encode(), SendOptions::default()).await;
-                tracing::info!("sent authenticated close packet");
+
+                match transport
+                    .send_to(server, close.encode(), SendOptions::default())
+                    .await
+                {
+                    Ok(bytes) => {
+                        tracing::info!(
+                            bytes,
+                            server = %server,
+                            "sent authenticated close packet"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            server = %server,
+                            "failed to send authenticated close packet"
+                        );
+                    }
+                }
+
                 return Ok(());
             }
             packet = async {

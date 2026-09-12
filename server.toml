@@ -27,6 +27,6 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
     pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
 
 [[peers]]
-    allowed_ips=["10.42.0.3/32", "fd42::2/128"]
+    allowed_ips=["10.42.0.3/32", "fd42::3/128"]
     name="Phone"
     pre_shared_key="a4b7e546efa6d5012f0f07844c3da965a96acb74e1381848d3d1734ef404d2cd"
