@@ -362,6 +362,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvpn-android"
+version = "0.0.1"
+
+[[package]]
 name = "rvpn-client"
 version = "0.0.1"
 dependencies = [

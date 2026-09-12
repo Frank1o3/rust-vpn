@@ -136,11 +136,8 @@ async fn main() -> Result<()> {
             } => {
                 let outbound = outbound_tun?;
                 let Some(destination) = packet_destination(&outbound) else { continue; };
-                if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| routes_to(&peer.identity.allowed_ips, destination)) {
-                    if config.rekey.packet_limit != 0 && peer.session.should_rekey(config.rekey.packet_limit) {
-                        let request = peer.session.seal(PacketKind::Rekey, b"")?;
-                        transport.send_to(peer.endpoint, request.encode(), SendOptions::default()).await?;
-                    }
+                if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
+                    maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
                     let packet = peer.session.seal(PacketKind::Data, &outbound)?;
                     transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
                 } else {
@@ -159,20 +156,14 @@ async fn main() -> Result<()> {
                 let dst_mac: [u8; 6] = outbound[0..6].try_into().unwrap();
                 if is_broadcast_or_multicast_mac(&dst_mac) {
                     for peer in active.values_mut() {
-                        if config.rekey.packet_limit != 0 && peer.session.should_rekey(config.rekey.packet_limit) {
-                            let request = peer.session.seal(PacketKind::Rekey, b"")?;
-                            let _ = transport.send_to(peer.endpoint, request.encode(), SendOptions::default()).await;
-                        }
+                        maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
                         if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
                             let _ = transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await;
                         }
                     }
                 } else if let Some(target_session) = mac_table.get(&dst_mac) {
                     if let Some(peer) = active.get_mut(target_session) {
-                        if config.rekey.packet_limit != 0 && peer.session.should_rekey(config.rekey.packet_limit) {
-                            let request = peer.session.seal(PacketKind::Rekey, b"")?;
-                            let _ = transport.send_to(peer.endpoint, request.encode(), SendOptions::default()).await;
-                        }
+                        maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
                         let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
                         transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
                     }
@@ -180,11 +171,8 @@ async fn main() -> Result<()> {
                     let dest_ip = ethernet_payload_ip(&outbound, true);
                     let mut sent = false;
                     if let Some(destination) = dest_ip {
-                        if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| routes_to(&peer.identity.allowed_ips, destination)) {
-                            if config.rekey.packet_limit != 0 && peer.session.should_rekey(config.rekey.packet_limit) {
-                                let request = peer.session.seal(PacketKind::Rekey, b"")?;
-                                let _ = transport.send_to(peer.endpoint, request.encode(), SendOptions::default()).await;
-                            }
+                        if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
+                            maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
                             let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
                             transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
                             sent = true;
@@ -199,6 +187,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+
             datagram = transport.receive() => {
                 let datagram = datagram?;
                 let packet = match Packet::decode(datagram.payload) {
@@ -209,7 +198,7 @@ async fn main() -> Result<()> {
                     }
                 };
                 match packet.header.kind {
-                    PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::new([0; 16]) => {
+                    PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::ZERO => {
                         if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
                             begin_initial(&transport, &identities, &mut pending, datagram.peer, initiation).await?;
                         }
@@ -236,7 +225,7 @@ async fn main() -> Result<()> {
                                     mac_table.insert(src_mac, session_id);
                                 }
                                 if let Some(source) = ethernet_payload_ip(&plaintext, false) {
-                                    if !permits(&peer.identity.allowed_ips, source) {
+                                    if !ip_in_prefixes(&peer.identity.allowed_ips, source) {
                                         tracing::warn!(peer = %peer.identity.name, %source, "discarding TAP packet with unauthorized source address");
                                         continue;
                                     }
@@ -258,7 +247,7 @@ async fn main() -> Result<()> {
                                     }
                                 } else {
                                     let Some(source) = packet_source(&plaintext) else { continue; };
-                                    if !permits(&peer.identity.allowed_ips, source) {
+                                    if !ip_in_prefixes(&peer.identity.allowed_ips, source) {
                                         tracing::warn!(peer = %peer.identity.name, %source, "discarding packet with unauthorized source address");
                                         continue;
                                     }
@@ -341,6 +330,7 @@ async fn begin_rekey(
     initiation: HandshakeMessage,
 ) -> Result<()> {
     if pending.contains_key(&current.session.session_id()) {
+        tracing::debug!(peer = %current.identity.name, session_id = ?current.session.session_id(), "rekey already in progress for peer; ignoring initiation");
         return Ok(());
     }
     let phase = current
@@ -380,6 +370,20 @@ async fn begin_rekey(
     Ok(())
 }
 
+async fn maybe_send_rekey(
+    transport: &UdpTransport,
+    peer: &mut ActivePeer,
+    packet_limit: u64,
+) -> Result<()> {
+    if packet_limit != 0 && peer.session.should_rekey(packet_limit) {
+        let request = peer.session.seal(PacketKind::Rekey, b"")?;
+        transport
+            .send_to(peer.endpoint, request.encode(), SendOptions::default())
+            .await?;
+    }
+    Ok(())
+}
+
 fn finish_pending(
     pending: &mut HashMap<SessionId, PendingHandshake>,
     active: &mut HashMap<SessionId, ActivePeer>,
@@ -387,9 +391,18 @@ fn finish_pending(
     packet: Packet,
 ) -> Result<()> {
     let Some(pending_handshake) = pending.remove(&packet.header.session_id) else {
+        tracing::debug!(session_id = ?packet.header.session_id, %endpoint, "received finish for unknown or expired pending handshake");
         return Ok(());
     };
     if pending_handshake.endpoint != endpoint || pending_handshake.kind != packet.header.kind {
+        tracing::warn!(
+            session_id = ?packet.header.session_id,
+            expected_endpoint = %pending_handshake.endpoint,
+            actual_endpoint = %endpoint,
+            expected_kind = ?pending_handshake.kind,
+            actual_kind = ?packet.header.kind,
+            "discarding finish packet with mismatched endpoint or packet kind"
+        );
         return Ok(());
     }
     let finish = HandshakeMessage::decode(packet.payload)?;
@@ -427,10 +440,11 @@ async fn retransmit_pending(
     Ok(())
 }
 
-fn permits(prefixes: &[IpNet], address: IpAddr) -> bool {
-    prefixes.is_empty() || prefixes.iter().any(|prefix| prefix.contains(&address))
-}
-fn routes_to(prefixes: &[IpNet], address: IpAddr) -> bool {
+/// Returns `true` when `address` falls within any of `prefixes`, or when
+/// `prefixes` is empty (meaning the peer is unrestricted / any destination
+/// is routable to it).  Used both for source-address access control and for
+/// outbound route selection.
+fn ip_in_prefixes(prefixes: &[IpNet], address: IpAddr) -> bool {
     prefixes.is_empty() || prefixes.iter().any(|prefix| prefix.contains(&address))
 }
 fn packet_source(packet: &[u8]) -> Option<IpAddr> {

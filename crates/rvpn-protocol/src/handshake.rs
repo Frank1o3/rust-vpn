@@ -235,11 +235,15 @@ impl HandshakeState {
     /// Advances after transmitting a legal message.
     pub fn on_send(&mut self, message: HandshakeMessage) -> Result<(), ProtocolError> {
         match (*self, message) {
+            // Initiator sends the first message.
             (Self::New(HandshakeRole::Initiator), HandshakeMessage::Initiation { .. }) => {
                 *self = Self::AwaitingResponse;
                 Ok(())
             }
+            // Responder retransmits its response while waiting for the client finish.
+            // This does not advance the state; retransmission is handled by the caller.
             (Self::AwaitingFinish, HandshakeMessage::Response { .. }) => Ok(()),
+            // Initiator sends the final finish message.
             (Self::AwaitingFinish, HandshakeMessage::Finish { .. }) => {
                 *self = Self::Established;
                 Ok(())
@@ -247,6 +251,7 @@ impl HandshakeState {
             _ => Err(ProtocolError::InvalidHandshake),
         }
     }
+
     /// Advances after receiving a legal message.
     pub fn on_receive(&mut self, message: HandshakeMessage) -> Result<(), ProtocolError> {
         match (*self, message) {

@@ -1,7 +1,7 @@
 //! Linux `/dev/net/tun` implementation.
 
 use crate::{DeviceMode, InterfaceError, TunConfig};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -110,12 +110,20 @@ impl TunDevice {
         } else {
             self.mtu as usize
         };
-        let mut buffer = vec![0; max_packet_len + 1];
+        // +1 sentinel: if the kernel reports more than max_packet_len bytes the
+        // packet is oversized.  We never observe the extra byte's content.
+        let capacity = max_packet_len + 1;
+        let mut buffer = BytesMut::with_capacity(capacity);
         loop {
             let mut ready = self.file.readable().await?;
             match ready.try_io(|file| {
-                let mut file = file.get_ref();
-                file.read(&mut buffer)
+                // SAFETY: bytes are written by the kernel's read before we slice them.
+                unsafe { buffer.set_len(capacity) };
+                let result = file.get_ref().read(&mut buffer);
+                if let Ok(n) = result {
+                    unsafe { buffer.set_len(n) };
+                }
+                result
             }) {
                 Ok(Ok(length)) => {
                     if length > max_packet_len {
@@ -124,12 +132,17 @@ impl TunDevice {
                             mtu: max_packet_len as u16,
                         });
                     }
-                    buffer.truncate(length);
-                    validate_packet(&buffer, self.mtu, self.mode)?;
-                    return Ok(Bytes::from(buffer));
+                    // buffer is already truncated to `length` in the closure above.
+                    let bytes = buffer.split().freeze();
+                    validate_packet(&bytes, self.mtu, self.mode)?;
+                    return Ok(bytes);
                 }
                 Ok(Err(error)) => return Err(error.into()),
-                Err(_) => continue,
+                Err(_) => {
+                    // AsyncFd signals WouldBlock; reset the length and retry.
+                    unsafe { buffer.set_len(0) };
+                    continue;
+                }
             }
         }
     }

@@ -1,5 +1,5 @@
 use crate::{DeliveryMode, ReceivedDatagram, SendOptions, TransportConfig, TransportError};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::{net::SocketAddr, sync::Arc, time::Instant};
 use tokio::net::UdpSocket;
 
@@ -102,9 +102,13 @@ pub(crate) async fn receive_from(
     socket: &UdpSocket,
     maximum: usize,
 ) -> Result<ReceivedDatagram, TransportError> {
-    // Request one extra byte so an oversized datagram cannot be mistaken for a
-    // valid datagram truncated to exactly `maximum` bytes by the OS.
-    let mut buffer = vec![0; maximum + 1];
+    // Allocate one extra byte: if the OS fills it the datagram is oversized and
+    // we return DatagramTooLarge without ever truncating a valid payload.
+    let capacity = maximum + 1;
+    let mut buffer = BytesMut::with_capacity(capacity);
+    // SAFETY: the uninitialized bytes are handed directly to recv_from, which
+    // writes exactly `length` bytes before we observe them.
+    unsafe { buffer.set_len(capacity) };
     let (length, peer) = socket.recv_from(&mut buffer).await?;
     if length > maximum {
         return Err(TransportError::DatagramTooLarge {
@@ -115,7 +119,7 @@ pub(crate) async fn receive_from(
     buffer.truncate(length);
     Ok(ReceivedDatagram {
         peer,
-        payload: Bytes::from(buffer),
+        payload: buffer.freeze(),
         received_at: Instant::now(),
     })
 }

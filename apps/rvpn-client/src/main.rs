@@ -115,10 +115,7 @@ async fn main() -> Result<()> {
                 }
             } => {
                 let packet = packet?;
-                if config.rekey.packet_limit != 0 && session.should_rekey(config.rekey.packet_limit) {
-                    session = establish(&transport, config.server, psk, &config.handshake, Some(&session)).await?;
-                    tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
-                }
+                maybe_rekey(&mut session, &transport, config.server, psk, &config.handshake, config.rekey.packet_limit).await?;
                 let packet = session.seal(PacketKind::Data, &packet)?;
                 transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
             }
@@ -130,13 +127,11 @@ async fn main() -> Result<()> {
                 }
             } => {
                 let frame = frame?;
-                if config.rekey.packet_limit != 0 && session.should_rekey(config.rekey.packet_limit) {
-                    session = establish(&transport, config.server, psk, &config.handshake, Some(&session)).await?;
-                    tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
-                }
+                maybe_rekey(&mut session, &transport, config.server, psk, &config.handshake, config.rekey.packet_limit).await?;
                 let packet = session.seal(PacketKind::DataTap, &frame)?;
                 transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
             }
+
             datagram = transport.receive() => {
                 let datagram = datagram?;
                 if datagram.peer != config.server { continue; }
@@ -186,6 +181,21 @@ async fn main() -> Result<()> {
     }
 }
 
+async fn maybe_rekey(
+    session: &mut ProtectedSession,
+    transport: &UdpTransport,
+    server: SocketAddr,
+    psk: [u8; 32],
+    handshake: &HandshakeConfig,
+    packet_limit: u64,
+) -> Result<()> {
+    if packet_limit != 0 && session.should_rekey(packet_limit) {
+        *session = establish(transport, server, psk, handshake, Some(session)).await?;
+        tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
+    }
+    Ok(())
+}
+
 /// Retransmits each handshake flight. Rekeys retain the established session ID.
 async fn establish(
     transport: &UdpTransport,
@@ -204,7 +214,7 @@ async fn establish(
                 .checked_add(1)
                 .context("key phase exhausted")?,
         ),
-        None => (PacketKind::Handshake, SessionId::new([0; 16]), 0),
+        None => (PacketKind::Handshake, SessionId::ZERO, 0),
     };
     let old_phase = old.map_or(0, ProtectedSession::key_phase);
     let initiation_packet = Packet {
@@ -256,8 +266,9 @@ async fn establish(
                     Err(_) => break,
                 }
             }
-            tracing::debug!(attempt, "handshake response timed out; retransmitting");
+            tracing::debug!(attempt, %server, "handshake response timed out; retransmitting");
         }
+
         bail!(
             "RVPN handshake timed out after {} attempts",
             policy.retry_limit

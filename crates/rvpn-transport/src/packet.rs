@@ -1,5 +1,8 @@
 use bytes::Bytes;
-use std::{net::SocketAddr, time::Instant};
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 /// Identifier reserved for future acknowledgement and duplicate tracking.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -14,6 +17,16 @@ pub struct TransportPacket {
     pub payload: Bytes,
     /// Time at which the socket receive operation completed.
     pub received_at: Instant,
+}
+
+impl TransportPacket {
+    /// Returns how long ago this packet was received from the socket.
+    ///
+    /// Useful for latency-sensitive consumers that need to measure queuing
+    /// delay without importing `std::time::Instant` directly.
+    pub fn age(&self) -> Duration {
+        self.received_at.elapsed()
+    }
 }
 
 /// Backwards-compatible name for an inbound UDP datagram.

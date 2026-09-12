@@ -10,6 +10,10 @@ impl SessionId {
     /// Number of bytes in an RVPN session identifier.
     pub const LENGTH: usize = 16;
 
+    /// The all-zero session identifier, used as the unestablished-session sentinel
+    /// in initial handshake packets before a real session has been assigned.
+    pub const ZERO: Self = Self([0; Self::LENGTH]);
+
     /// Creates an identifier from its wire representation.
     pub const fn new(bytes: [u8; Self::LENGTH]) -> Self {
         Self(bytes)

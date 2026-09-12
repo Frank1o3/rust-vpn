@@ -65,6 +65,7 @@ mod tests {
             .unwrap();
         assert_eq!(received.payload, Bytes::from_static(b"opaque"));
         assert_eq!(received.peer, sender.local_addr().unwrap());
+        assert!(received.age() < Duration::from_secs(2));
     }
 
     #[tokio::test]
