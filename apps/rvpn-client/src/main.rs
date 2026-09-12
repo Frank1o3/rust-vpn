@@ -66,9 +66,11 @@ async fn main() -> Result<()> {
         DeviceMode::Both => {
             let tun_name = config.interface.name.clone();
             let tap_name = config.interface.tap_name.clone().or_else(|| {
-                config.interface.name.as_ref().map(|n| {
-                    format!("{}-tap", n.chars().take(11).collect::<String>())
-                })
+                config
+                    .interface
+                    .name
+                    .as_ref()
+                    .map(|n| format!("{}-tap", n.chars().take(11).collect::<String>()))
             });
             let tun_dev = TunDevice::create(TunConfig {
                 name: tun_name,

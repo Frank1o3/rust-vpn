@@ -78,9 +78,11 @@ async fn main() -> Result<()> {
         DeviceMode::Both => {
             let tun_name = config.interface.name.clone();
             let tap_name = config.interface.tap_name.clone().or_else(|| {
-                config.interface.name.as_ref().map(|n| {
-                    format!("{}-tap", n.chars().take(11).collect::<String>())
-                })
+                config
+                    .interface
+                    .name
+                    .as_ref()
+                    .map(|n| format!("{}-tap", n.chars().take(11).collect::<String>()))
             });
             let tun_dev = TunDevice::create(TunConfig {
                 name: tun_name,
@@ -565,14 +567,12 @@ impl ForwardingGuard {
         let use_nft = match config.backend {
             FirewallBackend::Nftables => true,
             FirewallBackend::Iptables => false,
-            FirewallBackend::Auto => {
-                Command::new("nft")
-                    .arg("--version")
-                    .output()
-                    .await
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            }
+            FirewallBackend::Auto => Command::new("nft")
+                .arg("--version")
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false),
         };
 
         if use_nft {
@@ -588,8 +588,8 @@ impl ForwardingGuard {
             run(
                 "nft",
                 [
-                    "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "oifname", external,
-                    "accept",
+                    "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "oifname",
+                    external, "accept",
                 ],
             )
             .await?;
@@ -680,7 +680,9 @@ impl ForwardingGuard {
             if config.tunnel_cidr.is_some() {
                 run(
                     "iptables",
-                    ["-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT"],
+                    [
+                        "-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT",
+                    ],
                 )
                 .await?;
                 cleanup_rules.push((
@@ -737,7 +739,19 @@ impl ForwardingGuard {
                 if let Some(cidr) = &config.tunnel_cidr {
                     run(
                         "iptables",
-                        ["-t", "nat", "-I", "POSTROUTING", "1", "-s", cidr, "-o", external, "-j", "MASQUERADE"],
+                        [
+                            "-t",
+                            "nat",
+                            "-I",
+                            "POSTROUTING",
+                            "1",
+                            "-s",
+                            cidr,
+                            "-o",
+                            external,
+                            "-j",
+                            "MASQUERADE",
+                        ],
                     )
                     .await?;
                     cleanup_rules.push((
@@ -760,7 +774,9 @@ impl ForwardingGuard {
             if config.tunnel_cidr_v6.is_some() {
                 run(
                     "ip6tables",
-                    ["-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT"],
+                    [
+                        "-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT",
+                    ],
                 )
                 .await?;
                 cleanup_rules.push((
@@ -817,7 +833,19 @@ impl ForwardingGuard {
                 if let Some(cidr) = &config.tunnel_cidr_v6 {
                     run(
                         "ip6tables",
-                        ["-t", "nat", "-I", "POSTROUTING", "1", "-s", cidr, "-o", external, "-j", "MASQUERADE"],
+                        [
+                            "-t",
+                            "nat",
+                            "-I",
+                            "POSTROUTING",
+                            "1",
+                            "-s",
+                            cidr,
+                            "-o",
+                            external,
+                            "-j",
+                            "MASQUERADE",
+                        ],
                     )
                     .await?;
                     cleanup_rules.push((
@@ -841,7 +869,9 @@ impl ForwardingGuard {
             Ok(Self {
                 previous_ipv4_forward,
                 previous_ipv6_forward,
-                method: Some(FirewallMethod::Iptables { rules: cleanup_rules }),
+                method: Some(FirewallMethod::Iptables {
+                    rules: cleanup_rules,
+                }),
             })
         }
     }

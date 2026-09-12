@@ -70,12 +70,18 @@ impl ClientConfig {
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
             .and_then(|_| self.routing.validate())?;
-        if self.routing.default_route && self.server.is_ipv4() && self.routing.endpoint_gateway.is_none() {
+        if self.routing.default_route
+            && self.server.is_ipv4()
+            && self.routing.endpoint_gateway.is_none()
+        {
             return Err(ConfigError::Invalid(
                 "routing.endpoint_gateway is required for default_route when server endpoint is IPv4",
             ));
         }
-        if self.routing.default_route_v6 && self.server.is_ipv6() && self.routing.endpoint_gateway_v6.is_none() {
+        if self.routing.default_route_v6
+            && self.server.is_ipv6()
+            && self.routing.endpoint_gateway_v6.is_none()
+        {
             return Err(ConfigError::Invalid(
                 "routing.endpoint_gateway_v6 is required for default_route_v6 when server endpoint is IPv6",
             ));
