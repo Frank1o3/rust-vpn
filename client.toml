@@ -16,6 +16,6 @@ server="192.168.88.254:9000"
     # Route default IPv4 and IPv6 internet traffic through the laptop server.
     default_route=true
     default_route_v6=false
-    endpoint_gateway="192.168.88.1" # local gateway on main PC to reach LAN
+    endpoint_gateway="192.168.88.254" # local gateway on main PC to reach LAN
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
