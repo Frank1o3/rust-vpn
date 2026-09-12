@@ -36,7 +36,8 @@ pub async fn configure_client_network(dev: &TunDevice, config: &ClientConfig) ->
             let endpoint = format!("{}/32", config.server.ip());
             route_replace(&endpoint, Some(endpoint_gateway), "").await?;
         }
-        route_replace("default", Some(gateway), dev.name()).await?;
+        route_replace("0.0.0.0/1", Some(gateway), dev.name()).await?;
+        route_replace("128.0.0.0/1", Some(gateway), dev.name()).await?;
     }
     if config.routing.default_route_v6 {
         let gateway = config
@@ -53,9 +54,31 @@ pub async fn configure_client_network(dev: &TunDevice, config: &ClientConfig) ->
             let endpoint = format!("{}/128", config.server.ip());
             route_replace(&endpoint, Some(endpoint_gateway), "").await?;
         }
-        route_replace("default", Some(gateway), dev.name()).await?;
+        route_replace("::/1", Some(gateway), dev.name()).await?;
+        route_replace("8000::/1", Some(gateway), dev.name()).await?;
     }
     Ok(())
+}
+
+pub async fn teardown_client_network(dev: &TunDevice, config: &ClientConfig) {
+    if config.routing.default_route {
+        for half in ["0.0.0.0/1", "128.0.0.0/1"] {
+            let _ = run("ip", ["route", "del", half, "dev", dev.name()]).await;
+        }
+        if config.server.is_ipv4() {
+            let endpoint = format!("{}/32", config.server.ip());
+            let _ = run("ip", ["route", "del", &endpoint]).await;
+        }
+    }
+    if config.routing.default_route_v6 {
+        for half in ["::/1", "8000::/1"] {
+            let _ = run("ip", ["-6", "route", "del", half, "dev", dev.name()]).await;
+        }
+        if config.server.is_ipv6() {
+            let endpoint = format!("{}/128", config.server.ip());
+            let _ = run("ip", ["-6", "route", "del", &endpoint]).await;
+        }
+    }
 }
 
 async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -> Result<()> {

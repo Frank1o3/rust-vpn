@@ -11,7 +11,7 @@ use rvpn_transport::{TransportConfig, UdpTransport};
 use std::{env, fs, net::SocketAddr};
 
 use handshake::establish;
-use network::configure_client_network;
+use network::{configure_client_network, teardown_client_network};
 use tunnel::run_data_plane;
 
 #[tokio::main]
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
     );
 
     let shutdown = Box::pin(shutdown_signal());
-    run_data_plane(
+    let result = run_data_plane(
         session,
         &transport,
         &config,
@@ -106,20 +106,26 @@ async fn main() -> Result<()> {
         tap.as_ref(),
         shutdown,
     )
-    .await
+    .await;
+
+    // Always attempt to restore host networking, whether the data plane
+    // exited via a clean shutdown, an error, or the Close send failing.
+    tracing::info!("restoring host network state");
+    teardown_client_network(primary_dev, &config).await;
+
+    result
 }
 
 async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = signal(SignalKind::terminate()).context("registering SIGTERM handler")?;
+        let mut sighup = signal(SignalKind::hangup()).context("registering SIGHUP handler")?;
         tokio::select! {
             result = tokio::signal::ctrl_c() => result.context("waiting for SIGINT"),
-            result = async {
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?
-                    .recv()
-                    .await;
-                Ok::<(), std::io::Error>(())
-            } => result.context("waiting for SIGTERM"),
+            _ = sigterm.recv() => Ok(()),
+            _ = sighup.recv() => Ok(()),
         }
     }
     #[cfg(not(unix))]
