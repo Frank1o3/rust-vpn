@@ -1,7 +1,7 @@
 # RVPN Client configuration
 # Run on the main PC (connecting to the laptop at 10.0.0.91:9000)
 pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
-server="10.0.0.91:9000"
+server="cachyos-pc:9000"
 
 [interface]
     name="rvpn-client0"
@@ -19,3 +19,10 @@ server="10.0.0.91:9000"
     endpoint_gateway = "192.168.88.1" # local gateway on main PC to reach LAN
     default_route_v6 = true
     gateway_v6 = "fd42::1"
+    # Point-to-point VPN subnet is reachable by default.
+    # Uncomment the following to route default internet traffic through the laptop server:
+    default_route=true
+    default_route_v6=true
+    endpoint_gateway="192.168.88.1" # local gateway on main PC to reach LAN
+    gateway="10.42.0.1"
+    gateway_v6="fd42::1"
