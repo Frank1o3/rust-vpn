@@ -21,6 +21,7 @@ pub struct ResponderHandshake {
     key_pair: EphemeralKeyPair,
     transcript: HandshakeTranscript,
     session_id: SessionId,
+    key_phase: u32,
 }
 
 impl InitiatorHandshake {
@@ -46,6 +47,20 @@ impl InitiatorHandshake {
         self,
         response: HandshakeMessage,
     ) -> Result<(HandshakeMessage, ProtectedSession), HandshakeError> {
+        let session_id = match response {
+            HandshakeMessage::Response { session_id, .. } => session_id,
+            _ => return Err(HandshakeError::UnexpectedMessage),
+        };
+        self.finish_for_session(response, session_id, 0)
+    }
+
+    /// Completes a fresh exchange for an existing session identity and key phase.
+    pub fn finish_for_session(
+        self,
+        response: HandshakeMessage,
+        expected_session_id: SessionId,
+        key_phase: u32,
+    ) -> Result<(HandshakeMessage, ProtectedSession), HandshakeError> {
         let HandshakeMessage::Response {
             public_key,
             session_id,
@@ -55,6 +70,9 @@ impl InitiatorHandshake {
         else {
             return Err(HandshakeError::UnexpectedMessage);
         };
+        if session_id != expected_session_id {
+            return Err(HandshakeError::UnexpectedSession);
+        }
         let mut transcript = HandshakeTranscript::new(self.initiation)?;
         let authentication_input = transcript.server_authentication_input(response)?;
         if !self.psk.verify(&authentication_input, &authenticator) {
@@ -71,7 +89,7 @@ impl InitiatorHandshake {
             &transcript_hash(&transcript.final_bytes(finish)?),
             SessionRole::Initiator,
         )?;
-        Ok((finish, ProtectedSession::new(session_id, 0, keys)))
+        Ok((finish, ProtectedSession::new(session_id, key_phase, keys)))
     }
 }
 
@@ -81,11 +99,20 @@ impl ResponderHandshake {
         psk: HandshakePsk,
         initiation: HandshakeMessage,
     ) -> Result<(Self, HandshakeMessage), HandshakeError> {
+        Self::accept_for_session(psk, initiation, SessionId::new(random_bytes()?), 0)
+    }
+
+    /// Accepts a rekey exchange for an already-established session.
+    pub fn accept_for_session(
+        psk: HandshakePsk,
+        initiation: HandshakeMessage,
+        session_id: SessionId,
+        key_phase: u32,
+    ) -> Result<(Self, HandshakeMessage), HandshakeError> {
         if !matches!(initiation, HandshakeMessage::Initiation { .. }) {
             return Err(HandshakeError::UnexpectedMessage);
         }
         let key_pair = EphemeralKeyPair::generate()?;
-        let session_id = SessionId::new(random_bytes()?);
         let mut transcript = HandshakeTranscript::new(initiation)?;
         let unsigned_response = HandshakeMessage::Response {
             public_key: key_pair.public_key().to_bytes(),
@@ -115,6 +142,7 @@ impl ResponderHandshake {
                 key_pair,
                 transcript,
                 session_id,
+                key_phase,
             },
             response,
         ))
@@ -139,7 +167,7 @@ impl ResponderHandshake {
             &transcript_hash(&self.transcript.final_bytes(finish)?),
             SessionRole::Responder,
         )?;
-        Ok(ProtectedSession::new(self.session_id, 0, keys))
+        Ok(ProtectedSession::new(self.session_id, self.key_phase, keys))
     }
 }
 
@@ -150,6 +178,8 @@ pub enum HandshakeError {
     UnexpectedMessage,
     #[error("handshake PSK authentication failed")]
     AuthenticationFailed,
+    #[error("handshake response belongs to an unexpected session")]
+    UnexpectedSession,
     #[error(transparent)]
     Crypto(#[from] CryptoError),
     #[error(transparent)]
@@ -184,5 +214,32 @@ mod tests {
             initiator.finish(response),
             Err(HandshakeError::AuthenticationFailed)
         ));
+    }
+
+    #[test]
+    fn rekey_keeps_session_identity_and_advances_key_phase() {
+        let psk = [3; 32];
+        let session_id = SessionId::new([7; 16]);
+        let (initiator, initiation) =
+            InitiatorHandshake::start(HandshakePsk::from_bytes(psk)).unwrap();
+        let (responder, response) = ResponderHandshake::accept_for_session(
+            HandshakePsk::from_bytes(psk),
+            initiation,
+            session_id,
+            1,
+        )
+        .unwrap();
+        let (finish, mut client) = initiator
+            .finish_for_session(response, session_id, 1)
+            .unwrap();
+        let mut server = responder.finish(finish).unwrap();
+        assert_eq!(client.session_id(), session_id);
+        assert_eq!(client.key_phase(), 1);
+        assert_eq!(
+            server
+                .open(client.seal(PacketKind::Data, b"new keys").unwrap())
+                .unwrap(),
+            b"new keys"[..]
+        );
     }
 }

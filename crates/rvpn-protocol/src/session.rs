@@ -36,6 +36,16 @@ impl ProtectedSession {
         self.session_id
     }
 
+    /// Active generation of the packet-protection keys.
+    pub const fn key_phase(&self) -> u32 {
+        self.key_phase
+    }
+
+    /// Whether callers should complete a rekey before sending more traffic.
+    pub const fn should_rekey(&self, packet_limit: u64) -> bool {
+        self.next_send_sequence >= packet_limit
+    }
+
     /// Encrypts a post-handshake payload and binds its header as AEAD AAD.
     pub fn seal(&mut self, kind: PacketKind, plaintext: &[u8]) -> Result<Packet, SessionError> {
         if kind == PacketKind::Handshake {

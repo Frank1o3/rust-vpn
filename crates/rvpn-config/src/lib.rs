@@ -40,6 +40,15 @@ pub struct ClientConfig {
     /// Local TUN device settings used after session establishment.
     #[serde(default)]
     pub interface: InterfaceConfig,
+    /// Bounded retransmission policy for the initial and rekey handshakes.
+    #[serde(default)]
+    pub handshake: HandshakeConfig,
+    /// When to rotate packet-protection keys. Zero disables automatic rekeying.
+    #[serde(default)]
+    pub rekey: RekeyConfig,
+    /// Optional routes installed after the TUN interface is created.
+    #[serde(default)]
+    pub routing: ClientRoutingConfig,
 }
 
 impl ClientConfig {
@@ -54,7 +63,17 @@ impl ClientConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.server)?;
         validate_psk(&self.pre_shared_key)?;
-        self.interface.validate()
+        self.interface
+            .validate()
+            .and_then(|_| self.handshake.validate())
+            .and_then(|_| self.rekey.validate())
+            .and_then(|_| self.routing.validate())?;
+        if self.routing.default_route && !self.server.is_ipv4() {
+            return Err(ConfigError::Invalid(
+                "routing.default_route currently supports an IPv4 server endpoint only",
+            ));
+        }
+        Ok(())
     }
 
     /// Decodes the provisioned PSK for handoff to the crypto layer.
@@ -73,6 +92,12 @@ pub struct ServerConfig {
     /// Local TUN device settings used after session establishment.
     #[serde(default)]
     pub interface: InterfaceConfig,
+    #[serde(default)]
+    pub handshake: HandshakeConfig,
+    #[serde(default)]
+    pub rekey: RekeyConfig,
+    #[serde(default)]
+    pub forwarding: ForwardingConfig,
 }
 
 impl ServerConfig {
@@ -87,7 +112,11 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.bind)?;
         validate_psk(&self.pre_shared_key)?;
-        self.interface.validate()
+        self.interface
+            .validate()
+            .and_then(|_| self.handshake.validate())
+            .and_then(|_| self.rekey.validate())
+            .and_then(|_| self.forwarding.validate())
     }
 
     /// Decodes the provisioned PSK for handoff to the crypto layer.
@@ -103,6 +132,8 @@ pub struct InterfaceConfig {
     pub name: Option<String>,
     /// Maximum IP packet size. App transport buffers include protocol overhead.
     pub mtu: Option<u16>,
+    /// CIDR address assigned to this TUN device, for example `10.42.0.2/24`.
+    pub address: Option<String>,
 }
 
 impl Default for InterfaceConfig {
@@ -110,7 +141,120 @@ impl Default for InterfaceConfig {
         Self {
             name: None,
             mtu: None,
+            address: None,
         }
+    }
+}
+
+/// Timeout and retry settings for UDP handshake flights.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct HandshakeConfig {
+    #[serde(default = "default_retry_interval_ms")]
+    pub retry_interval_ms: u64,
+    #[serde(default = "default_retry_limit")]
+    pub retry_limit: u32,
+}
+
+const fn default_retry_interval_ms() -> u64 {
+    500
+}
+const fn default_retry_limit() -> u32 {
+    5
+}
+
+impl Default for HandshakeConfig {
+    fn default() -> Self {
+        Self {
+            retry_interval_ms: default_retry_interval_ms(),
+            retry_limit: default_retry_limit(),
+        }
+    }
+}
+
+impl HandshakeConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.retry_interval_ms == 0 || self.retry_limit == 0 {
+            return Err(ConfigError::Invalid(
+                "handshake retry interval and limit must be non-zero",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Automatic rekey threshold. A phase is rotated before this many sent packets.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RekeyConfig {
+    #[serde(default = "default_rekey_packet_limit")]
+    pub packet_limit: u64,
+}
+
+const fn default_rekey_packet_limit() -> u64 {
+    1 << 20
+}
+
+impl Default for RekeyConfig {
+    fn default() -> Self {
+        Self {
+            packet_limit: default_rekey_packet_limit(),
+        }
+    }
+}
+
+impl RekeyConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        Ok(())
+    }
+}
+
+/// Client route policy, applied only when an interface address is configured.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ClientRoutingConfig {
+    #[serde(default)]
+    pub default_route: bool,
+    pub gateway: Option<String>,
+    /// Physical-network next hop used to keep the UDP server endpoint outside
+    /// a tunnel-installed default route.
+    pub endpoint_gateway: Option<String>,
+    #[serde(default)]
+    pub routes: Vec<String>,
+}
+
+impl ClientRoutingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.default_route && (self.gateway.is_none() || self.endpoint_gateway.is_none()) {
+            return Err(ConfigError::Invalid(
+                "routing.gateway and routing.endpoint_gateway are required for default_route",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Opt-in Linux forwarding and NAT settings for an internet-facing server.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ForwardingConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub external_interface: Option<String>,
+    pub tunnel_cidr: Option<String>,
+}
+
+impl ForwardingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.enabled
+            && (self
+                .external_interface
+                .as_deref()
+                .unwrap_or_default()
+                .is_empty()
+                || self.tunnel_cidr.as_deref().unwrap_or_default().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "forwarding.external_interface and forwarding.tunnel_cidr are required when forwarding is enabled",
+            ));
+        }
+        Ok(())
     }
 }
 
