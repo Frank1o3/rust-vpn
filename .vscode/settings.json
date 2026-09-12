@@ -1,4 +1,14 @@
 {
-    "git.autofetch": true,
-    "git.autofetchPeriod": 180
+    "java.compile.nullAnalysis.mode": "disabled",
+    "java.configuration.updateBuildConfiguration": "disabled",
+    "java.import.gradle.java.home": "/usr/lib/jvm/java-17-temurin",
+    "java.import.gradle.home": "/usr/lib/jvm/java-17-temurin",
+    "java.configuration.runtimes": [
+        {
+            "name": "JavaSE-17",
+            "path": "/usr/lib/jvm/java-17-temurin",
+            "default": true
+        }
+    ],
+    "java.import.gradle.wrapper.enabled": true,
 }

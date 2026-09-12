@@ -72,7 +72,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.9'
 
       - name: Build Debug APK
         working-directory: apps/rvpn-android/android
