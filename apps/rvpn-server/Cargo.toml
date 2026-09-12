@@ -1,19 +1,19 @@
 [package]
-name = "rvpn-server"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-server"
+    version.workspace=true
 
 [dependencies]
-anyhow.workspace = true
-ipnet.workspace = true
-rvpn-config = { path = "../../crates/rvpn-config" }
-rvpn-core = { path = "../../crates/rvpn-core" }
-rvpn-crypto = { path = "../../crates/rvpn-crypto" }
-rvpn-interface = { path = "../../crates/rvpn-interface" }
-rvpn-protocol = { path = "../../crates/rvpn-protocol" }
-rvpn-transport = { path = "../../crates/rvpn-transport" }
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
+    anyhow.workspace=true
+    ipnet.workspace=true
+    rvpn-config={path="../../crates/rvpn-config"}
+    rvpn-core={path="../../crates/rvpn-core"}
+    rvpn-crypto={path="../../crates/rvpn-crypto"}
+    rvpn-interface={path="../../crates/rvpn-interface"}
+    rvpn-protocol={path="../../crates/rvpn-protocol"}
+    rvpn-transport={path="../../crates/rvpn-transport"}
+    tokio.workspace=true
+    tracing.workspace=true
+    tracing-subscriber.workspace=true

@@ -1,26 +1,26 @@
 [package]
-name = "rvpn-android"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-android"
+    version.workspace=true
 
 [lib]
-name = "rvpn_android"
-crate-type = ["cdylib", "rlib"]
+    crate-type=["cdylib", "rlib"]
+    name="rvpn_android"
 
 [dependencies]
-anyhow = { workspace = true }
-bytes = { workspace = true }
-hex = { workspace = true }
-jni = "0.21"
-rvpn-config = { path = "../../crates/rvpn-config" }
-rvpn-core = { path = "../../crates/rvpn-core" }
-rvpn-crypto = { path = "../../crates/rvpn-crypto" }
-rvpn-interface = { path = "../../crates/rvpn-interface" }
-rvpn-protocol = { path = "../../crates/rvpn-protocol" }
-rvpn-transport = { path = "../../crates/rvpn-transport" }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+    anyhow={workspace=true}
+    bytes={workspace=true}
+    hex={workspace=true}
+    jni="0.21"
+    rvpn-config={path="../../crates/rvpn-config"}
+    rvpn-core={path="../../crates/rvpn-core"}
+    rvpn-crypto={path="../../crates/rvpn-crypto"}
+    rvpn-interface={path="../../crates/rvpn-interface"}
+    rvpn-protocol={path="../../crates/rvpn-protocol"}
+    rvpn-transport={path="../../crates/rvpn-transport"}
+    thiserror={workspace=true}
+    tokio={workspace=true}
+    tracing={workspace=true}
+    tracing-subscriber={workspace=true}

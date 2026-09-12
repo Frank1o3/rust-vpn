@@ -1,14 +1,14 @@
 [package]
-name = "rvpn-config"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-config"
+    version.workspace=true
 
 [dependencies]
-hex.workspace = true
-ipnet.workspace = true
-rvpn-interface = { path = "../rvpn-interface" }
-serde.workspace = true
-thiserror.workspace = true
-toml.workspace = true
+    hex.workspace=true
+    ipnet.workspace=true
+    rvpn-interface={path="../rvpn-interface"}
+    serde.workspace=true
+    thiserror.workspace=true
+    toml.workspace=true
