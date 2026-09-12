@@ -22,8 +22,11 @@ use tokio::{
 pub struct AndroidTunnelConfig {
     /// Established TUN file descriptor provided by Android's `VpnService`.
     pub tun_fd: RawFd,
-    /// VPN server endpoint.
-    pub server: SocketAddr,
+    /// VPN server endpoint as `host:port` or `ip:port`; resolved via DNS
+    /// once at tunnel startup (see [`rvpn_config::resolve_endpoint`]). A
+    /// dynamic-DNS hostname whose IP changes mid-session requires
+    /// reconnecting to pick up the new address.
+    pub server: String,
     /// 32-byte pre-shared key.
     pub psk: [u8; 32],
     /// Configured MTU.
@@ -35,19 +38,22 @@ pub struct AndroidTunnelConfig {
     /// Handshake retransmission limit.
     pub retry_limit: u32,
     /// Callback to protect the UDP transport socket from VPN loopback routing.
-    /// Android's `VpnService.protect(socketFd)` must be invoked on the socket descriptor.
     pub socket_protector: Option<Arc<dyn Fn(RawFd) -> bool + Send + Sync + 'static>>,
     /// Shared tunnel telemetry and statistics counter.
     pub stats: Option<Arc<crate::stats::TunnelStats>>,
 }
-
 
 /// Runs the Android VPN tunnel to completion or until shutdown is signaled.
 pub async fn run_tunnel(
     config: AndroidTunnelConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let local_bind: SocketAddr = if config.server.is_ipv6() {
+    let server = rvpn_config::resolve_endpoint(&config.server)
+        .await
+        .context("resolving RVPN server endpoint")?;
+    tracing::info!(endpoint = %config.server, %server, "resolved RVPN server endpoint");
+
+    let local_bind: SocketAddr = if server.is_ipv6() {
         "[::]:0".parse().unwrap()
     } else {
         "0.0.0.0:0".parse().unwrap()
@@ -61,13 +67,18 @@ pub async fn run_tunnel(
     .await
     .context("opening UDP transport")?;
 
-    // Protect the UDP socket from VPN routing loop on Android
     if let Some(protector) = &config.socket_protector {
         let fd = transport.raw_fd();
         if !protector(fd) {
-            bail!("failed to protect UDP transport socket (fd: {}) via VpnService", fd);
+            bail!(
+                "failed to protect UDP transport socket (fd: {}) via VpnService",
+                fd
+            );
         }
-        tracing::info!(socket_fd = fd, "protected UDP transport socket from VPN routing");
+        tracing::info!(
+            socket_fd = fd,
+            "protected UDP transport socket from VPN routing"
+        );
     }
 
     let handshake_policy = HandshakeConfig {
@@ -75,10 +86,10 @@ pub async fn run_tunnel(
         retry_limit: config.retry_limit,
     };
 
-    tracing::info!(server = %config.server, "initiating RVPN handshake from Android client");
+    tracing::info!(%server, "initiating RVPN handshake from Android client");
     let mut session = establish(
         &transport,
-        config.server,
+        server,
         config.psk,
         &handshake_policy,
         None,
@@ -95,7 +106,7 @@ pub async fn run_tunnel(
 
     tracing::info!(
         session_id = ?session.session_id(),
-        server = %config.server,
+        %server,
         mtu = config.mtu,
         "RVPN Android tunnel data plane started"
     );
@@ -106,7 +117,7 @@ pub async fn run_tunnel(
                 if changed.is_err() || *shutdown.borrow() {
                     tracing::info!("shutdown requested; closing Android RVPN session");
                     if let Ok(close) = session.seal(PacketKind::Close, b"") {
-                        let _ = transport.send_to(config.server, close.encode(), SendOptions::default()).await;
+                        let _ = transport.send_to(server, close.encode(), SendOptions::default()).await;
                     }
                     return Ok(());
                 }
@@ -119,18 +130,18 @@ pub async fn run_tunnel(
                 maybe_rekey(
                     &mut session,
                     &transport,
-                    config.server,
+                    server,
                     config.psk,
                     &handshake_policy,
                     config.rekey_packet_limit,
                     &mut shutdown,
                 ).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
-                transport.send_to(config.server, sealed.encode(), SendOptions::default()).await?;
+                transport.send_to(server, sealed.encode(), SendOptions::default()).await?;
             }
             datagram = transport.receive() => {
                 let datagram = datagram.context("receiving UDP datagram")?;
-                if datagram.peer != config.server {
+                if datagram.peer != server {
                     continue;
                 }
                 let packet = match Packet::decode(datagram.payload) {
@@ -146,7 +157,7 @@ pub async fn run_tunnel(
                         if session.open(packet).is_ok() {
                             session = establish(
                                 &transport,
-                                config.server,
+                                server,
                                 config.psk,
                                 &handshake_policy,
                                 Some(&session),

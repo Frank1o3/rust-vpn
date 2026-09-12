@@ -8,7 +8,7 @@ server="192.168.88.254:9000"
     # Mode options: "tun" (Layer 3 IP), "tap" (Layer 2 Ethernet), or "both" (TUN + TAP concurrently)
     address="10.42.0.2/24"
     addresses=["fd42::2/64"]
-    mode="both"
+    mode="tun"
     mtu=1400
 
 [routing]

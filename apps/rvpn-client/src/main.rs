@@ -21,13 +21,21 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: rvpn-client <client.toml>")?;
     let config = ClientConfig::from_toml(&fs::read_to_string(path)?)?;
+
+    tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
+    let server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
+        .await
+        .context("resolving server endpoint")?;
+    config.validate_resolved(server)?;
+    tracing::info!(%server, "resolved RVPN server endpoint");
+
     let mode = config.interface.mode();
     let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
     let frame_overhead = match mode {
         DeviceMode::Tun => 0,
         DeviceMode::Tap | DeviceMode::Both => 18,
     };
-    let local_bind: SocketAddr = if config.server.is_ipv6() {
+    let local_bind: SocketAddr = if server.is_ipv6() {
         "[::]:0".parse().unwrap()
     } else {
         "0.0.0.0:0".parse().unwrap()
@@ -39,7 +47,7 @@ async fn main() -> Result<()> {
     })
     .await?;
     let psk = config.pre_shared_key_bytes()?;
-    let session = establish(&transport, config.server, psk, &config.handshake, None).await?;
+    let session = establish(&transport, server, psk, &config.handshake, None).await?;
 
     let (tun, tap) = match mode {
         DeviceMode::Tun => {
@@ -86,10 +94,10 @@ async fn main() -> Result<()> {
     };
 
     let primary_dev = tun.as_ref().or(tap.as_ref()).expect("at least one device");
-    configure_client_network(primary_dev, &config).await?;
+    configure_client_network(primary_dev, &config, server).await?;
     tracing::info!(
         session_id = ?session.session_id(),
-        server = %config.server,
+        %server,
         primary_interface = %primary_dev.name(),
         mode = ?mode,
         mtu = mtu,
@@ -101,6 +109,7 @@ async fn main() -> Result<()> {
         session,
         &transport,
         &config,
+        server,
         psk,
         tun.as_ref(),
         tap.as_ref(),
@@ -108,10 +117,8 @@ async fn main() -> Result<()> {
     )
     .await;
 
-    // Always attempt to restore host networking, whether the data plane
-    // exited via a clean shutdown, an error, or the Close send failing.
     tracing::info!("restoring host network state");
-    teardown_client_network(primary_dev, &config).await;
+    teardown_client_network(primary_dev, &config, server).await;
 
     result
 }

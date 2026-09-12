@@ -5,6 +5,7 @@ use rvpn_config::ClientConfig;
 use rvpn_interface::TunDevice;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
 use rvpn_transport::{SendOptions, UdpTransport};
+use std::net::SocketAddr;
 
 use crate::handshake::{establish, maybe_rekey};
 
@@ -13,6 +14,7 @@ pub async fn run_data_plane(
     mut session: ProtectedSession,
     transport: &UdpTransport,
     config: &ClientConfig,
+    server: SocketAddr,
     psk: [u8; 32],
     tun: Option<&TunDevice>,
     tap: Option<&TunDevice>,
@@ -23,7 +25,7 @@ pub async fn run_data_plane(
             signal = &mut shutdown_signal => {
                 signal?;
                 let close = session.seal(PacketKind::Close, b"")?;
-                let _ = transport.send_to(config.server, close.encode(), SendOptions::default()).await;
+                let _ = transport.send_to(server, close.encode(), SendOptions::default()).await;
                 tracing::info!("sent authenticated close packet");
                 return Ok(());
             }
@@ -35,9 +37,9 @@ pub async fn run_data_plane(
                 }
             } => {
                 let packet = packet?;
-                maybe_rekey(&mut session, transport, config.server, psk, &config.handshake, config.rekey.packet_limit).await?;
+                maybe_rekey(&mut session, transport, server, psk, &config.handshake, config.rekey.packet_limit).await?;
                 let packet = session.seal(PacketKind::Data, &packet)?;
-                transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
+                transport.send_to(server, packet.encode(), SendOptions::default()).await?;
             }
             frame = async {
                 if let Some(dev) = tap {
@@ -47,13 +49,13 @@ pub async fn run_data_plane(
                 }
             } => {
                 let frame = frame?;
-                maybe_rekey(&mut session, transport, config.server, psk, &config.handshake, config.rekey.packet_limit).await?;
+                maybe_rekey(&mut session, transport, server, psk, &config.handshake, config.rekey.packet_limit).await?;
                 let packet = session.seal(PacketKind::DataTap, &frame)?;
-                transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
+                transport.send_to(server, packet.encode(), SendOptions::default()).await?;
             }
             datagram = transport.receive() => {
                 let datagram = datagram?;
-                if datagram.peer != config.server { continue; }
+                if datagram.peer != server { continue; }
                 let packet = match Packet::decode(datagram.payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data || packet.header.kind == PacketKind::DataTap => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
@@ -65,7 +67,7 @@ pub async fn run_data_plane(
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Rekey => {
                         if session.open(packet).is_ok() {
-                            session = establish(transport, config.server, psk, &config.handshake, Some(&session)).await?;
+                            session = establish(transport, server, psk, &config.handshake, Some(&session)).await?;
                             tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys at server request");
                         }
                         continue;

@@ -11,7 +11,6 @@ use jni::{
     sys::{jboolean, jint, jlong, jlongArray, jstring},
 };
 use std::{
-    net::SocketAddr,
     os::fd::RawFd,
     sync::{
         Arc, Mutex,
@@ -138,15 +137,12 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 }
             };
 
-            let server_addr: SocketAddr = match server_rust.parse() {
-                Ok(addr) => addr,
-                Err(e) => {
-                    TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                    return Ok(env
-                        .new_string(format!("cannot parse server address '{server_rust}': {e}"))?
-                        .into_raw());
-                }
-            };
+            if let Err(e) = rvpn_config::validate_endpoint_syntax(&server_rust) {
+                TUNNEL_RUNNING.store(false, Ordering::SeqCst);
+                return Ok(env
+                    .new_string(format!("invalid server endpoint '{server_rust}': {e}"))?
+                    .into_raw());
+            }
 
             let psk_hex: String = match psk_hex_str.mutf8_chars(env) {
                 Ok(s) => s.into(),
@@ -214,7 +210,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
 
             let config = AndroidTunnelConfig {
                 tun_fd,
-                server: server_addr,
+                server: server_rust,
                 psk: psk_bytes,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },
                 rekey_packet_limit: if rekey_limit < 0 {

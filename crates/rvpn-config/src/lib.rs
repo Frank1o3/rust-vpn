@@ -35,8 +35,12 @@ impl Config {
 /// Client configuration for the initial authenticated UDP handshake.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ClientConfig {
-    /// RVPN server UDP endpoint.
-    pub server: SocketAddr,
+    /// RVPN server endpoint as `host:port`, `ip:port`, or `[ipv6]:port`.
+    /// Hostnames are resolved via DNS once at startup; see
+    /// [`resolve_endpoint`]. A dynamic-DNS hostname whose IP changes after
+    /// startup requires restarting the client to pick up the new address --
+    /// this crate only resolves once, it does not watch for changes.
+    pub server: String,
     /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
     pub pre_shared_key: String,
     /// Local TUN device settings used after session establishment.
@@ -61,29 +65,38 @@ impl ClientConfig {
         Ok(config)
     }
 
-    /// Checks endpoint and PSK encoding without logging secret material.
+    /// Syntactic validation only. `server` may be a hostname, so the
+    /// endpoint's IP family (needed for `routing.endpoint_gateway*`) can
+    /// only be checked once it has been resolved -- see [`Self::validate_resolved`].
     pub fn validate(&self) -> Result<(), ConfigError> {
-        validate_endpoint(self.server)?;
+        validate_endpoint_syntax(&self.server)?;
         validate_psk(&self.pre_shared_key)?;
         self.interface
             .validate()
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
             .and_then(|_| self.routing.validate())?;
+        Ok(())
+    }
+
+    /// Family-dependent routing checks that require the resolved server
+    /// address. Call this once after resolving `server` via DNS, before
+    /// bringing up the tunnel.
+    pub fn validate_resolved(&self, resolved: SocketAddr) -> Result<(), ConfigError> {
         if self.routing.default_route
-            && self.server.is_ipv4()
+            && resolved.is_ipv4()
             && self.routing.endpoint_gateway.is_none()
         {
             return Err(ConfigError::Invalid(
-                "routing.endpoint_gateway is required for default_route when server endpoint is IPv4",
+                "routing.endpoint_gateway is required for default_route when the resolved server endpoint is IPv4",
             ));
         }
         if self.routing.default_route_v6
-            && self.server.is_ipv6()
+            && resolved.is_ipv6()
             && self.routing.endpoint_gateway_v6.is_none()
         {
             return Err(ConfigError::Invalid(
-                "routing.endpoint_gateway_v6 is required for default_route_v6 when server endpoint is IPv6",
+                "routing.endpoint_gateway_v6 is required for default_route_v6 when the resolved server endpoint is IPv6",
             ));
         }
         Ok(())
@@ -95,12 +108,51 @@ impl ClientConfig {
     }
 }
 
+/// Resolves a `host:port`, `ip:port`, or `[ipv6]:port` endpoint via DNS.
+///
+/// Literal IP addresses resolve immediately without a real DNS query.
+/// Picks the first resolved address; if a hostname resolves to both an IPv4
+/// and an IPv6 record and the choice matters (for example, dual-stack
+/// `routing.endpoint_gateway` selection), pin an explicit IP literal in
+/// configuration instead of a hostname.
+pub async fn resolve_endpoint(value: &str) -> Result<SocketAddr, ConfigError> {
+    let mut addrs =
+        tokio::net::lookup_host(value)
+            .await
+            .map_err(|source| ConfigError::Resolution {
+                host: value.to_string(),
+                source,
+            })?;
+    addrs
+        .next()
+        .ok_or_else(|| ConfigError::NoResolvedAddress(value.to_string()))
+}
+
+/// Checks that `value` has the syntactic shape `host:port` or `[ipv6]:port`
+/// with a valid, non-zero port, without performing any DNS lookup.
+pub fn validate_endpoint_syntax(value: &str) -> Result<(), ConfigError> {
+    let (_, port_str) = value.rsplit_once(':').ok_or(ConfigError::Invalid(
+        "server endpoint must be in host:port or ip:port form",
+    ))?;
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| ConfigError::Invalid("server endpoint port must be a valid number"))?;
+    if port == 0 {
+        return Err(ConfigError::Invalid(
+            "server endpoint port must not be zero",
+        ));
+    }
+    Ok(())
+}
+
 /// Server configuration for the initial authenticated UDP handshake.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
-    /// Static UDP address on which the server listens.
+    /// Static UDP address on which the server listens. Always a literal
+    /// address -- a listening socket cannot bind to a resolved hostname.
     pub bind: SocketAddr,
-    /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
+    /// Legacy fallback PSK. Ignored entirely once `peers` is non-empty; safe
+    /// to delete once you have `[[peers]]` entries.
     pub pre_shared_key: String,
     /// Statically provisioned client identities. When populated, the legacy
     /// top-level PSK is not used for new sessions.
@@ -455,6 +507,14 @@ pub enum ConfigError {
     Invalid(&'static str),
     #[error("pre_shared_key must be exactly 32 bytes encoded as hexadecimal")]
     InvalidPreSharedKey,
+    #[error("failed to resolve server endpoint '{host}': {source}")]
+    Resolution {
+        host: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("server endpoint '{0}' did not resolve to any address")]
+    NoResolvedAddress(String),
 }
 
 #[cfg(test)]
@@ -476,6 +536,24 @@ mod tests {
         assert!(
             ClientConfig::from_toml("server = '127.0.0.1:9000'\npre_shared_key = 'bad'").is_err()
         );
+    }
+
+    #[test]
+    fn accepts_hostname_shaped_server_syntax() {
+        let config = ClientConfig::from_toml(
+            "server = 'main-pc.lan:9000'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+        ).unwrap();
+        assert_eq!(config.server, "main-pc.lan:9000");
+        assert!(ClientConfig::from_toml(
+            "server = 'main-pc.lan'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+        ).is_err());
+    }
+
+    #[tokio::test]
+    async fn resolves_literal_ip_endpoint() {
+        let resolved = resolve_endpoint("127.0.0.1:9000").await.unwrap();
+        assert_eq!(resolved.port(), 9000);
+        assert!(resolved.is_ipv4());
     }
 
     #[test]
