@@ -49,10 +49,10 @@ trusting an unauthenticated source address.
 On SIGINT or SIGTERM each endpoint sends an authenticated `Close` packet before
 dropping its non-persistent TUN device.
 
-For an opt-in IPv4 internet gateway, RVPN uses the host `ip` and `nft` tools;
-no Rust firewall library is required. These privileged commands configure the
-TUN address/routes, enable IPv4 forwarding, and install an isolated `inet rvpn`
-NAT table. For example:
+For an opt-in internet gateway, RVPN invokes the host `ip` and `nft` tools
+itself—no manual network commands or Rust firewall library are required. These
+privileged operations configure TUN addresses/routes, enable forwarding, and
+install an isolated `inet rvpn` NAT table. For example:
 
 ```toml
 # server.toml
@@ -60,11 +60,13 @@ NAT table. For example:
 name = "rvpn-server0"
 mtu = 1400
 address = "10.42.0.1/24"
+addresses = ["fd42::1/64"]
 
 [forwarding]
 enabled = true
 external_interface = "eth0"
 tunnel_cidr = "10.42.0.0/24"
+tunnel_cidr_v6 = "fd42::/64" # optional NAT66; prefer routed IPv6 where available
 ```
 
 ```toml
@@ -73,6 +75,7 @@ tunnel_cidr = "10.42.0.0/24"
 name = "rvpn-client0"
 mtu = 1400
 address = "10.42.0.2/24"
+addresses = ["fd42::2/64"]
 
 [routing]
 default_route = true
@@ -80,6 +83,12 @@ gateway = "10.42.0.1"
 endpoint_gateway = "192.0.2.254" # keeps the UDP server route off the tunnel
 # Or use routes = ["10.0.0.0/8"] for split tunnelling.
 ```
+
+IPv6 packets are protected exactly like IPv4 packets. Add IPv6 prefixes to a
+peer's `allowed_ips`, such as `fd42::2/128`, and use `addresses` for additional
+interface addresses. `default_route_v6`, `gateway_v6`, and
+`endpoint_gateway_v6` provide the IPv6 counterpart of the IPv4 default-route
+settings when the VPN server endpoint itself is IPv6.
 
 Run the processes with the capabilities needed to create TUN devices and change
 network state. The forwarding table and the prior IPv4-forwarding setting are

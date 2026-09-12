@@ -289,27 +289,50 @@ async fn close_all(transport: &UdpTransport, active: &mut HashMap<SessionId, Act
 }
 
 async fn configure_server_interface(tun: &TunDevice, config: &ServerConfig) -> Result<()> {
-    if let Some(address) = &config.interface.address {
-        run("ip", ["address", "replace", address, "dev", tun.name()]).await?;
+    if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
+        for address in config
+            .interface
+            .address
+            .iter()
+            .chain(&config.interface.addresses)
+        {
+            run("ip", ["address", "replace", address, "dev", tun.name()]).await?;
+        }
         run("ip", ["link", "set", "dev", tun.name(), "up"]).await?;
     }
     Ok(())
 }
 struct ForwardingGuard {
-    previous_ip_forward: Option<String>,
+    previous_ipv4_forward: Option<String>,
+    previous_ipv6_forward: Option<String>,
 }
 impl ForwardingGuard {
     async fn install(config: &ForwardingConfig, tunnel: &str) -> Result<Self> {
         if !config.enabled {
             return Ok(Self {
-                previous_ip_forward: None,
+                previous_ipv4_forward: None,
+                previous_ipv6_forward: None,
             });
         }
-        let previous = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
-            .context("reading IPv4 forwarding state")?;
-        fs::write("/proc/sys/net/ipv4/ip_forward", "1\n").context("enabling IPv4 forwarding")?;
+        let previous_ipv4_forward = if config.tunnel_cidr.is_some() {
+            let previous = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
+                .context("reading IPv4 forwarding state")?;
+            fs::write("/proc/sys/net/ipv4/ip_forward", "1\n")
+                .context("enabling IPv4 forwarding")?;
+            Some(previous)
+        } else {
+            None
+        };
+        let previous_ipv6_forward = if config.tunnel_cidr_v6.is_some() {
+            let previous = fs::read_to_string("/proc/sys/net/ipv6/conf/all/forwarding")
+                .context("reading IPv6 forwarding state")?;
+            fs::write("/proc/sys/net/ipv6/conf/all/forwarding", "1\n")
+                .context("enabling IPv6 forwarding")?;
+            Some(previous)
+        } else {
+            None
+        };
         let external = config.external_interface.as_deref().expect("validated");
-        let cidr = config.tunnel_cidr.as_deref().expect("validated");
         run("nft", ["add", "table", "inet", "rvpn"]).await?;
         run(
             "nft",
@@ -365,31 +388,58 @@ impl ForwardingGuard {
             ],
         )
         .await?;
-        run(
-            "nft",
-            [
-                "add",
-                "rule",
-                "inet",
-                "rvpn",
-                "postrouting",
-                "ip",
-                "saddr",
-                cidr,
-                "oifname",
-                external,
-                "masquerade",
-            ],
-        )
-        .await?;
+        if let Some(cidr) = &config.tunnel_cidr {
+            run(
+                "nft",
+                [
+                    "add",
+                    "rule",
+                    "inet",
+                    "rvpn",
+                    "postrouting",
+                    "ip",
+                    "saddr",
+                    cidr,
+                    "oifname",
+                    external,
+                    "masquerade",
+                ],
+            )
+            .await?;
+        }
+        if let Some(cidr) = &config.tunnel_cidr_v6 {
+            run(
+                "nft",
+                [
+                    "add",
+                    "rule",
+                    "inet",
+                    "rvpn",
+                    "postrouting",
+                    "ip6",
+                    "saddr",
+                    cidr,
+                    "oifname",
+                    external,
+                    "masquerade",
+                ],
+            )
+            .await?;
+        }
         Ok(Self {
-            previous_ip_forward: Some(previous),
+            previous_ipv4_forward,
+            previous_ipv6_forward,
         })
     }
     async fn cleanup(&self) {
-        if let Some(previous) = &self.previous_ip_forward {
+        if self.previous_ipv4_forward.is_some() || self.previous_ipv6_forward.is_some() {
             let _ = run("nft", ["delete", "table", "inet", "rvpn"]).await;
+        }
+        if let Some(previous) = &self.previous_ipv4_forward {
             let _ = fs::write("/proc/sys/net/ipv4/ip_forward", previous);
+        }
+        if let Some(previous) = &self.previous_ipv6_forward {
+            let _ = fs::write("/proc/sys/net/ipv6/conf/all/forwarding", previous);
         }
     }
 }

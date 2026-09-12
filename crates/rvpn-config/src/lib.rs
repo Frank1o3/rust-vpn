@@ -74,6 +74,11 @@ impl ClientConfig {
                 "routing.default_route currently supports an IPv4 server endpoint only",
             ));
         }
+        if self.routing.default_route_v6 && !self.server.is_ipv6() {
+            return Err(ConfigError::Invalid(
+                "routing.default_route_v6 currently requires an IPv6 server endpoint",
+            ));
+        }
         Ok(())
     }
 
@@ -207,6 +212,9 @@ pub struct InterfaceConfig {
     pub mtu: Option<u16>,
     /// CIDR address assigned to this TUN device, for example `10.42.0.2/24`.
     pub address: Option<String>,
+    /// Additional CIDR addresses; use this for dual-stack TUN interfaces.
+    #[serde(default)]
+    pub addresses: Vec<String>,
 }
 
 impl Default for InterfaceConfig {
@@ -215,6 +223,7 @@ impl Default for InterfaceConfig {
             name: None,
             mtu: None,
             address: None,
+            addresses: Vec::new(),
         }
     }
 }
@@ -289,6 +298,11 @@ pub struct ClientRoutingConfig {
     /// Physical-network next hop used to keep the UDP server endpoint outside
     /// a tunnel-installed default route.
     pub endpoint_gateway: Option<String>,
+    /// Install an IPv6 default route through the tunnel.
+    #[serde(default)]
+    pub default_route_v6: bool,
+    pub gateway_v6: Option<String>,
+    pub endpoint_gateway_v6: Option<String>,
     #[serde(default)]
     pub routes: Vec<String>,
 }
@@ -299,6 +313,18 @@ impl ClientRoutingConfig {
             return Err(ConfigError::Invalid(
                 "routing.gateway and routing.endpoint_gateway are required for default_route",
             ));
+        }
+        if self.default_route_v6
+            && (self.gateway_v6.is_none() || self.endpoint_gateway_v6.is_none())
+        {
+            return Err(ConfigError::Invalid(
+                "routing.gateway_v6 and routing.endpoint_gateway_v6 are required for default_route_v6",
+            ));
+        }
+        for route in &self.routes {
+            route.parse::<IpNet>().map_err(|_| {
+                ConfigError::Invalid("routing.routes must contain valid CIDR prefixes")
+            })?;
         }
         Ok(())
     }
@@ -311,6 +337,8 @@ pub struct ForwardingConfig {
     pub enabled: bool,
     pub external_interface: Option<String>,
     pub tunnel_cidr: Option<String>,
+    /// Optional IPv6 tunnel prefix for forwarding and NAT66.
+    pub tunnel_cidr_v6: Option<String>,
 }
 
 impl ForwardingConfig {
@@ -321,11 +349,30 @@ impl ForwardingConfig {
                 .as_deref()
                 .unwrap_or_default()
                 .is_empty()
-                || self.tunnel_cidr.as_deref().unwrap_or_default().is_empty())
+                || (self.tunnel_cidr.as_deref().unwrap_or_default().is_empty()
+                    && self
+                        .tunnel_cidr_v6
+                        .as_deref()
+                        .unwrap_or_default()
+                        .is_empty()))
         {
             return Err(ConfigError::Invalid(
-                "forwarding.external_interface and forwarding.tunnel_cidr are required when forwarding is enabled",
+                "forwarding.external_interface and at least one tunnel CIDR are required when forwarding is enabled",
             ));
+        }
+        if let Some(cidr) = &self.tunnel_cidr {
+            if !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V4(_))) {
+                return Err(ConfigError::Invalid(
+                    "forwarding.tunnel_cidr must be an IPv4 CIDR",
+                ));
+            }
+        }
+        if let Some(cidr) = &self.tunnel_cidr_v6 {
+            if !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V6(_))) {
+                return Err(ConfigError::Invalid(
+                    "forwarding.tunnel_cidr_v6 must be an IPv6 CIDR",
+                ));
+            }
         }
         Ok(())
     }
@@ -336,6 +383,11 @@ impl InterfaceConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if matches!(self.mtu, Some(mtu) if mtu < 576) {
             return Err(ConfigError::Invalid("interface MTU must be at least 576"));
+        }
+        for address in self.address.iter().chain(&self.addresses) {
+            address.parse::<IpNet>().map_err(|_| {
+                ConfigError::Invalid("interface addresses must be valid CIDR prefixes")
+            })?;
         }
         Ok(())
     }

@@ -26,6 +26,7 @@ command -v ping >/dev/null
 [[ -c /dev/net/tun ]] || { echo "/dev/net/tun is unavailable" >&2; exit 1; }
 
 cargo build --quiet -p rvpn-server -p rvpn-client
+
 ip netns add "$server_ns"
 ip netns add "$client_ns"
 ip link add rvpn-it-s type veth peer name rvpn-it-c
@@ -44,10 +45,11 @@ pre_shared_key = "$psk"
 [interface]
 name = "rvpn-server0"
 address = "10.42.0.1/24"
+addresses = ["fd42::1/64"]
 [[peers]]
 name = "desktop"
 pre_shared_key = "$psk"
-allowed_ips = ["10.42.0.2/32"]
+allowed_ips = ["10.42.0.2/32", "fd42::2/128"]
 EOF
 cat >"$client_cfg" <<EOF
 server = "192.0.2.1:9000"
@@ -55,6 +57,7 @@ pre_shared_key = "$psk"
 [interface]
 name = "rvpn-client0"
 address = "10.42.0.2/24"
+addresses = ["fd42::2/64"]
 EOF
 
 ip netns exec "$server_ns" target/debug/rvpn-server "$server_cfg" & server_pid=$!
@@ -62,4 +65,5 @@ sleep 0.2
 ip netns exec "$client_ns" target/debug/rvpn-client "$client_cfg" & client_pid=$!
 sleep 3
 ip netns exec "$client_ns" ping -c 3 -W 1 10.42.0.1
+ip netns exec "$client_ns" ping -6 -c 3 -W 1 fd42::1
 echo "netns integration test passed"

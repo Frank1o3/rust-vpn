@@ -188,12 +188,19 @@ async fn establish(
 }
 
 async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Result<()> {
-    if let Some(address) = &config.interface.address {
-        run("ip", ["address", "replace", address, "dev", tun.name()]).await?;
+    let addresses = config
+        .interface
+        .address
+        .iter()
+        .chain(&config.interface.addresses);
+    if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
+        for address in addresses {
+            run("ip", ["address", "replace", address, "dev", tun.name()]).await?;
+        }
         run("ip", ["link", "set", "dev", tun.name(), "up"]).await?;
     }
     for route in &config.routing.routes {
-        run("ip", ["route", "replace", route, "dev", tun.name()]).await?;
+        route_replace(route, None, tun.name()).await?;
     }
     if config.routing.default_route {
         let gateway = config
@@ -209,26 +216,41 @@ async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Res
             .as_deref()
             .expect("validated endpoint gateway");
         let endpoint = format!("{}/32", config.server.ip());
-        run(
-            "ip",
-            ["route", "replace", &endpoint, "via", endpoint_gateway],
-        )
-        .await?;
-        run(
-            "ip",
-            [
-                "route",
-                "replace",
-                "default",
-                "via",
-                gateway,
-                "dev",
-                tun.name(),
-            ],
-        )
-        .await?;
+        route_replace(&endpoint, Some(endpoint_gateway), "").await?;
+        route_replace("default", Some(gateway), tun.name()).await?;
+    }
+    if config.routing.default_route_v6 {
+        let gateway = config
+            .routing
+            .gateway_v6
+            .as_deref()
+            .expect("validated gateway");
+        let endpoint_gateway = config
+            .routing
+            .endpoint_gateway_v6
+            .as_deref()
+            .expect("validated endpoint gateway");
+        let endpoint = format!("{}/128", config.server.ip());
+        route_replace(&endpoint, Some(endpoint_gateway), "").await?;
+        route_replace("default", Some(gateway), tun.name()).await?;
     }
     Ok(())
+}
+
+async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -> Result<()> {
+    let ipv6 = destination.contains(':') || gateway.is_some_and(|value| value.contains(':'));
+    let mut args = if ipv6 {
+        vec!["-6", "route", "replace", destination]
+    } else {
+        vec!["route", "replace", destination]
+    };
+    if let Some(gateway) = gateway {
+        args.extend(["via", gateway]);
+    }
+    if !device.is_empty() {
+        args.extend(["dev", device]);
+    }
+    run("ip", args).await
 }
 
 async fn run<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
