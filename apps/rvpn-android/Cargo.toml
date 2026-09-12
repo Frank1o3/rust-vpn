@@ -13,7 +13,7 @@
     anyhow={workspace=true}
     bytes={workspace=true}
     hex={workspace=true}
-    jni="0.21"
+    jni="0.22.4"
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}
