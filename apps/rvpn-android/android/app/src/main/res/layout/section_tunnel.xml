@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="20dp"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Tunnel Settings" android:textSize="22sp" android:textStyle="bold"
+            android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Tunnel IPv4 Address" android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+        <EditText android:id="@+id/tunnelIpInput" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="10.42.0.2"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/ipv6EnableSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Enable IPv6"
+            android:layout_marginBottom="8dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Tunnel IPv6 Address" android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+        <EditText android:id="@+id/tunnelIpv6Input" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="fd42::2" android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/routeAllV4Switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Route all IPv4 traffic through VPN"
+            android:layout_marginBottom="8dp" />
+
+        <EditText android:id="@+id/splitRoutesV4Input" android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Split IPv4 routes, e.g. 10.0.0.0/8, 192.168.1.0/24"
+            android:inputType="textMultiLine" android:layout_marginBottom="16dp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/routeAllV6Switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Route all IPv6 traffic through VPN"
+            android:layout_marginBottom="8dp" />
+
+        <EditText android:id="@+id/splitRoutesV6Input" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="Split IPv6 routes, e.g. fd00::/8"
+            android:inputType="textMultiLine" android:layout_marginBottom="16dp" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="DNS Servers (comma-separated)" android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+        <EditText android:id="@+id/dnsInput" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="1.1.1.1, 1.0.0.1"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <Button android:id="@+id/saveTunnelButton" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:text="Save" />
+
+    </LinearLayout>
+</ScrollView>

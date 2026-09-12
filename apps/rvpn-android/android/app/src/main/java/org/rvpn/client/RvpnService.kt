@@ -78,47 +78,36 @@ class RvpnService : VpnService() {
                 .setMtu(config.mtu)
                 .addAddress(config.tunnelAddress, config.tunnelPrefixLength)
 
-            if (config.tunnelAddressV6.isNotEmpty()) {
+            if (config.ipv6Enabled && config.tunnelAddressV6.isNotEmpty()) {
                 builder.addAddress(config.tunnelAddressV6, config.tunnelPrefixLengthV6)
             }
 
-            if (config.useDefaultRoute) {
+            if (config.useDefaultRouteV4) {
                 builder.addRoute("0.0.0.0", 0)
-                if (config.tunnelAddressV6.isNotEmpty()) {
-                    builder.addRoute("::", 0)
-                }
             } else {
-                val routes = config.splitTunnelRoutes
-                    .split(",", "\n")
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                if (routes.isEmpty()) {
-                    Log.w(
-                        TAG,
-                        "Split tunneling is on but no routes were configured; only the VPN subnet will be reachable"
-                    )
+                addSplitRoutes(builder, config.splitTunnelRoutesV4)
+            }
+            if (config.ipv6Enabled) {
+                if (config.useDefaultRouteV6) {
+                    builder.addRoute("::", 0)
+                } else {
+                    addSplitRoutes(builder, config.splitTunnelRoutesV6)
                 }
-                for (route in routes) {
-                    val parts = route.split("/")
-                    val prefix = parts.getOrNull(1)?.toIntOrNull()
-                    if (parts.size == 2 && prefix != null) {
-                        try {
-                            builder.addRoute(parts[0], prefix)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Skipping invalid split-tunnel route '$route': ${e.message}")
-                        }
-                    } else {
-                        Log.w(TAG, "Skipping malformed split-tunnel route '$route' (expected CIDR like 10.0.0.0/8)")
-                    }
+            }
+            if (!config.useDefaultRouteV4 && (!config.ipv6Enabled || !config.useDefaultRouteV6)
+                && config.splitTunnelRoutesV4.isBlank() && config.splitTunnelRoutesV6.isBlank()
+            ) {
+                Log.w(TAG, "Split tunneling is on but no routes were configured; only the VPN subnet will be reachable")
+            }
+
+            for (dns in config.dnsServers.split(",", "\n").map { it.trim() }.filter { it.isNotEmpty() }) {
+                try {
+                    builder.addDnsServer(dns)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping invalid DNS server '$dns': ${e.message}")
                 }
             }
 
-            // Primary DNS
-            if (config.dnsServer.isNotEmpty()) {
-                builder.addDnsServer(config.dnsServer)
-            }
-
-            // Split tunneling: exclude apps from VPN tunnel
             for (pkg in config.excludedApps) {
                 try {
                     builder.addDisallowedApplication(pkg)
@@ -162,21 +151,14 @@ class RvpnService : VpnService() {
             broadcastStatus(true, "Connected to ${config.server}")
             updateNotification("Connected to ${config.server}")
 
-            // Start monitoring tunnel lifecycle and broadcasting live stats
             monitorJob?.cancel()
             monitorJob = serviceScope.launch {
                 delay(500)
                 while (isActive && RvpnNative.isTunnelRunning()) {
                     val stats = RvpnNative.getStats()
                     if (stats != null) {
-                        broadcastStatus(
-                            connected = true,
-                            message = "Connected to ${config.server}",
-                            stats = stats
-                        )
-                        updateNotification(
-                            "Connected: ↓ ${formatBytes(stats.bytesRx)} | ↑ ${formatBytes(stats.bytesTx)}"
-                        )
+                        broadcastStatus(true, "Connected to ${config.server}", stats)
+                        updateNotification("Connected: ↓ ${formatBytes(stats.bytesRx)} | ↑ ${formatBytes(stats.bytesTx)}")
                     }
                     delay(1000)
                 }
@@ -191,6 +173,22 @@ class RvpnService : VpnService() {
             broadcastStatus(false, "Exception: ${e.message}")
             closeInterface()
             stopSelf()
+        }
+    }
+
+    private fun addSplitRoutes(builder: Builder, routes: String) {
+        for (route in routes.split(",", "\n").map { it.trim() }.filter { it.isNotEmpty() }) {
+            val parts = route.split("/")
+            val prefix = parts.getOrNull(1)?.toIntOrNull()
+            if (parts.size == 2 && prefix != null) {
+                try {
+                    builder.addRoute(parts[0], prefix)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping invalid split-tunnel route '$route': ${e.message}")
+                }
+            } else {
+                Log.w(TAG, "Skipping malformed split-tunnel route '$route' (expected CIDR like 10.0.0.0/8)")
+            }
         }
     }
 

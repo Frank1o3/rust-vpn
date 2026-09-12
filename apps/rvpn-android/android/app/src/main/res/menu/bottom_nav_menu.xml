@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/nav_main" android:title="Main" android:icon="@drawable/ic_vpn" />
+    <item android:id="@+id/nav_tunnel" android:title="Tunnel" android:icon="@drawable/ic_vpn" />
+    <item android:id="@+id/nav_server" android:title="Server" android:icon="@drawable/ic_vpn" />
+    <item android:id="@+id/nav_advanced" android:title="Advanced" android:icon="@drawable/ic_vpn" />
+</menu>
