@@ -6,10 +6,6 @@ use rvpn_interface::TunDevice;
 use std::net::SocketAddr;
 use tokio::process::Command;
 
-/// Configures IP addresses and routes on the host for the primary VPN interface.
-///
-/// `server` is the already-DNS-resolved server endpoint; `config.server` is
-/// only the original (possibly hostname) configuration string.
 pub async fn configure_client_network(
     dev: &TunDevice,
     config: &ClientConfig,
@@ -44,12 +40,6 @@ pub async fn configure_client_network(
             let endpoint = format!("{}/32", server.ip());
             route_replace(&endpoint, Some(endpoint_gateway), "").await?;
         }
-        // Two more-specific halves of 0.0.0.0/0 take routing priority over
-        // the host's existing default route without replacing (and
-        // therefore destroying) it. Both are bound to this TUN device, so
-        // the kernel removes them automatically the moment the device is
-        // torn down -- including on an ungraceful exit -- so the machine's
-        // real default route is never permanently lost.
         route_replace("0.0.0.0/1", Some(gateway), dev.name()).await?;
         route_replace("128.0.0.0/1", Some(gateway), dev.name()).await?;
     }
@@ -74,9 +64,6 @@ pub async fn configure_client_network(
     Ok(())
 }
 
-/// Best-effort removal of the routes this client installed. Every deletion
-/// tolerates the route already being gone (for example, removed by the
-/// kernel automatically when the TUN device disappeared).
 pub async fn teardown_client_network(dev: &TunDevice, config: &ClientConfig, server: SocketAddr) {
     if config.routing.default_route {
         for half in ["0.0.0.0/1", "128.0.0.0/1"] {
