@@ -1,8 +1,21 @@
-# client.toml
-bind="192.0.2.1:9000"
-pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
-server="192.0.2.1:9000"
+# RVPN Client configuration
+# Run on the main PC (connecting to the laptop at 10.0.0.91:9000)
+server = "10.0.0.91:9000"
+pre_shared_key = "3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
 
 [interface]
-    mtu=1400
-    name="rvpn-client0"
+name = "rvpn-client0"
+# Mode options: "tun" (Layer 3 IP), "tap" (Layer 2 Ethernet), or "both" (TUN + TAP concurrently)
+mode = "tun"
+mtu = 1400
+address = "10.42.0.2/24"
+addresses = ["fd42::2/64"]
+
+[routing]
+# Point-to-point VPN subnet is reachable by default.
+# Uncomment the following to route default internet traffic through the laptop server:
+# default_route = true
+# gateway = "10.42.0.1"
+# endpoint_gateway = "192.168.88.1" # local gateway on main PC to reach LAN
+# default_route_v6 = false
+# gateway_v6 = "fd42::1"

@@ -1,7 +1,27 @@
-# server.toml
-bind="192.0.2.1:9000"
-pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
+# RVPN Server configuration
+# Run on the laptop (LAN IP: 10.0.0.91)
+bind = "0.0.0.0:9000"
+pre_shared_key = "3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
 
 [interface]
-    mtu=1400
-    name="rvpn-server0"
+name = "rvpn-server0"
+# Mode options: "tun" (Layer 3 IP), "tap" (Layer 2 Ethernet), or "both" (TUN + TAP concurrently)
+mode = "tun"
+mtu = 1400
+address = "10.42.0.1/24"
+addresses = ["fd42::1/64"]
+
+[forwarding]
+# Enable NAT masquerade and forwarding to route client internet traffic through the laptop
+enabled = false
+# Backend options: "auto" (probes for nft, falls back to iptables), "iptables", or "nftables"
+backend = "auto"
+# Replace with the laptop's outgoing network interface (e.g. wlan0 or eth0):
+# external_interface = "wlan0"
+# tunnel_cidr = "10.42.0.0/24"
+# tunnel_cidr_v6 = "fd42::/64"
+
+[[peers]]
+name = "main-pc"
+pre_shared_key = "3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
+allowed_ips = ["10.42.0.2/32", "fd42::2/128"]

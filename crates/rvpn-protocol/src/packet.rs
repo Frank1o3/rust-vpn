@@ -15,6 +15,7 @@ pub enum PacketKind {
     Data = 2,
     Rekey = 3,
     Close = 4,
+    DataTap = 5,
 }
 
 impl TryFrom<u8> for PacketKind {
@@ -26,6 +27,7 @@ impl TryFrom<u8> for PacketKind {
             2 => Ok(Self::Data),
             3 => Ok(Self::Rekey),
             4 => Ok(Self::Close),
+            5 => Ok(Self::DataTap),
             _ => Err(ProtocolError::UnknownPacketKind(value)),
         }
     }
@@ -147,5 +149,19 @@ mod tests {
             Packet::decode(Bytes::copy_from_slice(&bytes)),
             Err(ProtocolError::UnknownPacketKind(99))
         );
+    }
+
+    #[test]
+    fn datatap_round_trip() {
+        let packet = Packet {
+            header: Header {
+                kind: PacketKind::DataTap,
+                key_phase: 1,
+                sequence: 42,
+                session_id: SessionId::new([7; 16]),
+            },
+            payload: Bytes::from_static(b"ethernet-frame"),
+        };
+        assert_eq!(Packet::decode(packet.encode()).unwrap(), packet);
     }
 }

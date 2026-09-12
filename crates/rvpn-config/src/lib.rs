@@ -1,6 +1,7 @@
 //! TOML configuration parsing and validation for RVPN applications.
 
 use ipnet::IpNet;
+pub use rvpn_interface::DeviceMode;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 use thiserror::Error;
@@ -69,14 +70,14 @@ impl ClientConfig {
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
             .and_then(|_| self.routing.validate())?;
-        if self.routing.default_route && !self.server.is_ipv4() {
+        if self.routing.default_route && self.server.is_ipv4() && self.routing.endpoint_gateway.is_none() {
             return Err(ConfigError::Invalid(
-                "routing.default_route currently supports an IPv4 server endpoint only",
+                "routing.endpoint_gateway is required for default_route when server endpoint is IPv4",
             ));
         }
-        if self.routing.default_route_v6 && !self.server.is_ipv6() {
+        if self.routing.default_route_v6 && self.server.is_ipv6() && self.routing.endpoint_gateway_v6.is_none() {
             return Err(ConfigError::Invalid(
-                "routing.default_route_v6 currently requires an IPv6 server endpoint",
+                "routing.endpoint_gateway_v6 is required for default_route_v6 when server endpoint is IPv6",
             ));
         }
         Ok(())
@@ -203,16 +204,20 @@ pub struct PeerIdentity {
     pub allowed_ips: Vec<IpNet>,
 }
 
-/// Platform-neutral settings for a local Layer-3 tunnel device.
+/// Platform-neutral settings for a local Layer-3/Layer-2 tunnel device.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InterfaceConfig {
     /// Requested interface name; omit it to let Linux choose one.
     pub name: Option<String>,
+    /// Secondary TAP interface name when running in `both` mode.
+    pub tap_name: Option<String>,
     /// Maximum IP packet size. App transport buffers include protocol overhead.
     pub mtu: Option<u16>,
-    /// CIDR address assigned to this TUN device, for example `10.42.0.2/24`.
+    /// Operating mode: `tun`, `tap`, or `both`. Defaults to `tun`.
+    pub mode: Option<DeviceMode>,
+    /// CIDR address assigned to this TUN/TAP device, for example `10.42.0.2/24`.
     pub address: Option<String>,
-    /// Additional CIDR addresses; use this for dual-stack TUN interfaces.
+    /// Additional CIDR addresses; use this for dual-stack interfaces.
     #[serde(default)]
     pub addresses: Vec<String>,
 }
@@ -221,10 +226,19 @@ impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
             name: None,
+            tap_name: None,
             mtu: None,
+            mode: None,
             address: None,
             addresses: Vec::new(),
         }
+    }
+}
+
+impl InterfaceConfig {
+    /// Returns the operating mode (defaults to `DeviceMode::Tun`).
+    pub fn mode(&self) -> DeviceMode {
+        self.mode.unwrap_or_default()
     }
 }
 
@@ -309,16 +323,14 @@ pub struct ClientRoutingConfig {
 
 impl ClientRoutingConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.default_route && (self.gateway.is_none() || self.endpoint_gateway.is_none()) {
+        if self.default_route && self.gateway.is_none() {
             return Err(ConfigError::Invalid(
-                "routing.gateway and routing.endpoint_gateway are required for default_route",
+                "routing.gateway is required for default_route",
             ));
         }
-        if self.default_route_v6
-            && (self.gateway_v6.is_none() || self.endpoint_gateway_v6.is_none())
-        {
+        if self.default_route_v6 && self.gateway_v6.is_none() {
             return Err(ConfigError::Invalid(
-                "routing.gateway_v6 and routing.endpoint_gateway_v6 are required for default_route_v6",
+                "routing.gateway_v6 is required for default_route_v6",
             ));
         }
         for route in &self.routes {
@@ -330,11 +342,26 @@ impl ClientRoutingConfig {
     }
 }
 
+/// Supported firewall backend implementation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FirewallBackend {
+    /// Auto-detect: probe for `nft`, fallback to `iptables`/`ip6tables`.
+    #[default]
+    Auto,
+    /// Use `iptables` and `ip6tables`.
+    Iptables,
+    /// Use `nft` (nftables).
+    Nftables,
+}
+
 /// Opt-in Linux forwarding and NAT settings for an internet-facing server.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ForwardingConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub backend: FirewallBackend,
     pub external_interface: Option<String>,
     pub tunnel_cidr: Option<String>,
     /// Optional IPv6 tunnel prefix for forwarding and NAT66.
@@ -453,5 +480,46 @@ mod tests {
         let peers = config.peer_identities().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].name, "laptop");
+    }
+
+    #[test]
+    fn parses_tap_and_both_mode_and_firewall() {
+        let server_toml = r#"
+bind = '0.0.0.0:9000'
+pre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+[interface]
+name = 'rvpn-srv'
+tap_name = 'rvpn-tap'
+mode = 'both'
+
+[forwarding]
+enabled = true
+backend = 'iptables'
+external_interface = 'eth0'
+tunnel_cidr = '10.42.0.0/24'
+tunnel_cidr_v6 = 'fd42::/64'
+"#;
+        let config = ServerConfig::from_toml(server_toml).unwrap();
+        assert_eq!(config.interface.mode(), DeviceMode::Both);
+        assert_eq!(config.forwarding.backend, FirewallBackend::Iptables);
+
+        let client_toml = r#"
+server = '10.0.0.91:9000'
+pre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+[interface]
+mode = 'tap'
+
+[routing]
+default_route = true
+gateway = '10.42.0.1'
+endpoint_gateway = '192.168.88.1'
+default_route_v6 = true
+gateway_v6 = 'fd42::1'
+"#;
+        let client_cfg = ClientConfig::from_toml(client_toml).unwrap();
+        assert_eq!(client_cfg.interface.mode(), DeviceMode::Tap);
+        assert!(client_cfg.routing.default_route_v6);
     }
 }

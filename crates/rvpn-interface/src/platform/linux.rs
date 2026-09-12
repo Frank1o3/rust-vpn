@@ -1,6 +1,6 @@
 //! Linux `/dev/net/tun` implementation.
 
-use crate::{InterfaceError, TunConfig};
+use crate::{DeviceMode, InterfaceError, TunConfig};
 use bytes::Bytes;
 use std::{
     fs::{File, OpenOptions},
@@ -47,16 +47,18 @@ impl IfReq {
     }
 }
 
-/// Asynchronous Linux TUN device carrying raw IPv4/IPv6 packets only.
+/// Asynchronous Linux TUN/TAP virtual device.
 pub struct TunDevice {
     file: AsyncFd<File>,
     name: String,
     mtu: u16,
+    mode: DeviceMode,
 }
 
 impl TunDevice {
-    /// Creates a non-persistent Linux TUN device. Closing/dropping this object
-    /// closes its descriptor; Linux then removes a non-persistent device.
+    /// Creates a non-persistent Linux TUN/TAP device and brings it up.
+    /// Closing/dropping this object closes its descriptor; Linux then removes
+    /// a non-persistent device.
     pub async fn create(config: TunConfig) -> Result<Self, InterfaceError> {
         config.validate()?;
         let file = OpenOptions::new()
@@ -65,7 +67,10 @@ impl TunDevice {
             .custom_flags(libc::O_NONBLOCK)
             .open(TUN_PATH)?;
         let mut request = IfReq::new(config.name.as_deref());
-        let flags = (libc::IFF_TUN | libc::IFF_NO_PI) as i16;
+        let flags = match config.mode {
+            DeviceMode::Tap => (libc::IFF_TAP | libc::IFF_NO_PI) as i16,
+            DeviceMode::Tun | DeviceMode::Both => (libc::IFF_TUN | libc::IFF_NO_PI) as i16,
+        };
         request.data[..2].copy_from_slice(&flags.to_ne_bytes());
         // SAFETY: `request` is repr(C), initialized, and valid for the kernel
         // to read/write for the duration of this ioctl.
@@ -74,11 +79,14 @@ impl TunDevice {
         }
         let name = request.assigned_name()?;
         set_mtu(&name, config.mtu)?;
-        tracing::info!(interface = %name, mtu = config.mtu, "created Linux TUN device");
+        // Automatically activate the link (IFF_UP | IFF_RUNNING) via ioctl.
+        let _ = set_up(&name);
+        tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, "created Linux virtual device");
         Ok(Self {
             file: AsyncFd::new(file)?,
             name,
             mtu: config.mtu,
+            mode: config.mode,
         })
     }
 
@@ -86,14 +94,23 @@ impl TunDevice {
     pub fn name(&self) -> &str {
         &self.name
     }
-    /// Configured maximum IP packet size.
+    /// Configured maximum IP packet payload size.
     pub const fn mtu(&self) -> u16 {
         self.mtu
     }
+    /// Operating mode (TUN or TAP).
+    pub const fn mode(&self) -> DeviceMode {
+        self.mode
+    }
 
-    /// Receives one raw IP packet. Only one receive strategy should be active.
+    /// Receives one raw packet or Ethernet frame. Only one receive strategy should be active.
     pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
-        let mut buffer = vec![0; self.mtu as usize + 1];
+        let max_packet_len = if self.mode == DeviceMode::Tap {
+            self.mtu as usize + 18
+        } else {
+            self.mtu as usize
+        };
+        let mut buffer = vec![0; max_packet_len + 1];
         loop {
             let mut ready = self.file.readable().await?;
             match ready.try_io(|file| {
@@ -101,14 +118,14 @@ impl TunDevice {
                 file.read(&mut buffer)
             }) {
                 Ok(Ok(length)) => {
-                    if length > self.mtu as usize {
+                    if length > max_packet_len {
                         return Err(InterfaceError::PacketTooLarge {
                             size: length,
-                            mtu: self.mtu,
+                            mtu: max_packet_len as u16,
                         });
                     }
                     buffer.truncate(length);
-                    validate_packet(&buffer, self.mtu)?;
+                    validate_packet(&buffer, self.mtu, self.mode)?;
                     return Ok(Bytes::from(buffer));
                 }
                 Ok(Err(error)) => return Err(error.into()),
@@ -117,9 +134,9 @@ impl TunDevice {
         }
     }
 
-    /// Writes one raw IP packet to the operating system through the TUN device.
+    /// Writes one raw packet or Ethernet frame to the operating system through the device.
     pub async fn send(&self, packet: &[u8]) -> Result<(), InterfaceError> {
-        validate_packet(packet, self.mtu)?;
+        validate_packet(packet, self.mtu, self.mode)?;
         loop {
             let mut ready = self.file.writable().await?;
             match ready.try_io(|file| {
@@ -140,16 +157,32 @@ impl TunDevice {
     }
 }
 
-fn validate_packet(packet: &[u8], mtu: u16) -> Result<(), InterfaceError> {
-    if packet.len() > mtu as usize {
-        return Err(InterfaceError::PacketTooLarge {
-            size: packet.len(),
-            mtu,
-        });
-    }
-    match packet.first().map(|byte| byte >> 4) {
-        Some(4 | 6) => Ok(()),
-        _ => Err(InterfaceError::InvalidIpPacket),
+fn validate_packet(packet: &[u8], mtu: u16, mode: DeviceMode) -> Result<(), InterfaceError> {
+    match mode {
+        DeviceMode::Tun => {
+            if packet.len() > mtu as usize {
+                return Err(InterfaceError::PacketTooLarge {
+                    size: packet.len(),
+                    mtu,
+                });
+            }
+            match packet.first().map(|byte| byte >> 4) {
+                Some(4 | 6) => Ok(()),
+                _ => Err(InterfaceError::InvalidIpPacket),
+            }
+        }
+        DeviceMode::Tap | DeviceMode::Both => {
+            if packet.len() < 14 {
+                return Err(InterfaceError::InvalidEthernetFrame);
+            }
+            if packet.len() > mtu as usize + 18 {
+                return Err(InterfaceError::PacketTooLarge {
+                    size: packet.len(),
+                    mtu: mtu + 18,
+                });
+            }
+            Ok(())
+        }
     }
 }
 
@@ -172,20 +205,61 @@ fn set_mtu(name: &str, mtu: u16) -> Result<(), InterfaceError> {
     error.map_or(Ok(()), |error| Err(error.into()))
 }
 
+fn set_up(name: &str) -> Result<(), InterfaceError> {
+    let socket = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if socket < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut request = IfReq::new(Some(name));
+    // SAFETY: the socket and `ifreq` are valid for this ioctl call.
+    if unsafe { libc::ioctl(socket, libc::SIOCGIFFLAGS, &mut request) } < 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::close(socket) };
+        return Err(error.into());
+    }
+    let mut flags = i16::from_ne_bytes(request.data[..2].try_into().unwrap());
+    flags |= (libc::IFF_UP | libc::IFF_RUNNING) as i16;
+    request.data[..2].copy_from_slice(&flags.to_ne_bytes());
+    let result = unsafe { libc::ioctl(socket, libc::SIOCSIFFLAGS, &mut request) };
+    let error = if result < 0 {
+        Some(std::io::Error::last_os_error())
+    } else {
+        None
+    };
+    unsafe { libc::close(socket) };
+    error.map_or(Ok(()), |error| Err(error.into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn validates_only_ip_version_and_packet_bound() {
-        assert!(validate_packet(&[0x45], 1400).is_ok());
-        assert!(validate_packet(&[0x60], 1400).is_ok());
+    fn validates_tun_packets() {
+        assert!(validate_packet(&[0x45], 1400, DeviceMode::Tun).is_ok());
+        assert!(validate_packet(&[0x60], 1400, DeviceMode::Tun).is_ok());
         assert!(matches!(
-            validate_packet(&[], 1400),
+            validate_packet(&[], 1400, DeviceMode::Tun),
             Err(InterfaceError::InvalidIpPacket)
         ));
         assert!(matches!(
-            validate_packet(&[0x45; 4], 3),
+            validate_packet(&[0x45; 4], 3, DeviceMode::Tun),
+            Err(InterfaceError::PacketTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn validates_tap_ethernet_frames() {
+        let frame_14 = [0u8; 14];
+        assert!(validate_packet(&frame_14, 1400, DeviceMode::Tap).is_ok());
+        let small_frame = [0u8; 13];
+        assert!(matches!(
+            validate_packet(&small_frame, 1400, DeviceMode::Tap),
+            Err(InterfaceError::InvalidEthernetFrame)
+        ));
+        let oversized = vec![0u8; 1400 + 19];
+        assert!(matches!(
+            validate_packet(&oversized, 1400, DeviceMode::Tap),
             Err(InterfaceError::PacketTooLarge { .. })
         ));
     }

@@ -1,17 +1,34 @@
 use crate::InterfaceError;
+use serde::{Deserialize, Serialize};
 
 /// Default L3 payload limit exposed by a newly created device.
 pub const DEFAULT_MTU: u16 = 1400;
 const MIN_MTU: u16 = 576;
 const LINUX_IF_NAME_MAX: usize = 15;
 
-/// Creation and I/O limits for a TUN device.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Operating mode for the virtual interface.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceMode {
+    /// Layer-3 virtual interface (raw IPv4 / IPv6 packets).
+    #[default]
+    Tun,
+    /// Layer-2 virtual interface (Ethernet frames).
+    Tap,
+    /// Dual-stack virtual interfaces (both TUN and TAP running concurrently).
+    Both,
+}
+
+/// Creation and I/O limits for a virtual TUN/TAP device.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TunConfig {
-    /// Requested name; omit it to let Linux assign a name such as `tun0`.
+    /// Requested name; omit it to let Linux assign a name such as `tun0` or `tap0`.
     pub name: Option<String>,
     /// Kernel MTU and maximum accepted packet length.
     pub mtu: u16,
+    /// Virtual interface operating mode.
+    #[serde(default)]
+    pub mode: DeviceMode,
 }
 
 impl Default for TunConfig {
@@ -19,6 +36,7 @@ impl Default for TunConfig {
         Self {
             name: None,
             mtu: DEFAULT_MTU,
+            mode: DeviceMode::default(),
         }
     }
 }

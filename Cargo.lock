@@ -383,6 +383,7 @@ version = "0.0.1"
 dependencies = [
  "hex",
  "ipnet",
+ "rvpn-interface",
  "serde",
  "thiserror",
  "toml",
@@ -417,6 +418,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "libc",
+ "serde",
  "thiserror",
  "tokio",
  "tracing",

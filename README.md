@@ -47,32 +47,37 @@ new UDP source updates the server's peer address, so NAT rebinding works without
 trusting an unauthenticated source address.
 
 On SIGINT or SIGTERM each endpoint sends an authenticated `Close` packet before
-dropping its non-persistent TUN device.
+dropping its non-persistent virtual device.
 
-For an opt-in internet gateway, RVPN invokes the host `ip` and `nft` tools
-itself—no manual network commands or Rust firewall library are required. These
-privileged operations configure TUN addresses/routes, enable forwarding, and
-install an isolated `inet rvpn` NAT table. For example:
+For an opt-in internet gateway, RVPN configures firewall and NAT rules
+automatically using either `iptables` or `nftables` (with auto-detection)—no
+manual network commands or external firewall scripts are required. RVPN
+configures TUN/TAP addresses and routes, brings interfaces up automatically,
+enables kernel IP forwarding, and installs isolated NAT/masquerade rules. For
+example:
 
 ```toml
 # server.toml
 [interface]
 name = "rvpn-server0"
+mode = "tun" # or "tap" (Layer 2) or "both" (TUN + TAP concurrently)
 mtu = 1400
 address = "10.42.0.1/24"
 addresses = ["fd42::1/64"]
 
 [forwarding]
 enabled = true
+backend = "auto" # "auto", "iptables", or "nftables"
 external_interface = "eth0"
 tunnel_cidr = "10.42.0.0/24"
-tunnel_cidr_v6 = "fd42::/64" # optional NAT66; prefer routed IPv6 where available
+tunnel_cidr_v6 = "fd42::/64" # optional NAT66
 ```
 
 ```toml
 # client.toml
 [interface]
 name = "rvpn-client0"
+mode = "tun" # or "tap" or "both"
 mtu = 1400
 address = "10.42.0.2/24"
 addresses = ["fd42::2/64"]
@@ -80,73 +85,44 @@ addresses = ["fd42::2/64"]
 [routing]
 default_route = true
 gateway = "10.42.0.1"
-endpoint_gateway = "192.0.2.254" # keeps the UDP server route off the tunnel
+endpoint_gateway = "192.168.88.1" # keeps the UDP server route off the tunnel
 # Or use routes = ["10.0.0.0/8"] for split tunnelling.
 ```
 
+### TUN, TAP, and Both modes
+
+- **`tun`** (default): Operates at Layer 3 (raw IPv4 and IPv6 packets). Provides maximum MTU efficiency without Ethernet header overhead.
+- **`tap`**: Operates at Layer 2 (Ethernet frames). Carries ARP, DHCP, broadcast, and multicast discovery protocols, functioning like a virtual Ethernet switch with MAC learning.
+- **`both`**: Instantiates both a TUN interface (for high-efficiency IP traffic) and a TAP interface (for L2 Ethernet frames) concurrently over the same encrypted VPN session.
+
 IPv6 packets are protected exactly like IPv4 packets. Add IPv6 prefixes to a
 peer's `allowed_ips`, such as `fd42::2/128`, and use `addresses` for additional
-interface addresses. `default_route_v6`, `gateway_v6`, and
-`endpoint_gateway_v6` provide the IPv6 counterpart of the IPv4 default-route
-settings when the VPN server endpoint itself is IPv6.
+interface addresses. `default_route_v6` and `gateway_v6` provide dual-stack
+default routing through the tunnel even when connecting to an IPv4 server endpoint.
 
-Run the processes with the capabilities needed to create TUN devices and change
-network state. The forwarding table and the prior IPv4-forwarding setting are
-restored during a graceful RVPN shutdown.
+All firewall rules and kernel forwarding settings are cleanly restored during a
+graceful RVPN shutdown.
 
-## Multi-client provisioning and integration test
+## Multi-device deployment and testing
 
-Use `[[peers]]` on the server to give every client a distinct PSK and the
-tunnel CIDR(s) it owns. `allowed_ips` is enforced both as a source-address
-anti-spoofing policy and as the return-traffic routing table.
+`server.toml` and `client.toml` are pre-configured to test between two physical
+devices on a local network: a laptop server (LAN IP `10.0.0.91`) and a desktop PC.
 
-```toml
-[[peers]]
-name = "desktop"
-pre_shared_key = "...64 hexadecimal characters..."
-allowed_ips = ["10.42.0.2/32"]
+### 1. On the laptop (Server at 10.0.0.91):
+Run:
+```sh
+sudo cargo run -p rvpn-server -- server.toml
 ```
 
-The client uses that peer's PSK and configures its assigned address locally.
-The legacy top-level `pre_shared_key` remains supported only for a single
-unrestricted peer.
-
-`scripts/netns-integration.sh` is a two-host simulation: it creates isolated
-server/client namespaces, starts both binaries, and pings across the encrypted
-TUN link. Run it from the repository root with `sudo`; it is suitable for a
-privileged Linux CI job as well.
-
-### Laptop-server smoke test
-
-On the laptop, replace `192.168.1.10` with its LAN address and use:
-
-```toml
-# server.toml
-bind = "0.0.0.0:9000"
-pre_shared_key = "<the 64-hex-character shared key>" # legacy fallback
-
-[interface]
-name = "rvpn-server0"
-address = "10.42.0.1/24"
-
-[[peers]]
-name = "main-pc"
-pre_shared_key = "<the 64-hex-character shared key>"
-allowed_ips = ["10.42.0.2/32"]
+### 2. On the main PC (Client):
+Run:
+```sh
+sudo cargo run -p rvpn-client -- client.toml
 ```
 
-```toml
-# client.toml on the main PC
-server = "192.168.1.10:9000"
-pre_shared_key = "<the same 64-hex-character shared key>"
-
-[interface]
-name = "rvpn-client0"
-address = "10.42.0.2/24"
+### 3. Verify connectivity:
+From the main PC:
+```sh
+ping 10.42.0.1
+ping -6 fd42::1
 ```
-
-Generate the shared key once with `openssl rand -hex 32`, copy it to both
-files, then run `sudo cargo run -p rvpn-server -- server.toml` on the laptop
-and `sudo cargo run -p rvpn-client -- client.toml` on the PC. Finally, from the
-PC, run `ping 10.42.0.1`. Permit UDP port 9000 through the laptop firewall if
-one is active.

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use rvpn_config::{ClientConfig, HandshakeConfig};
+use rvpn_config::{ClientConfig, DeviceMode, HandshakeConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::{AEAD_TAG_LEN, HandshakePsk};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
@@ -24,22 +24,78 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: rvpn-client <client.toml>")?;
     let config = ClientConfig::from_toml(&fs::read_to_string(path)?)?;
-    let tun_config = TunConfig {
-        name: config.interface.name.clone(),
-        mtu: config.interface.mtu.unwrap_or(DEFAULT_MTU),
+    let mode = config.interface.mode();
+    let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
+    let frame_overhead = match mode {
+        DeviceMode::Tun => 0,
+        DeviceMode::Tap | DeviceMode::Both => 18,
     };
-    // Do not UDP-connect: send_to keeps the client usable after its local path is recreated.
+    let local_bind: SocketAddr = if config.server.is_ipv6() {
+        "[::]:0".parse().unwrap()
+    } else {
+        "0.0.0.0:0".parse().unwrap()
+    };
     let transport = UdpTransport::open(TransportConfig {
-        local_address: "0.0.0.0:0".parse::<SocketAddr>()?,
+        local_address: local_bind,
         remote_address: None,
-        max_datagram_size: usize::from(tun_config.mtu) + HEADER_LEN + AEAD_TAG_LEN,
+        max_datagram_size: usize::from(mtu) + frame_overhead + HEADER_LEN + AEAD_TAG_LEN,
     })
     .await?;
     let psk = config.pre_shared_key_bytes()?;
     let mut session = establish(&transport, config.server, psk, &config.handshake, None).await?;
-    let tun = TunDevice::create(tun_config).await?;
-    configure_client_network(&tun, &config).await?;
-    tracing::info!(session_id = ?session.session_id(), server = %config.server, interface = %tun.name(), mtu = tun.mtu(), "authenticated RVPN client data plane started");
+
+    let (tun, tap) = match mode {
+        DeviceMode::Tun => {
+            let dev = TunDevice::create(TunConfig {
+                name: config.interface.name.clone(),
+                mtu,
+                mode: DeviceMode::Tun,
+            })
+            .await?;
+            (Some(dev), None)
+        }
+        DeviceMode::Tap => {
+            let dev = TunDevice::create(TunConfig {
+                name: config.interface.name.clone(),
+                mtu,
+                mode: DeviceMode::Tap,
+            })
+            .await?;
+            (None, Some(dev))
+        }
+        DeviceMode::Both => {
+            let tun_name = config.interface.name.clone();
+            let tap_name = config.interface.tap_name.clone().or_else(|| {
+                config.interface.name.as_ref().map(|n| {
+                    format!("{}-tap", n.chars().take(11).collect::<String>())
+                })
+            });
+            let tun_dev = TunDevice::create(TunConfig {
+                name: tun_name,
+                mtu,
+                mode: DeviceMode::Tun,
+            })
+            .await?;
+            let tap_dev = TunDevice::create(TunConfig {
+                name: tap_name,
+                mtu,
+                mode: DeviceMode::Tap,
+            })
+            .await?;
+            (Some(tun_dev), Some(tap_dev))
+        }
+    };
+
+    let primary_dev = tun.as_ref().or(tap.as_ref()).expect("at least one device");
+    configure_client_network(primary_dev, &config).await?;
+    tracing::info!(
+        session_id = ?session.session_id(),
+        server = %config.server,
+        primary_interface = %primary_dev.name(),
+        mode = ?mode,
+        mtu = mtu,
+        "authenticated RVPN client data plane started"
+    );
     loop {
         tokio::select! {
             signal = shutdown_signal() => {
@@ -49,7 +105,13 @@ async fn main() -> Result<()> {
                 tracing::info!("sent authenticated close packet");
                 return Ok(());
             }
-            packet = tun.recv() => {
+            packet = async {
+                if let Some(dev) = &tun {
+                    dev.recv().await
+                } else {
+                    std::future::pending().await
+                }
+            } => {
                 let packet = packet?;
                 if config.rekey.packet_limit != 0 && session.should_rekey(config.rekey.packet_limit) {
                     session = establish(&transport, config.server, psk, &config.handshake, Some(&session)).await?;
@@ -58,15 +120,34 @@ async fn main() -> Result<()> {
                 let packet = session.seal(PacketKind::Data, &packet)?;
                 transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
             }
+            frame = async {
+                if let Some(dev) = &tap {
+                    dev.recv().await
+                } else {
+                    std::future::pending().await
+                }
+            } => {
+                let frame = frame?;
+                if config.rekey.packet_limit != 0 && session.should_rekey(config.rekey.packet_limit) {
+                    session = establish(&transport, config.server, psk, &config.handshake, Some(&session)).await?;
+                    tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
+                }
+                let packet = session.seal(PacketKind::DataTap, &frame)?;
+                transport.send_to(config.server, packet.encode(), SendOptions::default()).await?;
+            }
             datagram = transport.receive() => {
                 let datagram = datagram?;
                 if datagram.peer != config.server { continue; }
                 let packet = match Packet::decode(datagram.payload) {
-                    Ok(packet) if packet.header.kind == PacketKind::Data => packet,
-                    Ok(packet) if packet.header.kind == PacketKind::Close => { if session.open(packet).is_ok() { tracing::info!("server closed the session"); return Ok(()); } continue; }
+                    Ok(packet) if packet.header.kind == PacketKind::Data || packet.header.kind == PacketKind::DataTap => packet,
+                    Ok(packet) if packet.header.kind == PacketKind::Close => {
+                        if session.open(packet).is_ok() {
+                            tracing::info!("server closed the session");
+                            return Ok(());
+                        }
+                        continue;
+                    }
                     Ok(packet) if packet.header.kind == PacketKind::Rekey => {
-                        // A valid protected request lets the responder rotate before its
-                        // own outbound counter reaches the configured threshold.
                         if session.open(packet).is_ok() {
                             session = establish(&transport, config.server, psk, &config.handshake, Some(&session)).await?;
                             tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys at server request");
@@ -74,9 +155,30 @@ async fn main() -> Result<()> {
                         continue;
                     }
                     Ok(_) => continue,
-                    Err(error) => { tracing::warn!(%error, "discarding malformed RVPN packet"); continue; }
+                    Err(error) => {
+                        tracing::warn!(%error, "discarding malformed RVPN packet");
+                        continue;
+                    }
                 };
-                match session.open(packet) { Ok(packet) => tun.send(&packet).await?, Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed RVPN packet"), }
+                let kind = packet.header.kind;
+                match session.open(packet) {
+                    Ok(plaintext) => {
+                        if kind == PacketKind::DataTap {
+                            if let Some(dev) = &tap {
+                                dev.send(&plaintext).await?;
+                            } else if let Some(dev) = &tun {
+                                dev.send(&plaintext).await?;
+                            }
+                        } else {
+                            if let Some(dev) = &tun {
+                                dev.send(&plaintext).await?;
+                            } else if let Some(dev) = &tap {
+                                dev.send(&plaintext).await?;
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed RVPN packet"),
+                }
             }
         }
     }
@@ -187,7 +289,7 @@ async fn establish(
     Ok(new_session)
 }
 
-async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Result<()> {
+async fn configure_client_network(dev: &TunDevice, config: &ClientConfig) -> Result<()> {
     let addresses = config
         .interface
         .address
@@ -195,12 +297,12 @@ async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Res
         .chain(&config.interface.addresses);
     if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
         for address in addresses {
-            run("ip", ["address", "replace", address, "dev", tun.name()]).await?;
+            run("ip", ["address", "replace", address, "dev", dev.name()]).await?;
         }
-        run("ip", ["link", "set", "dev", tun.name(), "up"]).await?;
+        run("ip", ["link", "set", "dev", dev.name(), "up"]).await?;
     }
     for route in &config.routing.routes {
-        route_replace(route, None, tun.name()).await?;
+        route_replace(route, None, dev.name()).await?;
     }
     if config.routing.default_route {
         let gateway = config
@@ -208,16 +310,16 @@ async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Res
             .gateway
             .as_deref()
             .expect("validated gateway");
-        // Without this exception the server UDP endpoint would itself follow
-        // the new default route into the tunnel and recursively black-hole.
-        let endpoint_gateway = config
-            .routing
-            .endpoint_gateway
-            .as_deref()
-            .expect("validated endpoint gateway");
-        let endpoint = format!("{}/32", config.server.ip());
-        route_replace(&endpoint, Some(endpoint_gateway), "").await?;
-        route_replace("default", Some(gateway), tun.name()).await?;
+        if config.server.is_ipv4() {
+            let endpoint_gateway = config
+                .routing
+                .endpoint_gateway
+                .as_deref()
+                .expect("validated endpoint gateway");
+            let endpoint = format!("{}/32", config.server.ip());
+            route_replace(&endpoint, Some(endpoint_gateway), "").await?;
+        }
+        route_replace("default", Some(gateway), dev.name()).await?;
     }
     if config.routing.default_route_v6 {
         let gateway = config
@@ -225,14 +327,16 @@ async fn configure_client_network(tun: &TunDevice, config: &ClientConfig) -> Res
             .gateway_v6
             .as_deref()
             .expect("validated gateway");
-        let endpoint_gateway = config
-            .routing
-            .endpoint_gateway_v6
-            .as_deref()
-            .expect("validated endpoint gateway");
-        let endpoint = format!("{}/128", config.server.ip());
-        route_replace(&endpoint, Some(endpoint_gateway), "").await?;
-        route_replace("default", Some(gateway), tun.name()).await?;
+        if config.server.is_ipv6() {
+            let endpoint_gateway = config
+                .routing
+                .endpoint_gateway_v6
+                .as_deref()
+                .expect("validated endpoint gateway");
+            let endpoint = format!("{}/128", config.server.ip());
+            route_replace(&endpoint, Some(endpoint_gateway), "").await?;
+        }
+        route_replace("default", Some(gateway), dev.name()).await?;
     }
     Ok(())
 }
