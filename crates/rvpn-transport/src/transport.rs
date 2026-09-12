@@ -96,7 +96,18 @@ impl UdpTransport {
     pub(crate) fn socket(&self) -> Arc<UdpSocket> {
         Arc::clone(&self.socket)
     }
+
+    /// Returns the underlying raw socket file descriptor.
+    ///
+    /// On Android, callers must pass this descriptor to `VpnService.protect(fd)`
+    /// so outbound UDP datagrams are excluded from the VPN tunnel.
+    #[cfg(unix)]
+    pub fn raw_fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self.socket.as_raw_fd()
+    }
 }
+
 
 pub(crate) async fn receive_from(
     socket: &UdpSocket,

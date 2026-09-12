@@ -9,6 +9,17 @@ impl TunDevice {
     pub async fn create(_: TunConfig) -> Result<Self, InterfaceError> {
         Err(InterfaceError::UnsupportedPlatform)
     }
+    /// Always reports that this platform has no implementation yet.
+    #[cfg(unix)]
+    pub fn from_raw_fd(
+        _: std::os::fd::RawFd,
+        _: String,
+        _: u16,
+        _: DeviceMode,
+    ) -> Result<Self, InterfaceError> {
+        Err(InterfaceError::UnsupportedPlatform)
+    }
+
     /// Interface name placeholder.
     pub fn name(&self) -> &str {
         ""

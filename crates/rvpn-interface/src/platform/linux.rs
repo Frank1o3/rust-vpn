@@ -5,9 +5,13 @@ use bytes::{Bytes, BytesMut};
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::{AsRawFd, FromRawFd, RawFd},
+        unix::fs::OpenOptionsExt,
+    },
 };
 use tokio::io::unix::AsyncFd;
+
 
 const TUN_PATH: &str = "/dev/net/tun";
 const IFREQ_UNION_SIZE: usize = 24;
@@ -89,6 +93,32 @@ impl TunDevice {
             mode: config.mode,
         })
     }
+
+    /// Wraps an existing, already opened TUN file descriptor (such as one
+    /// supplied by Android's `VpnService.Builder.establish()`).
+    ///
+    /// The descriptor will be set to non-blocking mode (`O_NONBLOCK`).
+    pub fn from_raw_fd(
+        fd: RawFd,
+        name: String,
+        mtu: u16,
+        mode: DeviceMode,
+    ) -> Result<Self, InterfaceError> {
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        Ok(Self {
+            file: AsyncFd::new(file)?,
+            name,
+            mtu,
+            mode,
+        })
+    }
+
 
     /// Kernel-assigned interface name.
     pub fn name(&self) -> &str {
@@ -284,4 +314,27 @@ mod tests {
         assert!(!tun.name().is_empty());
         assert_eq!(tun.mtu(), crate::DEFAULT_MTU);
     }
+
+    #[tokio::test]
+    async fn wraps_raw_fd_into_tun_device() {
+        let mut fds = [0; 2];
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let dev = TunDevice::from_raw_fd(fds[0], "test-tun".into(), 1400, DeviceMode::Tun).unwrap();
+        assert_eq!(dev.name(), "test-tun");
+        assert_eq!(dev.mtu(), 1400);
+        assert_eq!(dev.mode(), DeviceMode::Tun);
+
+        // Send a valid IPv4 packet header across the pair
+        let packet = [0x45, 0x00, 0x00, 0x14];
+        let written = unsafe { libc::write(fds[1], packet.as_ptr() as *const _, packet.len()) };
+        assert_eq!(written as usize, packet.len());
+
+        let received = dev.recv().await.unwrap();
+        assert_eq!(&received[..], &packet[..]);
+
+        // Clean up peer socket
+        unsafe { libc::close(fds[1]) };
+    }
 }
+

@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="20dp"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="#1976D2"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Disconnected"
+            android:textSize="16sp"
+            android:textColor="#757575"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Live Statistics Card -->
+        <LinearLayout
+            android:id="@+id/statsCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#F5F5F5"
+            android:padding="16dp"
+            android:layout_marginBottom="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SESSION METRICS"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:textColor="#616161"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Download (Rx)"
+                        android:textSize="12sp"
+                        android:textColor="#757575" />
+                    <TextView
+                        android:id="@+id/statsRxText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:textColor="#388E3C" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Upload (Tx)"
+                        android:textSize="12sp"
+                        android:textColor="#757575" />
+                    <TextView
+                        android:id="@+id/statsTxText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 B"
+                        android:textSize="18sp"
+                        android:textStyle="bold"
+                        android:textColor="#1976D2" />
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Packets"
+                        android:textSize="12sp"
+                        android:textColor="#757575" />
+                    <TextView
+                        android:id="@+id/statsPacketsText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="0 / 0"
+                        android:textSize="14sp"
+                        android:textColor="#424242" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Uptime"
+                        android:textSize="12sp"
+                        android:textColor="#757575" />
+                    <TextView
+                        android:id="@+id/statsUptimeText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="00:00:00"
+                        android:textSize="14sp"
+                        android:textColor="#424242" />
+                </LinearLayout>
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Server Endpoint (IP:Port)"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/serverInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="e.g. 192.168.1.100:9000"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Pre-Shared Key (64 hex chars)"
+                android:textStyle="bold" />
+            <Button
+                android:id="@+id/generatePskButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Generate"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/pskInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="32-byte hexadecimal PSK"
+            android:fontFamily="monospace"
+            android:inputType="textNoSuggestions"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tunnel IPv4 Address"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/tunnelIpInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="10.42.0.2"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tunnel IPv6 Address (Optional)"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/tunnelIpv6Input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="e.g. fd42::2"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="DNS Server"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/dnsInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="1.1.1.1"
+            android:inputType="textUri"
+            android:layout_marginBottom="24dp" />
+
+        <Button
+            android:id="@+id/connectButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="Connect"
+            android:textSize="18sp" />
+
+    </LinearLayout>
+</ScrollView>
