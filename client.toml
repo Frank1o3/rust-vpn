@@ -12,10 +12,10 @@ server="10.0.0.91:9000"
     mtu=1400
 
 [routing]
-    # Point-to-point VPN subnet is reachable by default.
-    # Uncomment the following to route default internet traffic through the laptop server:
+    # Point-to-point VPN subnets are reachable by default.
+    # Route default IPv4 and IPv6 internet traffic through the laptop server.
     default_route = true
     gateway = "10.42.0.1"
     endpoint_gateway = "192.168.88.1" # local gateway on main PC to reach LAN
-    default_route_v6 = false
+    default_route_v6 = true
     gateway_v6 = "fd42::1"
