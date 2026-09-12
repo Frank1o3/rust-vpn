@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use rvpn_config::{ForwardingConfig, HandshakeConfig, ServerConfig};
+use ipnet::IpNet;
+use rvpn_config::{ForwardingConfig, HandshakeConfig, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::{AEAD_TAG_LEN, HandshakePsk};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
@@ -7,8 +8,30 @@ use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, Packet, PacketKind, ProtectedSession, ResponderHandshake,
 };
 use rvpn_transport::{SendOptions, TransportConfig, UdpTransport};
-use std::{env, fs, net::SocketAddr, time::Duration};
-use tokio::{process::Command, time::timeout};
+use std::{
+    collections::HashMap,
+    env, fs,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
+use tokio::{
+    process::Command,
+    time::{MissedTickBehavior, interval},
+};
+
+struct ActivePeer {
+    identity: PeerIdentity,
+    session: ProtectedSession,
+    endpoint: SocketAddr,
+}
+struct PendingHandshake {
+    identity: PeerIdentity,
+    handshake: ResponderHandshake,
+    endpoint: SocketAddr,
+    packet: Packet,
+    kind: PacketKind,
+    attempts: u32,
+}
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
@@ -17,6 +40,7 @@ async fn main() -> Result<()> {
         .nth(1)
         .context("usage: rvpn-server <server.toml>")?;
     let config = ServerConfig::from_toml(&fs::read_to_string(path)?)?;
+    let identities = config.peer_identities()?;
     let tun_config = TunConfig {
         name: config.interface.name.clone(),
         mtu: config.interface.mtu.unwrap_or(DEFAULT_MTU),
@@ -27,54 +51,67 @@ async fn main() -> Result<()> {
         max_datagram_size: usize::from(tun_config.mtu) + HEADER_LEN + AEAD_TAG_LEN,
     })
     .await?;
-    tracing::info!(bind = %transport.local_addr()?, "rvpn server waiting for one handshake");
-    let psk = config.pre_shared_key_bytes()?;
-    let (mut session, mut peer) = accept_initial(&transport, psk, &config.handshake).await?;
     let tun = TunDevice::create(tun_config).await?;
     configure_server_interface(&tun, &config).await?;
     let forwarding = ForwardingGuard::install(&config.forwarding, tun.name()).await?;
-    tracing::info!(session_id = ?session.session_id(), %peer, interface = %tun.name(), mtu = tun.mtu(), "authenticated RVPN server data plane started for one peer");
+    let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
+    let mut pending: HashMap<SessionId, PendingHandshake> = HashMap::new();
+    let mut retry_tick = interval(Duration::from_millis(config.handshake.retry_interval_ms));
+    retry_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    tracing::info!(bind = %transport.local_addr()?, peers = identities.len(), interface = %tun.name(), "RVPN multi-client server started");
     loop {
         tokio::select! {
-            signal = shutdown_signal() => {
-                signal?;
-                let close = session.seal(PacketKind::Close, b"")?;
-                let _ = transport.send_to(peer, close.encode(), SendOptions::default()).await;
-                forwarding.cleanup().await;
-                tracing::info!("sent authenticated close packet");
-                return Ok(());
-            }
-            packet = tun.recv() => {
-                if config.rekey.packet_limit != 0 && session.should_rekey(config.rekey.packet_limit) {
-                    // Only the client originates the PSK handshake. This authenticated
-                    // request asks it to do so before the server's counter gets large.
-                    let request = session.seal(PacketKind::Rekey, b"")?;
-                    transport.send_to(peer, request.encode(), SendOptions::default()).await?;
-                }
-                let packet = session.seal(PacketKind::Data, &packet?)?;
-                transport.send_to(peer, packet.encode(), SendOptions::default()).await?;
+            signal = shutdown_signal() => { signal?; close_all(&transport, &mut active).await; forwarding.cleanup().await; return Ok(()); }
+            _ = retry_tick.tick() => { retransmit_pending(&transport, &mut pending, &config.handshake).await?; }
+            outbound = tun.recv() => {
+                let outbound = outbound?;
+                let Some(destination) = packet_destination(&outbound) else { continue; };
+                if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| routes_to(&peer.identity.allowed_ips, destination)) {
+                    if config.rekey.packet_limit != 0 && peer.session.should_rekey(config.rekey.packet_limit) {
+                        let request = peer.session.seal(PacketKind::Rekey, b"")?;
+                        transport.send_to(peer.endpoint, request.encode(), SendOptions::default()).await?;
+                    }
+                    let packet = peer.session.seal(PacketKind::Data, &outbound)?;
+                    transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
+                } else { tracing::debug!(%destination, "no RVPN peer owns outbound destination"); }
             }
             datagram = transport.receive() => {
                 let datagram = datagram?;
                 let packet = match Packet::decode(datagram.payload) { Ok(packet) => packet, Err(error) => { tracing::warn!(%error, "discarding malformed RVPN packet"); continue; } };
-                if packet.header.kind == PacketKind::Rekey && packet.header.session_id == session.session_id() && packet.header.key_phase == session.key_phase() {
-                    if let Ok(HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload.clone()) {
-                        match accept_rekey(&transport, datagram.peer, psk, &config.handshake, &session, packet).await {
-                            Ok(next) => { session = next; peer = datagram.peer; tracing::info!(%peer, key_phase = session.key_phase(), "rotated RVPN session keys"); }
-                            Err(error) => tracing::warn!(%error, "rekey failed"),
+                match packet.header.kind {
+                    PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::new([0; 16]) => {
+                        if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
+                            begin_initial(&transport, &identities, &mut pending, datagram.peer, initiation).await?;
                         }
                     }
-                    continue;
-                }
-                match packet.header.kind {
-                    PacketKind::Data => match session.open(packet) {
-                        Ok(packet) => {
-                            if datagram.peer != peer { tracing::info!(old_peer = %peer, new_peer = %datagram.peer, "authenticated peer roamed"); peer = datagram.peer; }
-                            tun.send(&packet).await?;
+                    PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
+                        finish_pending(&mut pending, &mut active, datagram.peer, packet)?;
+                    }
+                    PacketKind::Rekey => {
+                        if let Some(current) = active.get(&packet.header.session_id) {
+                            if current.session.key_phase() == packet.header.key_phase {
+                                if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload.clone()) {
+                                    begin_rekey(&transport, &mut pending, datagram.peer, current, initiation).await?;
+                                }
+                            }
                         }
-                        Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed RVPN packet"),
-                    },
-                    PacketKind::Close => if session.open(packet).is_ok() { forwarding.cleanup().await; tracing::info!(%peer, "peer closed session"); return Ok(()); },
+                    }
+                    PacketKind::Data | PacketKind::Close => {
+                        let Some(peer) = active.get_mut(&packet.header.session_id) else { continue; };
+                        let packet_kind = packet.header.kind;
+                        let session_id = packet.header.session_id;
+                        match peer.session.open(packet) {
+                            Ok(plaintext) if packet_kind == PacketKind::Data => {
+                                let Some(source) = packet_source(&plaintext) else { continue; };
+                                if !permits(&peer.identity.allowed_ips, source) { tracing::warn!(peer = %peer.identity.name, %source, "discarding packet with unauthorized source address"); continue; }
+                                if peer.endpoint != datagram.peer { tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed"); peer.endpoint = datagram.peer; }
+                                tun.send(&plaintext).await?;
+                            }
+                            Ok(_) if packet_kind == PacketKind::Close => { let name = peer.identity.name.clone(); active.remove(&session_id); tracing::info!(%name, "peer closed session"); }
+                            Ok(_) => {}
+                            Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed packet"),
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -82,35 +119,25 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn accept_initial(
+async fn begin_initial(
     transport: &UdpTransport,
-    psk: [u8; 32],
-    policy: &HandshakeConfig,
-) -> Result<(ProtectedSession, SocketAddr)> {
-    loop {
-        let datagram = transport.receive().await?;
-        let packet = match Packet::decode(datagram.payload) {
-            Ok(packet) => packet,
-            Err(_) => continue,
-        };
-        if packet.header.kind != PacketKind::Handshake
-            || packet.header.key_phase != 0
-            || packet.header.sequence != 0
-            || packet.header.session_id != SessionId::new([0; 16])
-        {
-            continue;
-        }
-        let initiation = match HandshakeMessage::decode(packet.payload) {
-            Ok(message @ HandshakeMessage::Initiation { .. }) => message,
-            _ => continue,
-        };
-        let (handshake, response) =
-            ResponderHandshake::accept(HandshakePsk::from_bytes(psk), initiation)?;
+    identities: &[PeerIdentity],
+    pending: &mut HashMap<SessionId, PendingHandshake>,
+    endpoint: SocketAddr,
+    initiation: HandshakeMessage,
+) -> Result<()> {
+    // Send one PSK-authenticated response for each provisioned identity. Only
+    // the client holding the matching PSK can verify a response and finish it.
+    for identity in identities {
+        let (handshake, response) = ResponderHandshake::accept(
+            HandshakePsk::from_bytes(identity.pre_shared_key),
+            initiation,
+        )?;
         let session_id = match response {
             HandshakeMessage::Response { session_id, .. } => session_id,
             _ => unreachable!(),
         };
-        let response_packet = Packet {
+        let packet = Packet {
             header: Header {
                 kind: PacketKind::Handshake,
                 key_phase: 0,
@@ -119,109 +146,146 @@ async fn accept_initial(
             },
             payload: response.encode(),
         };
-        for attempt in 1..=policy.retry_limit {
-            transport
-                .send_to(
-                    datagram.peer,
-                    response_packet.encode(),
-                    SendOptions::default(),
-                )
-                .await?;
-            match timeout(
-                Duration::from_millis(policy.retry_interval_ms),
-                transport.receive(),
-            )
-            .await
-            {
-                Ok(Ok(finish)) if finish.peer == datagram.peer => {
-                    if let Ok(packet) = Packet::decode(finish.payload) {
-                        if packet.header.kind == PacketKind::Handshake
-                            && packet.header.session_id == session_id
-                            && packet.header.sequence == 1
-                        {
-                            if let Ok(finish @ HandshakeMessage::Finish { .. }) =
-                                HandshakeMessage::decode(packet.payload)
-                            {
-                                return Ok((handshake.finish(finish)?, datagram.peer));
-                            }
-                        }
-                        // A duplicate initiation means the response was lost; retransmit immediately.
-                        if packet.header.kind == PacketKind::Handshake
-                            && packet.header.sequence == 0
-                        {
-                            continue;
-                        }
-                    }
-                }
-                Ok(Err(error)) => return Err(error.into()),
-                _ => tracing::debug!(
-                    attempt,
-                    "handshake finish timed out; retransmitting response"
-                ),
-            }
-        }
-        tracing::warn!(peer = %datagram.peer, "handshake did not finish; awaiting a new initiation");
+        transport
+            .send_to(endpoint, packet.encode(), SendOptions::default())
+            .await?;
+        pending.insert(
+            session_id,
+            PendingHandshake {
+                identity: identity.clone(),
+                handshake,
+                endpoint,
+                packet,
+                kind: PacketKind::Handshake,
+                attempts: 1,
+            },
+        );
     }
+    Ok(())
 }
 
-async fn accept_rekey(
+async fn begin_rekey(
     transport: &UdpTransport,
-    peer: SocketAddr,
-    psk: [u8; 32],
-    policy: &HandshakeConfig,
-    current: &ProtectedSession,
-    packet: Packet,
-) -> Result<ProtectedSession> {
-    let initiation = HandshakeMessage::decode(packet.payload)?;
+    pending: &mut HashMap<SessionId, PendingHandshake>,
+    endpoint: SocketAddr,
+    current: &ActivePeer,
+    initiation: HandshakeMessage,
+) -> Result<()> {
+    if pending.contains_key(&current.session.session_id()) {
+        return Ok(());
+    }
     let phase = current
+        .session
         .key_phase()
         .checked_add(1)
         .context("key phase exhausted")?;
     let (handshake, response) = ResponderHandshake::accept_for_session(
-        HandshakePsk::from_bytes(psk),
+        HandshakePsk::from_bytes(current.identity.pre_shared_key),
         initiation,
-        current.session_id(),
+        current.session.session_id(),
         phase,
     )?;
-    let response_packet = Packet {
+    let packet = Packet {
         header: Header {
             kind: PacketKind::Rekey,
-            key_phase: current.key_phase(),
+            key_phase: current.session.key_phase(),
             sequence: 0,
-            session_id: current.session_id(),
+            session_id: current.session.session_id(),
         },
         payload: response.encode(),
     };
-    for attempt in 1..=policy.retry_limit {
+    transport
+        .send_to(endpoint, packet.encode(), SendOptions::default())
+        .await?;
+    pending.insert(
+        current.session.session_id(),
+        PendingHandshake {
+            identity: current.identity.clone(),
+            handshake,
+            endpoint,
+            packet,
+            kind: PacketKind::Rekey,
+            attempts: 1,
+        },
+    );
+    Ok(())
+}
+
+fn finish_pending(
+    pending: &mut HashMap<SessionId, PendingHandshake>,
+    active: &mut HashMap<SessionId, ActivePeer>,
+    endpoint: SocketAddr,
+    packet: Packet,
+) -> Result<()> {
+    let Some(pending_handshake) = pending.remove(&packet.header.session_id) else {
+        return Ok(());
+    };
+    if pending_handshake.endpoint != endpoint || pending_handshake.kind != packet.header.kind {
+        return Ok(());
+    }
+    let finish = HandshakeMessage::decode(packet.payload)?;
+    let session = pending_handshake.handshake.finish(finish)?;
+    let id = session.session_id();
+    let name = pending_handshake.identity.name.clone();
+    active.insert(
+        id,
+        ActivePeer {
+            identity: pending_handshake.identity,
+            session,
+            endpoint,
+        },
+    );
+    tracing::info!(%name, session_id = ?id, %endpoint, "authenticated RVPN peer established");
+    Ok(())
+}
+
+async fn retransmit_pending(
+    transport: &UdpTransport,
+    pending: &mut HashMap<SessionId, PendingHandshake>,
+    policy: &HandshakeConfig,
+) -> Result<()> {
+    pending.retain(|_, state| state.attempts < policy.retry_limit);
+    for state in pending.values_mut() {
         transport
-            .send_to(peer, response_packet.encode(), SendOptions::default())
+            .send_to(
+                state.endpoint,
+                state.packet.encode(),
+                SendOptions::default(),
+            )
             .await?;
-        match timeout(
-            Duration::from_millis(policy.retry_interval_ms),
-            transport.receive(),
-        )
-        .await
-        {
-            Ok(Ok(finish)) if finish.peer == peer => {
-                if let Ok(packet) = Packet::decode(finish.payload) {
-                    if packet.header.kind == PacketKind::Rekey
-                        && packet.header.session_id == current.session_id()
-                        && packet.header.key_phase == current.key_phase()
-                        && packet.header.sequence == 1
-                    {
-                        if let Ok(finish @ HandshakeMessage::Finish { .. }) =
-                            HandshakeMessage::decode(packet.payload)
-                        {
-                            return Ok(handshake.finish(finish)?);
-                        }
-                    }
-                }
-            }
-            Ok(Err(error)) => return Err(error.into()),
-            _ => tracing::debug!(attempt, "rekey finish timed out; retransmitting response"),
+        state.attempts += 1;
+    }
+    Ok(())
+}
+
+fn permits(prefixes: &[IpNet], address: IpAddr) -> bool {
+    prefixes.is_empty() || prefixes.iter().any(|prefix| prefix.contains(&address))
+}
+fn routes_to(prefixes: &[IpNet], address: IpAddr) -> bool {
+    prefixes.is_empty() || prefixes.iter().any(|prefix| prefix.contains(&address))
+}
+fn packet_source(packet: &[u8]) -> Option<IpAddr> {
+    match packet.first()? >> 4 {
+        4 if packet.len() >= 20 => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[12..16]).ok()?)),
+        6 if packet.len() >= 40 => Some(IpAddr::from(<[u8; 16]>::try_from(&packet[8..24]).ok()?)),
+        _ => None,
+    }
+}
+fn packet_destination(packet: &[u8]) -> Option<IpAddr> {
+    match packet.first()? >> 4 {
+        4 if packet.len() >= 20 => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[16..20]).ok()?)),
+        6 if packet.len() >= 40 => Some(IpAddr::from(<[u8; 16]>::try_from(&packet[24..40]).ok()?)),
+        _ => None,
+    }
+}
+async fn close_all(transport: &UdpTransport, active: &mut HashMap<SessionId, ActivePeer>) {
+    for peer in active.values_mut() {
+        if let Ok(close) = peer.session.seal(PacketKind::Close, b"") {
+            let _ = transport
+                .send_to(peer.endpoint, close.encode(), SendOptions::default())
+                .await;
         }
     }
-    bail!("rekey timed out after {} attempts", policy.retry_limit)
 }
 
 async fn configure_server_interface(tun: &TunDevice, config: &ServerConfig) -> Result<()> {
@@ -231,7 +295,6 @@ async fn configure_server_interface(tun: &TunDevice, config: &ServerConfig) -> R
     }
     Ok(())
 }
-
 struct ForwardingGuard {
     previous_ip_forward: Option<String>,
 }
@@ -245,14 +308,8 @@ impl ForwardingGuard {
         let previous = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
             .context("reading IPv4 forwarding state")?;
         fs::write("/proc/sys/net/ipv4/ip_forward", "1\n").context("enabling IPv4 forwarding")?;
-        let external = config
-            .external_interface
-            .as_deref()
-            .expect("validated external interface");
-        let cidr = config
-            .tunnel_cidr
-            .as_deref()
-            .expect("validated tunnel CIDR");
+        let external = config.external_interface.as_deref().expect("validated");
+        let cidr = config.tunnel_cidr.as_deref().expect("validated");
         run("nft", ["add", "table", "inet", "rvpn"]).await?;
         run(
             "nft",
@@ -325,7 +382,6 @@ impl ForwardingGuard {
             ],
         )
         .await?;
-        tracing::info!(%tunnel, %external, %cidr, "enabled IPv4 forwarding and RVPN NAT");
         Ok(Self {
             previous_ip_forward: Some(previous),
         })
@@ -337,7 +393,6 @@ impl ForwardingGuard {
         }
     }
 }
-
 async fn run<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let output = Command::new(program)
         .args(args)

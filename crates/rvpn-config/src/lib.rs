@@ -1,5 +1,6 @@
 //! TOML configuration parsing and validation for RVPN applications.
 
+use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 use thiserror::Error;
@@ -89,6 +90,10 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
     pub pre_shared_key: String,
+    /// Statically provisioned client identities. When populated, the legacy
+    /// top-level PSK is not used for new sessions.
+    #[serde(default)]
+    pub peers: Vec<ServerPeerConfig>,
     /// Local TUN device settings used after session establishment.
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -111,7 +116,13 @@ impl ServerConfig {
     /// Checks bind endpoint and PSK encoding.
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.bind)?;
-        validate_psk(&self.pre_shared_key)?;
+        if self.peers.is_empty() {
+            validate_psk(&self.pre_shared_key)?;
+        } else {
+            for peer in &self.peers {
+                peer.validate()?;
+            }
+        }
         self.interface
             .validate()
             .and_then(|_| self.handshake.validate())
@@ -123,6 +134,68 @@ impl ServerConfig {
     pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
         decode_psk(&self.pre_shared_key)
     }
+
+    /// Returns provisioned peers, retaining old single-PSK configuration as
+    /// one unrestricted compatibility identity.
+    pub fn peer_identities(&self) -> Result<Vec<PeerIdentity>, ConfigError> {
+        if self.peers.is_empty() {
+            return Ok(vec![PeerIdentity {
+                name: "legacy".into(),
+                pre_shared_key: self.pre_shared_key_bytes()?,
+                allowed_ips: Vec::new(),
+            }]);
+        }
+        self.peers.iter().map(ServerPeerConfig::identity).collect()
+    }
+}
+
+/// One statically provisioned RVPN client on a multi-client server.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ServerPeerConfig {
+    pub name: String,
+    pub pre_shared_key: String,
+    /// Source addresses this peer may inject, and destinations routed to it.
+    pub allowed_ips: Vec<String>,
+}
+
+impl ServerPeerConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.name.is_empty() || self.allowed_ips.is_empty() {
+            return Err(ConfigError::Invalid(
+                "each server peer needs a name and at least one allowed_ips prefix",
+            ));
+        }
+        validate_psk(&self.pre_shared_key)?;
+        for prefix in &self.allowed_ips {
+            prefix.parse::<IpNet>().map_err(|_| {
+                ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
+            })?;
+        }
+        Ok(())
+    }
+
+    fn identity(&self) -> Result<PeerIdentity, ConfigError> {
+        Ok(PeerIdentity {
+            name: self.name.clone(),
+            pre_shared_key: decode_psk(&self.pre_shared_key)?,
+            allowed_ips: self
+                .allowed_ips
+                .iter()
+                .map(|prefix| prefix.parse())
+                .collect::<Result<Vec<IpNet>, _>>()
+                .map_err(|_| {
+                    ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
+                })?,
+        })
+    }
+}
+
+/// Validated server-side identity used by the application session table.
+#[derive(Clone, Debug)]
+pub struct PeerIdentity {
+    pub name: String,
+    pub pre_shared_key: [u8; 32],
+    pub allowed_ips: Vec<IpNet>,
 }
 
 /// Platform-neutral settings for a local Layer-3 tunnel device.
@@ -318,5 +391,15 @@ mod tests {
         assert!(
             ClientConfig::from_toml("server = '127.0.0.1:9000'\npre_shared_key = 'bad'").is_err()
         );
+    }
+
+    #[test]
+    fn parses_provisioned_server_peers() {
+        let config = ServerConfig::from_toml(
+            "bind = '127.0.0.1:9000'\npre_shared_key = ''\n[[peers]]\nname = 'laptop'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\nallowed_ips = ['10.42.0.2/32']",
+        ).unwrap();
+        let peers = config.peer_identities().unwrap();
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].name, "laptop");
     }
 }

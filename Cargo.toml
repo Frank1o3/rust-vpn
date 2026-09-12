@@ -14,6 +14,7 @@
         chacha20poly1305="0.11"
         hex="0.4.3"
         hkdf="0.13"
+        ipnet="2.11"
         hmac="0.13"
         libc="0.2"
         rand="0.10.2"

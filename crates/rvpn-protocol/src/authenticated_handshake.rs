@@ -54,6 +54,23 @@ impl InitiatorHandshake {
         self.finish_for_session(response, session_id, 0)
     }
 
+    /// Checks whether a response belongs to this initiator's PSK without
+    /// consuming the one-use ephemeral key. This lets a client safely ignore
+    /// responses intended for other provisioned server identities.
+    pub fn authenticates_response(
+        &self,
+        response: HandshakeMessage,
+    ) -> Result<bool, HandshakeError> {
+        let HandshakeMessage::Response { authenticator, .. } = response else {
+            return Err(HandshakeError::UnexpectedMessage);
+        };
+        let transcript = HandshakeTranscript::new(self.initiation)?;
+        Ok(self.psk.verify(
+            &transcript.server_authentication_input(response)?,
+            &authenticator,
+        ))
+    }
+
     /// Completes a fresh exchange for an existing session identity and key phase.
     pub fn finish_for_session(
         self,

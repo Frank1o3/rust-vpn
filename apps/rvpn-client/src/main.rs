@@ -7,7 +7,11 @@ use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
 use rvpn_transport::{SendOptions, TransportConfig, UdpTransport};
-use std::{env, fs, net::SocketAddr, time::Duration};
+use std::{
+    env, fs,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 use tokio::{
     process::Command,
     time::{sleep, timeout},
@@ -113,37 +117,42 @@ async fn establish(
             transport
                 .send_to(server, initiation_packet.encode(), SendOptions::default())
                 .await?;
-            match timeout(
-                Duration::from_millis(policy.retry_interval_ms),
-                transport.receive(),
-            )
-            .await
-            {
-                Ok(Ok(datagram)) if datagram.peer == server => {
-                    if let Ok(packet) = Packet::decode(datagram.payload) {
-                        if packet.header.kind == kind
-                            && (old.is_none() || packet.header.session_id == session_id)
-                        {
-                            if let Ok(response @ HandshakeMessage::Response { .. }) =
-                                HandshakeMessage::decode(packet.payload)
+            let deadline = Instant::now() + Duration::from_millis(policy.retry_interval_ms);
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                match timeout(remaining, transport.receive()).await {
+                    Ok(Ok(datagram)) if datagram.peer == server => {
+                        if let Ok(packet) = Packet::decode(datagram.payload) {
+                            if packet.header.kind == kind
+                                && (old.is_none() || packet.header.session_id == session_id)
                             {
-                                // The first response introduces its newly assigned session ID;
-                                // rekey responses must remain bound to the existing one.
-                                if packet.header.session_id
-                                    == match response {
+                                if let Ok(response @ HandshakeMessage::Response { .. }) =
+                                    HandshakeMessage::decode(packet.payload)
+                                {
+                                    // The first response introduces its newly assigned session ID;
+                                    // rekey responses must remain bound to the existing one.
+                                    let advertised_session = match response {
                                         HandshakeMessage::Response { session_id, .. } => session_id,
                                         _ => unreachable!(),
+                                    };
+                                    if packet.header.session_id == advertised_session
+                                        && handshake.authenticates_response(response)?
+                                    {
+                                        break 'retry response;
                                     }
-                                {
-                                    break 'retry response;
                                 }
                             }
                         }
                     }
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(error)) => return Err(error.into()),
+                    Err(_) => break,
                 }
-                Ok(Err(error)) => return Err(error.into()),
-                _ => tracing::debug!(attempt, "handshake response timed out; retransmitting"),
             }
+            tracing::debug!(attempt, "handshake response timed out; retransmitting");
         }
         bail!(
             "RVPN handshake timed out after {} attempts",

@@ -84,3 +84,60 @@ endpoint_gateway = "192.0.2.254" # keeps the UDP server route off the tunnel
 Run the processes with the capabilities needed to create TUN devices and change
 network state. The forwarding table and the prior IPv4-forwarding setting are
 restored during a graceful RVPN shutdown.
+
+## Multi-client provisioning and integration test
+
+Use `[[peers]]` on the server to give every client a distinct PSK and the
+tunnel CIDR(s) it owns. `allowed_ips` is enforced both as a source-address
+anti-spoofing policy and as the return-traffic routing table.
+
+```toml
+[[peers]]
+name = "desktop"
+pre_shared_key = "...64 hexadecimal characters..."
+allowed_ips = ["10.42.0.2/32"]
+```
+
+The client uses that peer's PSK and configures its assigned address locally.
+The legacy top-level `pre_shared_key` remains supported only for a single
+unrestricted peer.
+
+`scripts/netns-integration.sh` is a two-host simulation: it creates isolated
+server/client namespaces, starts both binaries, and pings across the encrypted
+TUN link. Run it from the repository root with `sudo`; it is suitable for a
+privileged Linux CI job as well.
+
+### Laptop-server smoke test
+
+On the laptop, replace `192.168.1.10` with its LAN address and use:
+
+```toml
+# server.toml
+bind = "0.0.0.0:9000"
+pre_shared_key = "<the 64-hex-character shared key>" # legacy fallback
+
+[interface]
+name = "rvpn-server0"
+address = "10.42.0.1/24"
+
+[[peers]]
+name = "main-pc"
+pre_shared_key = "<the 64-hex-character shared key>"
+allowed_ips = ["10.42.0.2/32"]
+```
+
+```toml
+# client.toml on the main PC
+server = "192.168.1.10:9000"
+pre_shared_key = "<the same 64-hex-character shared key>"
+
+[interface]
+name = "rvpn-client0"
+address = "10.42.0.2/24"
+```
+
+Generate the shared key once with `openssl rand -hex 32`, copy it to both
+files, then run `sudo cargo run -p rvpn-server -- server.toml` on the laptop
+and `sudo cargo run -p rvpn-client -- client.toml` on the PC. Finally, from the
+PC, run `ping 10.42.0.1`. Permit UDP port 9000 through the laptop firewall if
+one is active.
