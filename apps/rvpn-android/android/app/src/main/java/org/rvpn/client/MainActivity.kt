@@ -29,6 +29,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dnsInput: EditText
     private lateinit var connectButton: Button
     private lateinit var generatePskButton: Button
+    private lateinit var routeAllTrafficSwitch: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var splitRoutesInput: EditText
+    private lateinit var retryIntervalInput: EditText
+    private lateinit var retryLimitInput: EditText
+    private lateinit var rekeyLimitInput: EditText
 
     private val vpnPrepareLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -74,6 +79,15 @@ class MainActivity : AppCompatActivity() {
         dnsInput = findViewById(R.id.dnsInput)
         connectButton = findViewById(R.id.connectButton)
         generatePskButton = findViewById(R.id.generatePskButton)
+        routeAllTrafficSwitch = findViewById(R.id.routeAllTrafficSwitch)
+        splitRoutesInput = findViewById(R.id.splitRoutesInput)
+        retryIntervalInput = findViewById(R.id.retryIntervalInput)
+        retryLimitInput = findViewById(R.id.retryLimitInput)
+        rekeyLimitInput = findViewById(R.id.rekeyLimitInput)
+
+        routeAllTrafficSwitch.setOnCheckedChangeListener { _, isChecked ->
+            splitRoutesInput.visibility = if (isChecked) android.view.View.GONE else android.view.View.VISIBLE
+        }
 
         loadSavedConfig()
 
@@ -117,6 +131,12 @@ class MainActivity : AppCompatActivity() {
         tunnelIpInput.setText(config.tunnelAddress)
         tunnelIpv6Input.setText(config.tunnelAddressV6)
         dnsInput.setText(config.dnsServer)
+        routeAllTrafficSwitch.isChecked = config.useDefaultRoute
+        splitRoutesInput.setText(config.splitTunnelRoutes)
+        splitRoutesInput.visibility = if (config.useDefaultRoute) android.view.View.GONE else android.view.View.VISIBLE
+        retryIntervalInput.setText(config.retryIntervalMs.toString())
+        retryLimitInput.setText(config.retryLimit.toString())
+        rekeyLimitInput.setText(config.rekeyPacketLimit.toString())
     }
 
     private fun saveAndConnectVpn() {
@@ -140,7 +160,12 @@ class MainActivity : AppCompatActivity() {
             preSharedKey = psk,
             tunnelAddress = if (tunnelIp.isNotEmpty()) tunnelIp else "10.42.0.2",
             tunnelAddressV6 = tunnelIpv6,
-            dnsServer = if (dns.isNotEmpty()) dns else "1.1.1.1"
+            dnsServer = if (dns.isNotEmpty()) dns else "1.1.1.1",
+            useDefaultRoute = routeAllTrafficSwitch.isChecked,
+            splitTunnelRoutes = splitRoutesInput.text.toString().trim(),
+            retryIntervalMs = retryIntervalInput.text.toString().toLongOrNull() ?: 500L,
+            retryLimit = retryLimitInput.text.toString().toIntOrNull() ?: 5,
+            rekeyPacketLimit = rekeyLimitInput.text.toString().toLongOrNull() ?: 1048576L
         )
         RvpnConfig.save(this, config)
 

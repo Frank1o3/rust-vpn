@@ -55,6 +55,7 @@ class RvpnService : VpnService() {
                 val config = RvpnConfig.load(this)
                 startVpn(config)
             }
+
             ACTION_DISCONNECT -> {
                 stopVpn()
             }
@@ -76,12 +77,40 @@ class RvpnService : VpnService() {
                 .setSession("RVPN")
                 .setMtu(config.mtu)
                 .addAddress(config.tunnelAddress, config.tunnelPrefixLength)
-                .addRoute("0.0.0.0", 0)
 
-            // IPv6 dual-stack support
             if (config.tunnelAddressV6.isNotEmpty()) {
                 builder.addAddress(config.tunnelAddressV6, config.tunnelPrefixLengthV6)
-                builder.addRoute("::", 0)
+            }
+
+            if (config.useDefaultRoute) {
+                builder.addRoute("0.0.0.0", 0)
+                if (config.tunnelAddressV6.isNotEmpty()) {
+                    builder.addRoute("::", 0)
+                }
+            } else {
+                val routes = config.splitTunnelRoutes
+                    .split(",", "\n")
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                if (routes.isEmpty()) {
+                    Log.w(
+                        TAG,
+                        "Split tunneling is on but no routes were configured; only the VPN subnet will be reachable"
+                    )
+                }
+                for (route in routes) {
+                    val parts = route.split("/")
+                    val prefix = parts.getOrNull(1)?.toIntOrNull()
+                    if (parts.size == 2 && prefix != null) {
+                        try {
+                            builder.addRoute(parts[0], prefix)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Skipping invalid split-tunnel route '$route': ${e.message}")
+                        }
+                    } else {
+                        Log.w(TAG, "Skipping malformed split-tunnel route '$route' (expected CIDR like 10.0.0.0/8)")
+                    }
+                }
             }
 
             // Primary DNS

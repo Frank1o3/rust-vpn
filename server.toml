@@ -13,13 +13,13 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
 
 [forwarding]
     # Enable NAT masquerade and forwarding to route client internet traffic through the laptop
-    enabled=false
+    enabled=true
     # Backend options: "auto" (probes for nft, falls back to iptables), "iptables", or "nftables"
     backend="auto"
     # Replace with the laptop's outgoing network interface (e.g. wlan0 or eth0):
-    external_interface = "wlan0"
-    tunnel_cidr = "10.42.0.0/24"
-    tunnel_cidr_v6 = "fd42::/64"
+    external_interface="wlan0"
+    tunnel_cidr="10.42.0.0/24"
+    tunnel_cidr_v6="fd42::/64"
 
 [[peers]]
     allowed_ips=["10.42.0.2/32", "fd42::2/128"]

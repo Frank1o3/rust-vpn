@@ -1,7 +1,6 @@
 package org.rvpn.client
 
 import android.content.Context
-import android.content.SharedPreferences
 import java.security.SecureRandom
 
 /**
@@ -19,7 +18,11 @@ data class RvpnConfig(
     val rekeyPacketLimit: Long = 1048576L,
     val retryIntervalMs: Long = 500L,
     val retryLimit: Int = 5,
-    val excludedApps: Set<String> = emptySet()
+    val excludedApps: Set<String> = emptySet(),
+    /** When false, only [splitTunnelRoutes] are routed through the tunnel. */
+    val useDefaultRoute: Boolean = true,
+    /** Comma- or newline-separated CIDR prefixes, e.g. "10.0.0.0/8,192.168.1.0/24". */
+    val splitTunnelRoutes: String = ""
 ) {
     companion object {
         private const val PREFS_NAME = "rvpn_prefs"
@@ -31,7 +34,12 @@ data class RvpnConfig(
         private const val KEY_TUNNEL_PREFIX_V6 = "tunnel_prefix_v6"
         private const val KEY_DNS = "dns"
         private const val KEY_MTU = "mtu"
+        private const val KEY_REKEY_LIMIT = "rekey_limit"
+        private const val KEY_RETRY_INTERVAL = "retry_interval_ms"
+        private const val KEY_RETRY_LIMIT = "retry_limit"
         private const val KEY_EXCLUDED_APPS = "excluded_apps"
+        private const val KEY_USE_DEFAULT_ROUTE = "use_default_route"
+        private const val KEY_SPLIT_ROUTES = "split_tunnel_routes"
 
         fun load(context: Context): RvpnConfig {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -44,7 +52,12 @@ data class RvpnConfig(
                 tunnelPrefixLengthV6 = prefs.getInt(KEY_TUNNEL_PREFIX_V6, 64),
                 dnsServer = prefs.getString(KEY_DNS, "1.1.1.1") ?: "1.1.1.1",
                 mtu = prefs.getInt(KEY_MTU, 1400),
-                excludedApps = prefs.getStringSet(KEY_EXCLUDED_APPS, emptySet()) ?: emptySet()
+                rekeyPacketLimit = prefs.getLong(KEY_REKEY_LIMIT, 1048576L),
+                retryIntervalMs = prefs.getLong(KEY_RETRY_INTERVAL, 500L),
+                retryLimit = prefs.getInt(KEY_RETRY_LIMIT, 5),
+                excludedApps = prefs.getStringSet(KEY_EXCLUDED_APPS, emptySet()) ?: emptySet(),
+                useDefaultRoute = prefs.getBoolean(KEY_USE_DEFAULT_ROUTE, true),
+                splitTunnelRoutes = prefs.getString(KEY_SPLIT_ROUTES, "") ?: ""
             )
         }
 
@@ -59,7 +72,12 @@ data class RvpnConfig(
                 .putInt(KEY_TUNNEL_PREFIX_V6, config.tunnelPrefixLengthV6)
                 .putString(KEY_DNS, config.dnsServer)
                 .putInt(KEY_MTU, config.mtu)
+                .putLong(KEY_REKEY_LIMIT, config.rekeyPacketLimit)
+                .putLong(KEY_RETRY_INTERVAL, config.retryIntervalMs)
+                .putInt(KEY_RETRY_LIMIT, config.retryLimit)
                 .putStringSet(KEY_EXCLUDED_APPS, config.excludedApps)
+                .putBoolean(KEY_USE_DEFAULT_ROUTE, config.useDefaultRoute)
+                .putString(KEY_SPLIT_ROUTES, config.splitTunnelRoutes)
                 .apply()
         }
 

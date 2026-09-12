@@ -219,6 +219,30 @@
             android:hint="e.g. fd42::2"
             android:inputType="textUri"
             android:layout_marginBottom="16dp" />
+        
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/routeAllTrafficSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Route all traffic through VPN"
+            android:checked="true"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Split-tunnel routes (CIDR, comma-separated)"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/splitRoutesInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="e.g. 10.0.0.0/8, 192.168.1.0/24"
+            android:inputType="textMultiLine"
+            android:visibility="gone"
+            android:layout_marginBottom="16dp" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -233,6 +257,37 @@
             android:layout_height="wrap_content"
             android:hint="1.1.1.1"
             android:inputType="textUri"
+            android:layout_marginBottom="24dp" />
+        
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Advanced"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <EditText
+            android:id="@+id/retryIntervalInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Handshake retry interval (ms)"
+            android:inputType="number"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/retryLimitInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Handshake retry limit"
+            android:inputType="number"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/rekeyLimitInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Rekey packet limit (0 = disabled)"
+            android:inputType="number"
             android:layout_marginBottom="24dp" />
 
         <Button
