@@ -76,9 +76,7 @@ jobs:
 
       - name: Build Debug APK
         working-directory: apps/rvpn-android/android
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v7.0.1
