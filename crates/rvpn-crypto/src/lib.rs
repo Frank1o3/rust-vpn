@@ -4,6 +4,9 @@
 //! ChaCha20-Poly1305. It does not yet authenticate peers: a future protocol
 //! handshake must bind identities and the exact transcript before key use.
 
+mod identity;
+mod obfuscation;
+
 use bytes::Bytes;
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit, Nonce,
@@ -11,6 +14,8 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
+pub use obfuscation::ObfuscationKey;
 use rand::{TryRng, rngs::SysRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -19,6 +24,7 @@ use zeroize::Zeroize;
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
+
 /// ChaCha20-Poly1305 authentication-tag bytes appended to ciphertext.
 pub const AEAD_TAG_LEN: usize = 16;
 const INFO_C2S: &[u8] = b"rvpn-v1/session/client-to-server";
@@ -284,6 +290,10 @@ pub enum CryptoError {
     Encryption,
     #[error("packet authentication failed")]
     AuthenticationFailed,
+    #[error("obfuscated datagram is too short to contain a valid envelope")]
+    ObfuscationTooShort,
+    #[error("invalid Ed25519 identity key encoding")]
+    InvalidIdentityKey,
 }
 
 #[cfg(test)]

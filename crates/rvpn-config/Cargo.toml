@@ -8,6 +8,7 @@
 [dependencies]
     hex.workspace=true
     ipnet.workspace=true
+    rvpn-crypto={path="../rvpn-crypto"}
     rvpn-interface={path="../rvpn-interface"}
     serde.workspace=true
     thiserror.workspace=true

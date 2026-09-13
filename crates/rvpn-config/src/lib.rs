@@ -55,6 +55,11 @@ pub struct ClientConfig {
     /// Optional routes installed after the TUN interface is created.
     #[serde(default)]
     pub routing: ClientRoutingConfig,
+    /// Optional 32-byte hex key. When set, every datagram is wrapped in a
+    /// stream-cipher shell before hitting the wire so it carries no static
+    /// magic bytes and no fixed length, defeating passive DPI fingerprinting.
+    /// Both endpoints of a tunnel must share the same key.
+    pub obfuscation_key: Option<String>,
 }
 
 impl ClientConfig {
@@ -105,6 +110,10 @@ impl ClientConfig {
     /// Decodes the provisioned PSK for handoff to the crypto layer.
     pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
         decode_psk(&self.pre_shared_key)
+    }
+
+    pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
+        self.obfuscation_key.as_deref().map(decode_psk).transpose()
     }
 }
 
@@ -167,6 +176,11 @@ pub struct ServerConfig {
     pub rekey: RekeyConfig,
     #[serde(default)]
     pub forwarding: ForwardingConfig,
+    /// Optional 32-byte hex key. When set, every datagram is wrapped in a
+    /// stream-cipher shell before hitting the wire so it carries no static
+    /// magic bytes and no fixed length, defeating passive DPI fingerprinting.
+    /// Both endpoints of a tunnel must share the same key.
+    pub obfuscation_key: Option<String>,
 }
 
 impl ServerConfig {
@@ -197,6 +211,10 @@ impl ServerConfig {
     /// Decodes the provisioned PSK for handoff to the crypto layer.
     pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
         decode_psk(&self.pre_shared_key)
+    }
+
+    pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
+        self.obfuscation_key.as_deref().map(decode_psk).transpose()
     }
 
     /// Returns provisioned peers, retaining old single-PSK configuration as

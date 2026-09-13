@@ -47,6 +47,9 @@ async fn main() -> Result<()> {
     })
     .await?;
     let psk = config.pre_shared_key_bytes()?;
+    let obfuscation = config
+        .obfuscation_key_bytes()?
+        .map(rvpn_crypto::ObfuscationKey::from_bytes);
     let session = establish(&transport, server, psk, &config.handshake, None).await?;
 
     let (tun, tap) = match mode {
