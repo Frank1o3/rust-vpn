@@ -134,6 +134,7 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "curve25519-dalek-derive",
+ "digest",
  "fiat-crypto",
  "rustc_version",
  "subtle",
@@ -161,6 +162,28 @@ dependencies = [
  "const-oid",
  "crypto-common",
  "ctutils",
+]
+
+[[package]]
+name = "ed25519"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
+dependencies = [
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -428,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-android"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "anyhow",
  "bytes",
@@ -448,9 +471,10 @@ dependencies = [
 
 [[package]]
 name = "rvpn-client"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "anyhow",
+ "bytes",
  "rvpn-config",
  "rvpn-core",
  "rvpn-crypto",
@@ -464,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-config"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "hex",
  "ipnet",
@@ -478,18 +502,20 @@ dependencies = [
 
 [[package]]
 name = "rvpn-core"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rvpn-crypto"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "bytes",
  "chacha20",
  "chacha20poly1305",
+ "ed25519-dalek",
+ "hex",
  "hkdf",
  "hmac",
  "rand",
@@ -502,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-interface"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "bytes",
  "libc",
@@ -514,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-protocol"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "bytes",
  "rvpn-core",
@@ -524,9 +550,11 @@ dependencies = [
 
 [[package]]
 name = "rvpn-server"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "anyhow",
+ "bytes",
+ "hex",
  "ipnet",
  "rvpn-config",
  "rvpn-core",
@@ -541,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-transport"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "bytes",
  "thiserror",
@@ -631,6 +659,12 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "signature"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 
 [[package]]
 name = "simd_cesu8"

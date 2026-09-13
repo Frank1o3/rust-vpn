@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::HandshakeConfig;
 use rvpn_core::SessionId;
-use rvpn_crypto::HandshakePsk;
+use rvpn_crypto::{AuthConfig, ObfuscationKey};
 use rvpn_protocol::{
     HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
@@ -14,12 +14,19 @@ use std::{
 };
 use tokio::time::{sleep, timeout};
 
+fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {
+    Ok(match obfuscation {
+        Some(key) => key.wrap(&encoded)?,
+        None => encoded,
+    })
+}
+
 /// Checks whether the session should rekey and performs the rekey flight if needed.
 pub async fn maybe_rekey(
     session: &mut ProtectedSession,
     transport: &UdpTransport,
     server: SocketAddr,
-    psk: [u8; 32],
+    auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
     handshake: &HandshakeConfig,
     packet_limit: u64,
@@ -28,7 +35,7 @@ pub async fn maybe_rekey(
         *session = establish(
             transport,
             server,
-            psk,
+            auth,
             obfuscation,
             handshake,
             Some(session),
@@ -43,12 +50,12 @@ pub async fn maybe_rekey(
 pub async fn establish(
     transport: &UdpTransport,
     server: SocketAddr,
-    psk: [u8; 32],
+    auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
     policy: &HandshakeConfig,
     old: Option<&ProtectedSession>,
 ) -> Result<ProtectedSession> {
-    let (handshake, initiation) = InitiatorHandshake::start(HandshakePsk::from_bytes(psk))?;
+    let (handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
     let (kind, session_id, key_phase) = match old {
         Some(session) => (
             PacketKind::Rekey,
@@ -70,15 +77,10 @@ pub async fn establish(
         },
         payload: initiation.encode(),
     };
+
     let response = 'retry: loop {
         for attempt in 1..=policy.retry_limit {
-            let encoded = initiation_packet.encode();
-
-            let wire = match obfuscation {
-                Some(key) => key.wrap(&encoded)?,
-                None => encoded,
-            };
-
+            let wire = wrap(initiation_packet.encode(), obfuscation)?;
             transport
                 .send_to(server, wire, SendOptions::default())
                 .await?;
@@ -91,10 +93,12 @@ pub async fn establish(
                 match timeout(remaining, transport.receive()).await {
                     Ok(Ok(datagram)) if datagram.peer == server => {
                         let payload = match obfuscation {
-                            Some(key) => key.unwrap(&datagram.payload)?,
+                            Some(key) => match key.unwrap(&datagram.payload) {
+                                Ok(payload) => payload,
+                                Err(_) => continue,
+                            },
                             None => datagram.payload,
                         };
-
                         if let Ok(packet) = Packet::decode(payload) {
                             if packet.header.kind == kind
                                 && (old.is_none() || packet.header.session_id == session_id)
@@ -102,8 +106,6 @@ pub async fn establish(
                                 if let Ok(response @ HandshakeMessage::Response { .. }) =
                                     HandshakeMessage::decode(packet.payload)
                                 {
-                                    // The first response introduces its newly assigned session ID;
-                                    // rekey responses must remain bound to the existing one.
                                     let advertised_session = match response {
                                         HandshakeMessage::Response { session_id, .. } => session_id,
                                         _ => unreachable!(),
@@ -135,7 +137,7 @@ pub async fn establish(
         HandshakeMessage::Response { session_id, .. } => session_id,
         _ => unreachable!(),
     };
-    let (finish, new_session) = match old {
+    let (finish, new_session, _remote_identity) = match old {
         Some(_) => handshake.finish_for_session(response, session_id, key_phase)?,
         None => handshake.finish(response)?,
     };
@@ -149,13 +151,10 @@ pub async fn establish(
         payload: finish.encode(),
     };
     for attempt in 1..=policy.retry_limit {
-        let encoded = initiation_packet.encode();
-
-        let wire = match obfuscation {
-            Some(key) => key.wrap(&encoded)?,
-            None => encoded,
-        };
-
+        // NOTE: this previously re-encoded `initiation_packet` here instead of
+        // `finish_packet` -- a copy/paste bug that meant the finish flight was
+        // never actually sent on retransmit passes. Fixed to send the finish.
+        let wire = wrap(finish_packet.encode(), obfuscation)?;
         transport
             .send_to(server, wire, SendOptions::default())
             .await?;

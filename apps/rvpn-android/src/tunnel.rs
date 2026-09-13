@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::{DeviceMode, HandshakeConfig};
 use rvpn_core::SessionId;
-use rvpn_crypto::{AEAD_TAG_LEN, HandshakePsk};
+use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
 use rvpn_interface::TunDevice;
 use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
@@ -23,12 +23,17 @@ pub struct AndroidTunnelConfig {
     /// Established TUN file descriptor provided by Android's `VpnService`.
     pub tun_fd: RawFd,
     /// VPN server endpoint as `host:port` or `ip:port`; resolved via DNS
-    /// once at tunnel startup (see [`rvpn_config::resolve_endpoint`]). A
-    /// dynamic-DNS hostname whose IP changes mid-session requires
-    /// reconnecting to pick up the new address.
+    /// once at tunnel startup (see [`rvpn_config::resolve_endpoint`]).
     pub server: String,
-    /// 32-byte pre-shared key.
+    /// 32-byte pre-shared key. The Android UI currently only exposes PSK
+    /// authentication; pinned-key/certificate modes are available at the
+    /// Rust API level (`rvpn_crypto::AuthConfig`) but not yet wired into the
+    /// Kotlin settings screens.
     pub psk: [u8; 32],
+    /// Optional wire obfuscation key. When set, every datagram is wrapped in
+    /// a stream-cipher shell to defeat passive DPI fingerprinting. Not yet
+    /// exposed in the Kotlin settings UI.
+    pub obfuscation_key: Option<[u8; 32]>,
     /// Configured MTU.
     pub mtu: u16,
     /// Packet limit before rotating session keys (0 to disable).
@@ -59,10 +64,15 @@ pub async fn run_tunnel(
         "0.0.0.0:0".parse().unwrap()
     };
 
+    let obfuscation = config.obfuscation_key.map(ObfuscationKey::from_bytes);
+
     let transport = UdpTransport::open(TransportConfig {
         local_address: local_bind,
         remote_address: None,
-        max_datagram_size: usize::from(config.mtu) + HEADER_LEN + AEAD_TAG_LEN,
+        max_datagram_size: usize::from(config.mtu)
+            + HEADER_LEN
+            + AEAD_TAG_LEN
+            + rvpn_crypto::OBFUSCATION_OVERHEAD,
     })
     .await
     .context("opening UDP transport")?;
@@ -85,12 +95,14 @@ pub async fn run_tunnel(
         retry_interval_ms: config.retry_interval_ms,
         retry_limit: config.retry_limit,
     };
+    let auth = AuthConfig::Psk(config.psk);
 
     tracing::info!(%server, "initiating RVPN handshake from Android client");
     let mut session = establish(
         &transport,
         server,
-        config.psk,
+        &auth,
+        obfuscation.as_ref(),
         &handshake_policy,
         None,
         &mut shutdown,
@@ -117,7 +129,12 @@ pub async fn run_tunnel(
                 if changed.is_err() || *shutdown.borrow() {
                     tracing::info!("shutdown requested; closing Android RVPN session");
                     if let Ok(close) = session.seal(PacketKind::Close, b"") {
-                        let _ = transport.send_to(server, close.encode(), SendOptions::default()).await;
+                        let encoded = close.encode();
+                        let wire = match &obfuscation {
+                            Some(key) => key.wrap(&encoded).unwrap_or(encoded),
+                            None => encoded,
+                        };
+                        let _ = transport.send_to(server, wire, SendOptions::default()).await;
                     }
                     return Ok(());
                 }
@@ -131,20 +148,30 @@ pub async fn run_tunnel(
                     &mut session,
                     &transport,
                     server,
-                    config.psk,
+                    &auth,
+                    obfuscation.as_ref(),
                     &handshake_policy,
                     config.rekey_packet_limit,
                     &mut shutdown,
                 ).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
-                transport.send_to(server, sealed.encode(), SendOptions::default()).await?;
+                let encoded = sealed.encode();
+                let wire = match &obfuscation { Some(key) => key.wrap(&encoded)?, None => encoded };
+                transport.send_to(server, wire, SendOptions::default()).await?;
             }
             datagram = transport.receive() => {
                 let datagram = datagram.context("receiving UDP datagram")?;
                 if datagram.peer != server {
                     continue;
                 }
-                let packet = match Packet::decode(datagram.payload) {
+                let payload = match &obfuscation {
+                    Some(key) => match key.unwrap(&datagram.payload) {
+                        Ok(payload) => payload,
+                        Err(_) => continue,
+                    },
+                    None => datagram.payload,
+                };
+                let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
                         if session.open(packet).is_ok() {
@@ -158,7 +185,8 @@ pub async fn run_tunnel(
                             session = establish(
                                 &transport,
                                 server,
-                                config.psk,
+                                &auth,
+                                obfuscation.as_ref(),
                                 &handshake_policy,
                                 Some(&session),
                                 &mut shutdown,
@@ -195,13 +223,23 @@ async fn maybe_rekey(
     session: &mut ProtectedSession,
     transport: &UdpTransport,
     server: SocketAddr,
-    psk: [u8; 32],
+    auth: &AuthConfig,
+    obfuscation: Option<&ObfuscationKey>,
     handshake: &HandshakeConfig,
     packet_limit: u64,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<()> {
     if packet_limit != 0 && session.should_rekey(packet_limit) {
-        *session = establish(transport, server, psk, handshake, Some(session), shutdown).await?;
+        *session = establish(
+            transport,
+            server,
+            auth,
+            obfuscation,
+            handshake,
+            Some(session),
+            shutdown,
+        )
+        .await?;
         tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
     }
     Ok(())
@@ -210,12 +248,13 @@ async fn maybe_rekey(
 async fn establish(
     transport: &UdpTransport,
     server: SocketAddr,
-    psk: [u8; 32],
+    auth: &AuthConfig,
+    obfuscation: Option<&ObfuscationKey>,
     policy: &HandshakeConfig,
     old: Option<&ProtectedSession>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<ProtectedSession> {
-    let (handshake, initiation) = InitiatorHandshake::start(HandshakePsk::from_bytes(psk))?;
+    let (handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
     let (kind, session_id, key_phase) = match old {
         Some(session) => (
             PacketKind::Rekey,
@@ -243,8 +282,13 @@ async fn establish(
             if *shutdown.borrow() {
                 bail!("handshake cancelled by shutdown");
             }
+            let encoded = initiation_packet.encode();
+            let wire = match obfuscation {
+                Some(key) => key.wrap(&encoded)?,
+                None => encoded,
+            };
             transport
-                .send_to(server, initiation_packet.encode(), SendOptions::default())
+                .send_to(server, wire, SendOptions::default())
                 .await?;
             let deadline = Instant::now() + Duration::from_millis(policy.retry_interval_ms);
             loop {
@@ -261,7 +305,11 @@ async fn establish(
                     res = timeout(remaining, transport.receive()) => {
                         match res {
                             Ok(Ok(datagram)) if datagram.peer == server => {
-                                if let Ok(packet) = Packet::decode(datagram.payload) {
+                                let payload = match obfuscation {
+                                    Some(key) => match key.unwrap(&datagram.payload) { Ok(p) => p, Err(_) => continue },
+                                    None => datagram.payload,
+                                };
+                                if let Ok(packet) = Packet::decode(payload) {
                                     if packet.header.kind == kind
                                         && (old.is_none() || packet.header.session_id == session_id)
                                     {
@@ -301,7 +349,7 @@ async fn establish(
         HandshakeMessage::Response { session_id, .. } => session_id,
         _ => unreachable!(),
     };
-    let (finish, new_session) = match old {
+    let (finish, new_session, _remote_identity) = match old {
         Some(_) => handshake.finish_for_session(response, session_id, key_phase)?,
         None => handshake.finish(response)?,
     };
@@ -315,8 +363,13 @@ async fn establish(
         payload: finish.encode(),
     };
     for attempt in 1..=policy.retry_limit {
+        let encoded = finish_packet.encode();
+        let wire = match obfuscation {
+            Some(key) => key.wrap(&encoded)?,
+            None => encoded,
+        };
         transport
-            .send_to(server, finish_packet.encode(), SendOptions::default())
+            .send_to(server, wire, SendOptions::default())
             .await?;
         if attempt != policy.retry_limit {
             sleep(Duration::from_millis(policy.retry_interval_ms)).await;

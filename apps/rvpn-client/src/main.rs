@@ -4,7 +4,7 @@ mod tunnel;
 
 use anyhow::{Context, Result};
 use rvpn_config::{ClientConfig, DeviceMode};
-use rvpn_crypto::{AEAD_TAG_LEN};
+use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport};
@@ -43,17 +43,23 @@ async fn main() -> Result<()> {
     let transport = UdpTransport::open(TransportConfig {
         local_address: local_bind,
         remote_address: None,
-        max_datagram_size: usize::from(mtu) + frame_overhead + HEADER_LEN + AEAD_TAG_LEN,
+        max_datagram_size: usize::from(mtu)
+            + frame_overhead
+            + HEADER_LEN
+            + AEAD_TAG_LEN
+            + rvpn_crypto::OBFUSCATION_OVERHEAD,
     })
     .await?;
-    let psk = config.pre_shared_key_bytes()?;
+
+    let auth = config.auth_config()?;
     let obfuscation = config
         .obfuscation_key_bytes()?
         .map(rvpn_crypto::ObfuscationKey::from_bytes);
+
     let session = establish(
         &transport,
         server,
-        psk,
+        &auth,
         obfuscation.as_ref(),
         &config.handshake,
         None,
@@ -121,7 +127,7 @@ async fn main() -> Result<()> {
         &transport,
         &config,
         server,
-        psk,
+        &auth,
         obfuscation.as_ref(),
         tun.as_ref(),
         tap.as_ref(),

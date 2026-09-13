@@ -4,8 +4,13 @@
 //! ChaCha20-Poly1305. It does not yet authenticate peers: a future protocol
 //! handshake must bind identities and the exact transcript before key use.
 
+mod auth;
 mod identity;
 mod obfuscation;
+
+pub use auth::{AuthConfig, AuthIdentity, AuthVerifier};
+pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
+pub use obfuscation::{OBFUSCATION_OVERHEAD, ObfuscationKey};
 
 use bytes::Bytes;
 use chacha20poly1305::{
@@ -14,8 +19,6 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
-pub use obfuscation::{OBFUSCATION_OVERHEAD, ObfuscationKey};
 use rand::{TryRng, rngs::SysRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;

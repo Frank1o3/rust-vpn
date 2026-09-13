@@ -24,6 +24,10 @@ async fn main() -> Result<()> {
         .context("usage: rvpn-server <server.toml>")?;
     let config = ServerConfig::from_toml(&fs::read_to_string(path)?)?;
     let identities = config.peer_identities()?;
+    let certificate_authority = config.certificate_authority.clone();
+    let obfuscation = config
+        .obfuscation_key_bytes()?
+        .map(rvpn_crypto::ObfuscationKey::from_bytes);
     let mode = config.interface.mode();
     let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
     let frame_overhead = match mode {
@@ -33,7 +37,11 @@ async fn main() -> Result<()> {
     let transport = UdpTransport::open(TransportConfig {
         local_address: config.bind,
         remote_address: None,
-        max_datagram_size: usize::from(mtu) + frame_overhead + HEADER_LEN + AEAD_TAG_LEN,
+        max_datagram_size: usize::from(mtu)
+            + frame_overhead
+            + HEADER_LEN
+            + AEAD_TAG_LEN
+            + rvpn_crypto::OBFUSCATION_OVERHEAD,
     })
     .await?;
 
@@ -88,6 +96,7 @@ async fn main() -> Result<()> {
     tracing::info!(
         bind = %transport.local_addr()?,
         peers = identities.len(),
+        certificate_authority = certificate_authority.is_some(),
         primary_interface = %primary_dev.name(),
         mode = ?mode,
         mtu = mtu,
@@ -99,6 +108,8 @@ async fn main() -> Result<()> {
         transport,
         config,
         identities,
+        certificate_authority,
+        obfuscation,
         mode,
         tun,
         tap,

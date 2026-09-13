@@ -3,7 +3,7 @@
 use ipnet::IpNet;
 pub use rvpn_interface::DeviceMode;
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 use thiserror::Error;
 
 /// Common configuration accepted by RVPN applications.
@@ -32,6 +32,59 @@ impl Config {
     }
 }
 
+/// Authentication mode for one peer/CA relationship, shared by client and
+/// server configuration. `mode` selects the variant in TOML, e.g.
+/// `mode = "psk"`.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub enum AuthMode {
+    /// Symmetric pre-shared key (32 bytes, hex-encoded).
+    Psk { pre_shared_key: String },
+    /// Both sides sign with a long-term Ed25519 key; each pins the other's
+    /// public key directly (32-byte hex values).
+    PinnedKey {
+        local_identity_seed: String,
+        peer_public_key: String,
+    },
+    /// Both sides sign with a long-term Ed25519 key; each side's key is
+    /// authenticated via a certificate issued by a trusted CA rather than
+    /// pinned directly. Generate values with
+    /// `cargo run -p rvpn-crypto --example gen_ca_and_cert`.
+    Certificate {
+        local_identity_seed: String,
+        /// Hex-encoded certificate proving `local_identity_seed`'s public key.
+        local_certificate: String,
+        /// Hex-encoded CA public key that issued `local_certificate`.
+        ca_public_key: String,
+    },
+}
+
+impl AuthMode {
+    pub fn to_auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
+        Ok(match self {
+            Self::Psk { pre_shared_key } => {
+                rvpn_crypto::AuthConfig::Psk(decode_psk(pre_shared_key)?)
+            }
+            Self::PinnedKey {
+                local_identity_seed,
+                peer_public_key,
+            } => rvpn_crypto::AuthConfig::PinnedKey {
+                local_seed: decode_psk(local_identity_seed)?,
+                peer_public_key: decode_psk(peer_public_key)?,
+            },
+            Self::Certificate {
+                local_identity_seed,
+                local_certificate,
+                ca_public_key,
+            } => rvpn_crypto::AuthConfig::Certificate {
+                local_seed: decode_psk(local_identity_seed)?,
+                local_certificate: decode_certificate(local_certificate)?,
+                ca_public_key: decode_psk(ca_public_key)?,
+            },
+        })
+    }
+}
+
 /// Client configuration for the initial authenticated UDP handshake.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ClientConfig {
@@ -41,8 +94,12 @@ pub struct ClientConfig {
     /// startup requires restarting the client to pick up the new address --
     /// this crate only resolves once, it does not watch for changes.
     pub server: String,
-    /// Exactly 32 random bytes encoded as 64 hexadecimal characters.
-    pub pre_shared_key: String,
+    /// Legacy flat pre-shared key. Ignored when `auth` is set; kept so
+    /// existing configuration files keep working unchanged.
+    pub pre_shared_key: Option<String>,
+    /// Preferred way to configure authentication: PSK, pinned-key, or
+    /// certificate. Falls back to `pre_shared_key` when omitted.
+    pub auth: Option<AuthMode>,
     /// Local TUN device settings used after session establishment.
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -75,7 +132,7 @@ impl ClientConfig {
     /// only be checked once it has been resolved -- see [`Self::validate_resolved`].
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint_syntax(&self.server)?;
-        validate_psk(&self.pre_shared_key)?;
+        self.auth_config()?;
         self.interface
             .validate()
             .and_then(|_| self.handshake.validate())
@@ -107,9 +164,16 @@ impl ClientConfig {
         Ok(())
     }
 
-    /// Decodes the provisioned PSK for handoff to the crypto layer.
-    pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
-        decode_psk(&self.pre_shared_key)
+    /// Resolves this client's authentication configuration: `auth` if set,
+    /// otherwise the legacy flat `pre_shared_key` as PSK mode.
+    pub fn auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
+        if let Some(auth) = &self.auth {
+            return auth.to_auth_config();
+        }
+        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
+            "either `auth` or the legacy `pre_shared_key` must be set",
+        ))?;
+        Ok(rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?))
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
@@ -160,13 +224,16 @@ pub struct ServerConfig {
     /// Static UDP address on which the server listens. Always a literal
     /// address -- a listening socket cannot bind to a resolved hostname.
     pub bind: SocketAddr,
-    /// Legacy fallback PSK. Ignored entirely once `peers` is non-empty; safe
-    /// to delete once you have `[[peers]]` entries.
-    pub pre_shared_key: String,
-    /// Statically provisioned client identities. When populated, the legacy
-    /// top-level PSK is not used for new sessions.
+    /// Legacy fallback PSK. Ignored once `peers` or `certificate_authority`
+    /// is set; safe to delete once you have those configured.
+    pub pre_shared_key: Option<String>,
+    /// Statically provisioned client identities, each with its own auth mode.
     #[serde(default)]
     pub peers: Vec<ServerPeerConfig>,
+    /// Optional CA trust anchor. Any client presenting a certificate signed
+    /// by this CA is accepted without being individually enumerated in
+    /// `peers`; see `peer_overrides`/`default_allowed_ips` for routing.
+    pub certificate_authority: Option<CertificateAuthorityConfig>,
     /// Local TUN device settings used after session establishment.
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -191,14 +258,20 @@ impl ServerConfig {
         Ok(config)
     }
 
-    /// Checks bind endpoint and PSK encoding.
+    /// Checks bind endpoint and authentication configuration.
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.bind)?;
-        if self.peers.is_empty() {
-            validate_psk(&self.pre_shared_key)?;
+        if self.peers.is_empty() && self.certificate_authority.is_none() {
+            let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
+                "server needs `peers`, `certificate_authority`, or the legacy `pre_shared_key`",
+            ))?;
+            validate_psk(psk)?;
         } else {
             for peer in &self.peers {
                 peer.validate()?;
+            }
+            if let Some(ca) = &self.certificate_authority {
+                ca.validate()?;
             }
         }
         self.interface
@@ -208,34 +281,41 @@ impl ServerConfig {
             .and_then(|_| self.forwarding.validate())
     }
 
-    /// Decodes the provisioned PSK for handoff to the crypto layer.
-    pub fn pre_shared_key_bytes(&self) -> Result<[u8; 32], ConfigError> {
-        decode_psk(&self.pre_shared_key)
-    }
-
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
         self.obfuscation_key.as_deref().map(decode_psk).transpose()
     }
 
-    /// Returns provisioned peers, retaining old single-PSK configuration as
-    /// one unrestricted compatibility identity.
+    /// Returns provisioned peers with individually known identities (PSK or
+    /// pinned-key), or the single legacy compatibility peer. Clients
+    /// authenticated via `certificate_authority` are not enumerated here --
+    /// their identity is only known once their certificate is verified
+    /// during the handshake; see `apps/rvpn-server`'s handshake dispatch.
     pub fn peer_identities(&self) -> Result<Vec<PeerIdentity>, ConfigError> {
-        if self.peers.is_empty() {
-            return Ok(vec![PeerIdentity {
-                name: "legacy".into(),
-                pre_shared_key: self.pre_shared_key_bytes()?,
-                allowed_ips: Vec::new(),
-            }]);
+        if !self.peers.is_empty() {
+            return self.peers.iter().map(ServerPeerConfig::identity).collect();
         }
-        self.peers.iter().map(ServerPeerConfig::identity).collect()
+        if self.certificate_authority.is_some() {
+            return Ok(Vec::new());
+        }
+        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
+            "server needs `peers`, `certificate_authority`, or the legacy `pre_shared_key`",
+        ))?;
+        Ok(vec![PeerIdentity {
+            name: "legacy".into(),
+            allowed_ips: Vec::new(),
+            auth: rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?),
+        }])
     }
 }
 
 /// One statically provisioned RVPN client on a multi-client server.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ServerPeerConfig {
     pub name: String,
-    pub pre_shared_key: String,
+    /// Legacy flat pre-shared key. Ignored when `auth` is set.
+    pub pre_shared_key: Option<String>,
+    /// Preferred per-peer auth mode: PSK, pinned-key, or certificate.
+    pub auth: Option<AuthMode>,
     /// Source addresses this peer may inject, and destinations routed to it.
     pub allowed_ips: Vec<String>,
 }
@@ -247,7 +327,7 @@ impl ServerPeerConfig {
                 "each server peer needs a name and at least one allowed_ips prefix",
             ));
         }
-        validate_psk(&self.pre_shared_key)?;
+        self.auth_mode_config()?;
         for prefix in &self.allowed_ips {
             prefix.parse::<IpNet>().map_err(|_| {
                 ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
@@ -256,10 +336,19 @@ impl ServerPeerConfig {
         Ok(())
     }
 
+    fn auth_mode_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
+        if let Some(auth) = &self.auth {
+            return auth.to_auth_config();
+        }
+        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
+            "each server peer needs either `auth` or the legacy `pre_shared_key`",
+        ))?;
+        Ok(rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?))
+    }
+
     fn identity(&self) -> Result<PeerIdentity, ConfigError> {
         Ok(PeerIdentity {
             name: self.name.clone(),
-            pre_shared_key: decode_psk(&self.pre_shared_key)?,
             allowed_ips: self
                 .allowed_ips
                 .iter()
@@ -268,16 +357,94 @@ impl ServerPeerConfig {
                 .map_err(|_| {
                     ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
                 })?,
+            auth: self.auth_mode_config()?,
         })
     }
 }
 
+/// A CA trust anchor for certificate-based clients. One CA entry can cover
+/// any number of actual devices without listing each one under `peers`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CertificateAuthorityConfig {
+    pub name: String,
+    /// Hex-encoded CA public key trusted to sign client certificates.
+    pub ca_public_key: String,
+    /// This server's own identity, presented to clients trusting this CA.
+    pub local_identity_seed: String,
+    pub local_certificate: String,
+    /// Applied to any client whose certificate subject key isn't listed in
+    /// `peer_overrides`. Empty means unrestricted -- recommended only for
+    /// small trusted deployments; prefer explicit overrides otherwise.
+    #[serde(default)]
+    pub default_allowed_ips: Vec<String>,
+    /// Per-client overrides keyed by the client's hex-encoded Ed25519
+    /// subject public key (printed by `gen_ca_and_cert`).
+    #[serde(default)]
+    pub peer_overrides: HashMap<String, Vec<String>>,
+}
+
+impl CertificateAuthorityConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        decode_psk(&self.ca_public_key)?;
+        decode_psk(&self.local_identity_seed)?;
+        decode_certificate(&self.local_certificate)?;
+        for prefixes in
+            std::iter::once(&self.default_allowed_ips).chain(self.peer_overrides.values())
+        {
+            for prefix in prefixes {
+                prefix.parse::<IpNet>().map_err(|_| {
+                    ConfigError::Invalid(
+                        "certificate_authority allowed_ips must contain valid CIDR prefixes",
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
+        Ok(rvpn_crypto::AuthConfig::Certificate {
+            local_seed: decode_psk(&self.local_identity_seed)?,
+            local_certificate: decode_certificate(&self.local_certificate)?,
+            ca_public_key: decode_psk(&self.ca_public_key)?,
+        })
+    }
+
+    /// Resolves the allowed_ips for a client whose certificate subject key
+    /// (hex-encoded) is `subject_hex`.
+    pub fn resolve_allowed_ips(&self, subject_hex: &str) -> Result<Vec<IpNet>, ConfigError> {
+        let prefixes = self
+            .peer_overrides
+            .get(subject_hex)
+            .unwrap_or(&self.default_allowed_ips);
+        prefixes
+            .iter()
+            .map(|p| p.parse())
+            .collect::<Result<Vec<IpNet>, _>>()
+            .map_err(|_| {
+                ConfigError::Invalid(
+                    "certificate_authority allowed_ips must contain valid CIDR prefixes",
+                )
+            })
+    }
+}
+
 /// Validated server-side identity used by the application session table.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PeerIdentity {
     pub name: String,
-    pub pre_shared_key: [u8; 32],
     pub allowed_ips: Vec<IpNet>,
+    pub auth: rvpn_crypto::AuthConfig,
+}
+
+impl core::fmt::Debug for PeerIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PeerIdentity")
+            .field("name", &self.name)
+            .field("allowed_ips", &self.allowed_ips)
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 /// Platform-neutral settings for a local Layer-3/Layer-2 tunnel device.
@@ -516,6 +683,15 @@ fn decode_psk(value: &str) -> Result<[u8; 32], ConfigError> {
     Ok(bytes)
 }
 
+fn decode_certificate(value: &str) -> Result<[u8; 112], ConfigError> {
+    if value.len() != 224 {
+        return Err(ConfigError::InvalidCertificateEncoding);
+    }
+    let mut bytes = [0; 112];
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| ConfigError::InvalidCertificateEncoding)?;
+    Ok(bytes)
+}
+
 /// Configuration parsing and validation errors.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -523,8 +699,12 @@ pub enum ConfigError {
     Parse(#[source] toml::de::Error),
     #[error("invalid configuration: {0}")]
     Invalid(&'static str),
-    #[error("pre_shared_key must be exactly 32 bytes encoded as hexadecimal")]
+    #[error(
+        "pre_shared_key, identity seeds, and public keys must be exactly 32 bytes encoded as hexadecimal"
+    )]
     InvalidPreSharedKey,
+    #[error("certificate values must be exactly 112 bytes encoded as hexadecimal")]
+    InvalidCertificateEncoding,
     #[error("failed to resolve server endpoint '{host}': {source}")]
     Resolution {
         host: String,
@@ -550,7 +730,10 @@ mod tests {
         let config = ClientConfig::from_toml(
             "server = '127.0.0.1:9000'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
         ).unwrap();
-        assert_eq!(config.pre_shared_key_bytes().unwrap(), [0xaa; 32]);
+        assert!(matches!(
+            config.auth_config().unwrap(),
+            rvpn_crypto::AuthConfig::Psk(bytes) if bytes == [0xaa; 32]
+        ));
         assert!(
             ClientConfig::from_toml("server = '127.0.0.1:9000'\npre_shared_key = 'bad'").is_err()
         );
@@ -577,11 +760,32 @@ mod tests {
     #[test]
     fn parses_provisioned_server_peers() {
         let config = ServerConfig::from_toml(
-            "bind = '127.0.0.1:9000'\npre_shared_key = ''\n[[peers]]\nname = 'laptop'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\nallowed_ips = ['10.42.0.2/32']",
+            "bind = '127.0.0.1:9000'\n[[peers]]\nname = 'laptop'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\nallowed_ips = ['10.42.0.2/32']",
         ).unwrap();
         let peers = config.peer_identities().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].name, "laptop");
+    }
+
+    #[test]
+    fn parses_per_peer_pinned_key_auth() {
+        let toml = r#"
+bind = '0.0.0.0:9000'
+[[peers]]
+name = 'phone'
+allowed_ips = ['10.42.0.3/32']
+[peers.auth]
+mode = 'pinned-key'
+local_identity_seed = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+peer_public_key = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+"#;
+        let config = ServerConfig::from_toml(toml).unwrap();
+        let peers = config.peer_identities().unwrap();
+        assert_eq!(peers.len(), 1);
+        assert!(matches!(
+            peers[0].auth,
+            rvpn_crypto::AuthConfig::PinnedKey { .. }
+        ));
     }
 
     #[test]

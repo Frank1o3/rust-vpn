@@ -1,7 +1,12 @@
 //! Wire-level obfuscation: makes RVPN datagrams indistinguishable from random
 //! bytes to a passive observer. This is independent of, and layered outside,
-//! the AEAD packet protection in this crate — it defeats fingerprinting, not
+//! the AEAD packet protection in this crate -- it defeats fingerprinting, not
 //! forgery, so a valid inner packet is still required after unwrapping.
+//!
+//! Nonces are random rather than a counter, which is fine at this layer:
+//! the security property this buys is "doesn't look like RVPN traffic", not
+//! confidentiality (that's the inner AEAD's job), so the birthday bound on
+//! random 96-bit nonces is not the binding constraint here.
 
 use crate::CryptoError;
 use bytes::{Bytes, BytesMut};
@@ -15,7 +20,10 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 /// Upper bound on random padding appended to each obfuscated datagram.
 const MAX_PADDING: usize = 64;
-pub const OBFUSCATION_OVERHEAD: usize = 12 + 1 + 64;
+/// Worst-case bytes added on top of the inner datagram by [`ObfuscationKey::wrap`].
+/// Reserve this in transport `max_datagram_size` budgets wherever obfuscation
+/// might be enabled.
+pub const OBFUSCATION_OVERHEAD: usize = NONCE_LEN + 1 + MAX_PADDING;
 
 /// Shared secret used only to make wire traffic look like random noise.
 /// Deliberately separate from any peer's PSK or identity key, since it is
@@ -58,7 +66,8 @@ impl ObfuscationKey {
         body.extend_from_slice(inner);
         body.extend_from_slice(&padding);
 
-        let mut cipher = ChaCha20::new((&self.0).into(), (&nonce).into());
+        let mut cipher = ChaCha20::new_from_slices(&self.0, &nonce)
+            .map_err(|_| CryptoError::InvalidKey)?;
         cipher.apply_keystream(&mut body);
 
         let mut output = BytesMut::with_capacity(NONCE_LEN + body.len());
@@ -74,7 +83,8 @@ impl ObfuscationKey {
         }
         let (nonce, body) = datagram.split_at(NONCE_LEN);
         let mut body = body.to_vec();
-        let mut cipher = ChaCha20::new((&self.0).into(), nonce.into());
+        let mut cipher = ChaCha20::new_from_slices(&self.0, nonce)
+            .map_err(|_| CryptoError::InvalidKey)?;
         cipher.apply_keystream(&mut body);
 
         let padding_len = body[0] as usize;

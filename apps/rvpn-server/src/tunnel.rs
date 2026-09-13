@@ -1,8 +1,9 @@
 //! Multi-client server event pump connecting TUN/TAP virtual interfaces and UDP transport.
 
 use anyhow::Result;
-use rvpn_config::{DeviceMode, PeerIdentity, ServerConfig};
+use rvpn_config::{CertificateAuthorityConfig, DeviceMode, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
+use rvpn_crypto::ObfuscationKey;
 use rvpn_interface::TunDevice;
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
 use rvpn_transport::{SendOptions, UdpTransport};
@@ -10,24 +11,36 @@ use std::{collections::HashMap, time::Duration};
 use tokio::time::{MissedTickBehavior, interval};
 
 use crate::firewall::ForwardingGuard;
-use crate::handshake::{begin_initial, begin_rekey, finish_pending, maybe_send_rekey, retransmit_pending};
+use crate::handshake::{
+    begin_initial, begin_rekey, finish_pending, maybe_send_rekey, retransmit_pending,
+};
 use crate::network::{
     ethernet_payload_ip, ethernet_src_mac, is_broadcast_or_multicast_mac, packet_destination,
     packet_source,
 };
 use crate::state::{ActivePeer, PendingHandshake, close_all, ip_in_prefixes};
 
+fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {
+    Ok(match obfuscation {
+        Some(key) => key.wrap(&encoded)?,
+        None => encoded,
+    })
+}
+
 /// Runs the multi-client server routing and processing loop.
 pub async fn run_server_loop(
     transport: UdpTransport,
     config: ServerConfig,
     identities: Vec<PeerIdentity>,
+    certificate_authority: Option<CertificateAuthorityConfig>,
+    obfuscation: Option<ObfuscationKey>,
     mode: DeviceMode,
     tun: Option<TunDevice>,
     tap: Option<TunDevice>,
     forwarding: ForwardingGuard,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {
+    let obfuscation = obfuscation.as_ref();
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
     let mut pending: HashMap<SessionId, PendingHandshake> = HashMap::new();
     let mut mac_table: HashMap<[u8; 6], SessionId> = HashMap::new();
@@ -38,12 +51,12 @@ pub async fn run_server_loop(
         tokio::select! {
             signal = &mut shutdown_signal => {
                 signal?;
-                close_all(&transport, &mut active).await;
+                close_all(&transport, &mut active, obfuscation).await;
                 forwarding.cleanup().await;
                 return Ok(());
             }
             _ = retry_tick.tick() => {
-                retransmit_pending(&transport, &mut pending, &config.handshake).await?;
+                retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await?;
             }
             outbound_tun = async {
                 if let Some(t) = &tun {
@@ -55,9 +68,10 @@ pub async fn run_server_loop(
                 let outbound = outbound_tun?;
                 let Some(destination) = packet_destination(&outbound) else { continue; };
                 if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
-                    maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
+                    maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                     let packet = peer.session.seal(PacketKind::Data, &outbound)?;
-                    transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
+                    let wire = wrap(packet.encode(), obfuscation)?;
+                    transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
                 } else {
                     tracing::debug!(%destination, "no RVPN peer owns outbound TUN destination");
                 }
@@ -74,32 +88,38 @@ pub async fn run_server_loop(
                 let dst_mac: [u8; 6] = outbound[0..6].try_into().unwrap();
                 if is_broadcast_or_multicast_mac(&dst_mac) {
                     for peer in active.values_mut() {
-                        maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
+                        maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                         if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
-                            let _ = transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await;
+                            if let Ok(wire) = wrap(packet.encode(), obfuscation) {
+                                let _ = transport.send_to(peer.endpoint, wire, SendOptions::default()).await;
+                            }
                         }
                     }
                 } else if let Some(target_session) = mac_table.get(&dst_mac) {
                     if let Some(peer) = active.get_mut(target_session) {
-                        maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
+                        maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                         let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
-                        transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
+                        let wire = wrap(packet.encode(), obfuscation)?;
+                        transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
                     }
                 } else {
                     let dest_ip = ethernet_payload_ip(&outbound, true);
                     let mut sent = false;
                     if let Some(destination) = dest_ip {
                         if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
-                            maybe_send_rekey(&transport, peer, config.rekey.packet_limit).await?;
+                            maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                             let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
-                            transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await?;
+                            let wire = wrap(packet.encode(), obfuscation)?;
+                            transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
                             sent = true;
                         }
                     }
                     if !sent {
                         for peer in active.values_mut() {
                             if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
-                                let _ = transport.send_to(peer.endpoint, packet.encode(), SendOptions::default()).await;
+                                if let Ok(wire) = wrap(packet.encode(), obfuscation) {
+                                    let _ = transport.send_to(peer.endpoint, wire, SendOptions::default()).await;
+                                }
                             }
                         }
                     }
@@ -108,7 +128,17 @@ pub async fn run_server_loop(
 
             datagram = transport.receive() => {
                 let datagram = datagram?;
-                let packet = match Packet::decode(datagram.payload) {
+                let payload = match obfuscation {
+                    Some(key) => match key.unwrap(&datagram.payload) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            tracing::warn!(%error, "discarding malformed obfuscated datagram");
+                            continue;
+                        }
+                    },
+                    None => datagram.payload,
+                };
+                let packet = match Packet::decode(payload) {
                     Ok(packet) => packet,
                     Err(error) => {
                         tracing::warn!(%error, "discarding malformed RVPN packet");
@@ -118,7 +148,7 @@ pub async fn run_server_loop(
                 match packet.header.kind {
                     PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::ZERO => {
                         if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
-                            begin_initial(&transport, &identities, &mut pending, datagram.peer, initiation).await?;
+                            begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation).await?;
                         }
                     }
                     PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
@@ -128,7 +158,7 @@ pub async fn run_server_loop(
                         if let Some(current) = active.get(&packet.header.session_id) {
                             if current.session.key_phase() == packet.header.key_phase {
                                 if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload.clone()) {
-                                    begin_rekey(&transport, &mut pending, datagram.peer, current, initiation).await?;
+                                    begin_rekey(&transport, obfuscation, &mut pending, datagram.peer, current, initiation).await?;
                                 }
                             }
                         }

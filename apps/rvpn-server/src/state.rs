@@ -1,8 +1,9 @@
 //! Server state structures, peer registries, and prefix matching.
 
 use ipnet::IpNet;
-use rvpn_config::PeerIdentity;
+use rvpn_config::{CertificateAuthorityConfig, PeerIdentity};
 use rvpn_core::SessionId;
+use rvpn_crypto::ObfuscationKey;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
 use std::{
@@ -17,9 +18,19 @@ pub struct ActivePeer {
     pub endpoint: SocketAddr,
 }
 
+/// Where a pending handshake's final identity should come from once its
+/// Finish message has been authenticated.
+pub enum PendingSource {
+    /// Identity and `allowed_ips` are already known (PSK or pinned-key peer).
+    Known(PeerIdentity),
+    /// Identity is only known once the client's certificate subject key is
+    /// extracted from its authenticated Finish message.
+    CertificateAuthority(CertificateAuthorityConfig),
+}
+
 /// An in-progress handshake flight awaiting confirmation.
 pub struct PendingHandshake {
-    pub identity: PeerIdentity,
+    pub source: PendingSource,
     pub handshake: ResponderHandshake,
     pub endpoint: SocketAddr,
     pub packet: Packet,
@@ -28,11 +39,20 @@ pub struct PendingHandshake {
 }
 
 /// Closes all active client sessions by sending an authenticated close packet.
-pub async fn close_all(transport: &UdpTransport, active: &mut HashMap<SessionId, ActivePeer>) {
+pub async fn close_all(
+    transport: &UdpTransport,
+    active: &mut HashMap<SessionId, ActivePeer>,
+    obfuscation: Option<&ObfuscationKey>,
+) {
     for peer in active.values_mut() {
         if let Ok(close) = peer.session.seal(PacketKind::Close, b"") {
+            let encoded = close.encode();
+            let wire = match obfuscation {
+                Some(key) => key.wrap(&encoded).unwrap_or(encoded),
+                None => encoded,
+            };
             let _ = transport
-                .send_to(peer.endpoint, close.encode(), SendOptions::default())
+                .send_to(peer.endpoint, wire, SendOptions::default())
                 .await;
         }
     }

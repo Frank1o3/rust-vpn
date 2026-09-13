@@ -15,4 +15,5 @@
     rvpn-transport={path="../../crates/rvpn-transport"}
     tokio.workspace=true
     tracing.workspace=true
+    bytes.workspace=true
     tracing-subscriber.workspace=true

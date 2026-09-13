@@ -212,6 +212,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 tun_fd,
                 server: server_rust,
                 psk: psk_bytes,
+                obfuscation_key: None,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },
                 rekey_packet_limit: if rekey_limit < 0 {
                     0

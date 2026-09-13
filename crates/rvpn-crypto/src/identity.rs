@@ -30,6 +30,13 @@ impl IdentityKeyPair {
         }
     }
 
+    /// Returns the raw 32-byte seed. Only needed for provisioning tools that
+    /// must persist a freshly generated identity; regular handshake code
+    /// never needs this.
+    pub fn to_seed_bytes(&self) -> [u8; SEED_LEN] {
+        self.signing.to_bytes()
+    }
+
     /// Returns the public half for distribution to peers.
     pub fn public_key(&self) -> IdentityPublicKey {
         IdentityPublicKey(self.signing.verifying_key().to_bytes())
@@ -94,8 +101,7 @@ impl IdentityPublicKey {
         let Ok(key) = self.verifying_key() else {
             return false;
         };
-        key.verify(message, &Signature::from_bytes(signature))
-            .is_ok()
+        key.verify(message, &Signature::from_bytes(signature)).is_ok()
     }
 }
 
@@ -180,5 +186,13 @@ mod tests {
         let sig = peer.sign(b"transcript bytes");
         assert!(peer.public_key().verify(b"transcript bytes", &sig));
         assert!(!peer.public_key().verify(b"tampered", &sig));
+    }
+
+    #[test]
+    fn seed_round_trips_through_from_seed() {
+        let original = IdentityKeyPair::generate().unwrap();
+        let seed = original.to_seed_bytes();
+        let restored = IdentityKeyPair::from_seed(seed);
+        assert_eq!(original.public_key(), restored.public_key());
     }
 }
