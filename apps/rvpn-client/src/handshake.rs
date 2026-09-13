@@ -20,11 +20,20 @@ pub async fn maybe_rekey(
     transport: &UdpTransport,
     server: SocketAddr,
     psk: [u8; 32],
+    obfuscation: Option<&ObfuscationKey>,
     handshake: &HandshakeConfig,
     packet_limit: u64,
 ) -> Result<()> {
     if packet_limit != 0 && session.should_rekey(packet_limit) {
-        *session = establish(transport, server, psk, handshake, Some(session)).await?;
+        *session = establish(
+            transport,
+            server,
+            psk,
+            obfuscation,
+            handshake,
+            Some(session),
+        )
+        .await?;
         tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
     }
     Ok(())
@@ -35,6 +44,7 @@ pub async fn establish(
     transport: &UdpTransport,
     server: SocketAddr,
     psk: [u8; 32],
+    obfuscation: Option<&ObfuscationKey>,
     policy: &HandshakeConfig,
     old: Option<&ProtectedSession>,
 ) -> Result<ProtectedSession> {
@@ -62,8 +72,15 @@ pub async fn establish(
     };
     let response = 'retry: loop {
         for attempt in 1..=policy.retry_limit {
+            let encoded = initiation_packet.encode();
+
+            let wire = match obfuscation {
+                Some(key) => key.wrap(&encoded)?,
+                None => encoded,
+            };
+
             transport
-                .send_to(server, initiation_packet.encode(), SendOptions::default())
+                .send_to(server, wire, SendOptions::default())
                 .await?;
             let deadline = Instant::now() + Duration::from_millis(policy.retry_interval_ms);
             loop {
@@ -73,7 +90,12 @@ pub async fn establish(
                 }
                 match timeout(remaining, transport.receive()).await {
                     Ok(Ok(datagram)) if datagram.peer == server => {
-                        if let Ok(packet) = Packet::decode(datagram.payload) {
+                        let payload = match obfuscation {
+                            Some(key) => key.unwrap(&datagram.payload)?,
+                            None => datagram.payload,
+                        };
+
+                        if let Ok(packet) = Packet::decode(payload) {
                             if packet.header.kind == kind
                                 && (old.is_none() || packet.header.session_id == session_id)
                             {
@@ -127,8 +149,15 @@ pub async fn establish(
         payload: finish.encode(),
     };
     for attempt in 1..=policy.retry_limit {
+        let encoded = initiation_packet.encode();
+
+        let wire = match obfuscation {
+            Some(key) => key.wrap(&encoded)?,
+            None => encoded,
+        };
+
         transport
-            .send_to(server, finish_packet.encode(), SendOptions::default())
+            .send_to(server, wire, SendOptions::default())
             .await?;
         if attempt != policy.retry_limit {
             sleep(Duration::from_millis(policy.retry_interval_ms)).await;

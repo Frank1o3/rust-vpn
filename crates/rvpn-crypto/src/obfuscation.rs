@@ -15,6 +15,7 @@ const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 /// Upper bound on random padding appended to each obfuscated datagram.
 const MAX_PADDING: usize = 64;
+pub const OBFUSCATION_OVERHEAD: usize = 12 + 1 + 64;
 
 /// Shared secret used only to make wire traffic look like random noise.
 /// Deliberately separate from any peer's PSK or identity key, since it is

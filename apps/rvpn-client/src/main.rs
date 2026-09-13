@@ -50,7 +50,15 @@ async fn main() -> Result<()> {
     let obfuscation = config
         .obfuscation_key_bytes()?
         .map(rvpn_crypto::ObfuscationKey::from_bytes);
-    let session = establish(&transport, server, psk, &config.handshake, None).await?;
+    let session = establish(
+        &transport,
+        server,
+        psk,
+        obfuscation.as_ref(),
+        &config.handshake,
+        None,
+    )
+    .await?;
 
     let (tun, tap) = match mode {
         DeviceMode::Tun => {
@@ -114,6 +122,7 @@ async fn main() -> Result<()> {
         &config,
         server,
         psk,
+        obfuscation.as_ref(),
         tun.as_ref(),
         tap.as_ref(),
         shutdown,
