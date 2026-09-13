@@ -4,7 +4,7 @@ mod tunnel;
 
 use anyhow::{Context, Result};
 use rvpn_config::{ClientConfig, DeviceMode};
-use rvpn_crypto::AEAD_TAG_LEN;
+use rvpn_crypto::{AEAD_TAG_LEN};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport};

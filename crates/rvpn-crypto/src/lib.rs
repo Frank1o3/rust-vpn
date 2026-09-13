@@ -15,7 +15,7 @@ use chacha20poly1305::{
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
-pub use obfuscation::ObfuscationKey;
+pub use obfuscation::{OBFUSCATION_OVERHEAD, ObfuscationKey};
 use rand::{TryRng, rngs::SysRng};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
