@@ -138,7 +138,11 @@ pub async fn teardown_client_network(
 
 async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -> Result<()> {
     let (destination_ip, _) = split_cidr(destination)?;
-    let family = if destination_ip.is_ipv4() { "IPv4" } else { "IPv6" };
+    let family = if destination_ip.is_ipv4() {
+        "IPv4"
+    } else {
+        "IPv6"
+    };
     let destination = ps_quote(destination);
     let device = ps_quote(device);
 
@@ -158,16 +162,17 @@ async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -
 
 async fn route_delete(destination: &str, device: &str) -> Result<()> {
     let (destination_ip, _) = split_cidr(destination)?;
-    let family = if destination_ip.is_ipv4() { "IPv4" } else { "IPv6" };
+    let family = if destination_ip.is_ipv4() {
+        "IPv4"
+    } else {
+        "IPv6"
+    };
     let destination = ps_quote(destination);
 
     let interface_filter = if device.is_empty() {
         String::new()
     } else {
-        format!(
-            " | Where-Object InterfaceAlias -eq {}",
-            ps_quote(device)
-        )
+        format!(" | Where-Object InterfaceAlias -eq {}", ps_quote(device))
     };
 
     let script = format!(

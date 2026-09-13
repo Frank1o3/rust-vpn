@@ -1,5 +1,4 @@
 mod handshake;
-mod network;
 mod platform;
 mod tunnel;
 
@@ -12,7 +11,7 @@ use rvpn_transport::{TransportConfig, UdpTransport};
 use std::{env, fs, net::SocketAddr};
 
 use handshake::establish;
-use network::{configure_client_network, teardown_client_network};
+use platform::{configure_client_network, teardown_client_network};
 use tunnel::run_data_plane;
 
 #[tokio::main]
