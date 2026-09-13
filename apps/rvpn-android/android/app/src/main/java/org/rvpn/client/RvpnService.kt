@@ -69,17 +69,24 @@ class RvpnService : VpnService() {
             return
         }
 
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting to ${config.server}..."))
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification("Connecting to ${config.server}...")
+        )
 
         try {
             Log.i(TAG, "Configuring Android VPN interface...")
+
             val builder = Builder()
                 .setSession("RVPN")
                 .setMtu(config.mtu)
                 .addAddress(config.tunnelAddress, config.tunnelPrefixLength)
 
             if (config.ipv6Enabled && config.tunnelAddressV6.isNotEmpty()) {
-                builder.addAddress(config.tunnelAddressV6, config.tunnelPrefixLengthV6)
+                builder.addAddress(
+                    config.tunnelAddressV6,
+                    config.tunnelPrefixLengthV6
+                )
             }
 
             if (config.useDefaultRouteV4) {
@@ -87,6 +94,7 @@ class RvpnService : VpnService() {
             } else {
                 addSplitRoutes(builder, config.splitTunnelRoutesV4)
             }
+
             if (config.ipv6Enabled) {
                 if (config.useDefaultRouteV6) {
                     builder.addRoute("::", 0)
@@ -94,40 +102,66 @@ class RvpnService : VpnService() {
                     addSplitRoutes(builder, config.splitTunnelRoutesV6)
                 }
             }
-            if (!config.useDefaultRouteV4 && (!config.ipv6Enabled || !config.useDefaultRouteV6)
-                && config.splitTunnelRoutesV4.isBlank() && config.splitTunnelRoutesV6.isBlank()
+
+            if (
+                !config.useDefaultRouteV4 &&
+                (!config.ipv6Enabled || !config.useDefaultRouteV6) &&
+                config.splitTunnelRoutesV4.isBlank() &&
+                config.splitTunnelRoutesV6.isBlank()
             ) {
-                Log.w(TAG, "Split tunneling is on but no routes were configured; only the VPN subnet will be reachable")
+                Log.w(
+                    TAG,
+                    "Split tunneling is on but no routes were configured; " +
+                            "only the VPN subnet will be reachable"
+                )
             }
 
-            for (dns in config.dnsServers.split(",", "\n").map { it.trim() }.filter { it.isNotEmpty() }) {
-                try {
-                    builder.addDnsServer(dns)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Skipping invalid DNS server '$dns': ${e.message}")
+            for (
+            dns in config.dnsServers
+                .split(
+                    ",", "")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                ) {
+                    try {
+                        builder.addDnsServer(dns)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping invalid DNS server '$dns': ${e.message}")
+                    }
                 }
-            }
 
-            for (pkg in config.excludedApps) {
-                try {
-                    builder.addDisallowedApplication(pkg)
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not exclude app $pkg: ${e.message}")
+                for (pkg in config.excludedApps) {
+                    try {
+                        builder.addDisallowedApplication(pkg)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not exclude app $pkg: ${e.message}")
+                    }
                 }
-            }
 
             val pfd = builder.establish()
+
             if (pfd == null) {
-                Log.e(TAG, "VpnService.Builder.establish() returned null; user or OS denied TUN creation")
+                Log.e(
+                    TAG,
+                    "VpnService.Builder.establish() returned null; " +
+                            "user or OS denied TUN creation"
+                )
                 broadcastStatus(false, "Failed to establish VPN interface")
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
             }
 
-            vpnInterface = pfd
+            // Ownership of this fd is transferred to Rust.
             val tunFd = pfd.detachFd()
+            vpnInterface = null
 
-            Log.i(TAG, "Established TUN device with fd $tunFd. Launching native Rust tunnel...")
+            Log.i(
+                TAG,
+                "Established TUN device with fd $tunFd. " +
+                        "Launching native Rust tunnel..."
+            )
+
             val error = RvpnNative.startTunnel(
                 vpnService = this,
                 server = config.server,
@@ -147,36 +181,86 @@ class RvpnService : VpnService() {
             if (error.isNotEmpty()) {
                 Log.e(TAG, "Native tunnel failed to start: $error")
                 broadcastStatus(false, "Error: $error")
-                closeInterface()
+                isConnected = false
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
             }
 
-            isConnected = true
-            broadcastStatus(true, "Connected to ${config.server}")
-            updateNotification("Connected to ${config.server}")
+            // IMPORTANT:
+            // startTunnel() only launches Rust. It does NOT mean the handshake
+            // has succeeded yet.
+            isConnected = false
 
             monitorJob?.cancel()
             monitorJob = serviceScope.launch {
-                delay(500)
-                while (isActive && RvpnNative.isTunnelRunning()) {
-                    val stats = RvpnNative.getStats()
-                    if (stats != null) {
-                        broadcastStatus(true, "Connected to ${config.server}", stats)
-                        updateNotification("Connected: ↓ ${formatBytes(stats.bytesRx)} | ↑ ${formatBytes(stats.bytesTx)}")
+                while (isActive) {
+                    if (RvpnNative.isTunnelConnected()) {
+                        if (!isConnected) {
+                            isConnected = true
+
+                            Log.i(
+                                TAG,
+                                "RVPN handshake completed; tunnel connected"
+                            )
+
+                            broadcastStatus(
+                                true,
+                                "Connected to ${config.server}"
+                            )
+
+                            updateNotification(
+                                "Connected to ${config.server}"
+                            )
+                        }
+
+                        val stats = RvpnNative.getStats()
+
+                        if (stats != null) {
+                            broadcastStatus(
+                                true,
+                                "Connected to ${config.server}",
+                                stats
+                            )
+
+                            updateNotification(
+                                "Connected: ↓ ${formatBytes(stats.bytesRx)} | " +
+                                        "↑ ${formatBytes(stats.bytesTx)}"
+                            )
+                        }
                     }
-                    delay(1000)
-                }
-                if (isConnected) {
-                    Log.i(TAG, "Tunnel stopped; cleaning up service")
-                    stopVpn()
+
+                    if (!RvpnNative.isTunnelRunning()) {
+                        val errorMessage =
+                            RvpnNative.getTunnelError().ifBlank {
+                                "RVPN tunnel stopped"
+                            }
+
+                        Log.e(TAG, errorMessage)
+
+                        isConnected = false
+                        closeInterface()
+
+                        broadcastStatus(
+                            false,
+                            errorMessage
+                        )
+
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                        break
+                    }
+
+                    delay(250)
                 }
             }
-
         } catch (e: Exception) {
             Log.e(TAG, "Exception establishing VPN: ${e.message}", e)
+
+            isConnected = false
             broadcastStatus(false, "Exception: ${e.message}")
             closeInterface()
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
@@ -294,6 +378,12 @@ class RvpnService : VpnService() {
             bytes < 1024 * 1024 * 1024 -> "%.2f MB".format(bytes / (1024.0 * 1024.0))
             else -> "%.2f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
         }
+    }
+
+    override fun onRevoke() {
+        Log.i(TAG, "VPN permission revoked; stopping RVPN")
+        stopVpn()
+        super.onRevoke()
     }
 
     override fun onDestroy() {

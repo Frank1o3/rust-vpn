@@ -46,6 +46,8 @@ pub struct AndroidTunnelConfig {
     pub socket_protector: Option<Arc<dyn Fn(RawFd) -> bool + Send + Sync + 'static>>,
     /// Shared tunnel telemetry and statistics counter.
     pub stats: Option<Arc<crate::stats::TunnelStats>>,
+    /// Called exactly once after the initial handshake succeeds.
+    pub on_connected: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
 
 /// Runs the Android VPN tunnel to completion or until shutdown is signaled.
@@ -53,6 +55,17 @@ pub async fn run_tunnel(
     config: AndroidTunnelConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
+    // Take ownership of the Android TUN fd immediately. This guarantees that
+    // every error path after this point drops the fd and tears down the VPN
+    // interface instead of leaving Android's VPN interface orphaned.
+    let tun = TunDevice::from_raw_fd(
+        config.tun_fd,
+        "rvpn-android".into(),
+        config.mtu,
+        DeviceMode::Tun,
+    )
+    .context("opening Android TUN device")?;
+
     let server = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving RVPN server endpoint")?;
@@ -109,12 +122,9 @@ pub async fn run_tunnel(
     )
     .await?;
 
-    let tun = TunDevice::from_raw_fd(
-        config.tun_fd,
-        "rvpn-android".into(),
-        config.mtu,
-        DeviceMode::Tun,
-    )?;
+    if let Some(on_connected) = &config.on_connected {
+        on_connected();
+    }
 
     tracing::info!(
         session_id = ?session.session_id(),

@@ -37,6 +37,16 @@ object RvpnNative {
     external fun isTunnelRunning(): Boolean
 
     /**
+     * Returns true only after the Rust handshake has completed.
+     */
+    external fun isTunnelConnected(): Boolean
+
+    /**
+     * Returns the most recent native tunnel error, or an empty string.
+     */
+    external fun getTunnelError(): String
+
+    /**
      * Signals the background tunnel event loop to gracefully shut down.
      * Returns true if a running tunnel was signaled.
      */

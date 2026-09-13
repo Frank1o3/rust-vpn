@@ -11,7 +11,7 @@ use jni::{
     sys::{jboolean, jint, jlong, jlongArray, jstring},
 };
 use std::{
-    os::fd::RawFd,
+    os::fd::{FromRawFd, RawFd},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -22,6 +22,8 @@ use std::{
 use tokio::sync::watch;
 
 static TUNNEL_RUNNING: AtomicBool = AtomicBool::new(false);
+static TUNNEL_CONNECTED: AtomicBool = AtomicBool::new(false);
+static TUNNEL_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static SHUTDOWN_TX: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
 static TUNNEL_STATS: Mutex<Option<(Arc<TunnelStats>, Instant)>> = Mutex::new(None);
 static LOGGER_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -33,6 +35,20 @@ fn init_logger() {
             .without_time()
             .try_init();
     }
+}
+
+fn close_raw_fd(fd: RawFd) {
+    if fd >= 0 {
+        unsafe {
+            let _ = std::fs::File::from_raw_fd(fd);
+        }
+    }
+}
+
+fn set_tunnel_error(message: impl Into<String>) {
+    TUNNEL_CONNECTED.store(false, Ordering::SeqCst);
+    let mut guard = TUNNEL_ERROR.lock().unwrap();
+    *guard = Some(message.into());
 }
 
 #[unsafe(no_mangle)]
@@ -54,6 +70,32 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_isTunnelRunning<'local>(
     unowned_env
         .with_env(|_env| -> jni::errors::Result<jboolean> {
             Ok(TUNNEL_RUNNING.load(Ordering::SeqCst))
+        })
+        .resolve::<LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_rvpn_client_RvpnNative_isTunnelConnected<'local>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jboolean {
+    unowned_env
+        .with_env(|_env| -> jni::errors::Result<jboolean> {
+            Ok(TUNNEL_CONNECTED.load(Ordering::SeqCst))
+        })
+        .resolve::<LogErrorAndDefault>()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_rvpn_client_RvpnNative_getTunnelError<'local>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<jstring> {
+            let message = TUNNEL_ERROR.lock().unwrap().clone().unwrap_or_default();
+
+            Ok(env.new_string(message)?.into_raw())
         })
         .resolve::<LogErrorAndDefault>()
 }
@@ -129,7 +171,14 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             init_logger();
 
             if TUNNEL_RUNNING.swap(true, Ordering::SeqCst) {
+                close_raw_fd(tun_fd);
                 return Ok(env.new_string("tunnel is already running")?.into_raw());
+            }
+
+            TUNNEL_CONNECTED.store(false, Ordering::SeqCst);
+            {
+                let mut error = TUNNEL_ERROR.lock().unwrap();
+                *error = None;
             }
 
             macro_rules! read_str {
@@ -137,18 +186,22 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                     match $jstr.mutf8_chars(env) {
                         Ok(s) => String::from(s),
                         Err(e) => {
+                            let message = format!("invalid {} string: {e}", $label);
+                            set_tunnel_error(message.clone());
                             TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                            return Ok(env
-                                .new_string(format!("invalid {} string: {e}", $label))?
-                                .into_raw());
+                            close_raw_fd(tun_fd);
+                            return Ok(env.new_string(message)?.into_raw());
                         }
                     }
                 };
             }
             macro_rules! fail {
                 ($msg:expr) => {{
+                    let message = $msg;
+                    set_tunnel_error(message.to_string());
                     TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                    return Ok(env.new_string($msg)?.into_raw());
+                    close_raw_fd(tun_fd);
+                    return Ok(env.new_string(message)?.into_raw());
                 }};
             }
             macro_rules! decode_hex {
@@ -272,6 +325,10 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 },
                 socket_protector: Some(socket_protector),
                 stats: Some(stats),
+                on_connected: Some(Arc::new(|| {
+                    TUNNEL_CONNECTED.store(true, Ordering::SeqCst);
+                    tracing::info!("Android RVPN tunnel handshake completed");
+                })),
             };
 
             thread::spawn(move || {
@@ -293,11 +350,13 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                     tracing::info!("starting Android RVPN tunnel event loop");
                     if let Err(e) = run_tunnel(config, shutdown_rx).await {
                         tracing::error!(%e, "Android RVPN tunnel exited with error");
+                        set_tunnel_error(e.to_string());
                     } else {
                         tracing::info!("Android RVPN tunnel shut down cleanly");
                     }
                 });
 
+                TUNNEL_CONNECTED.store(false, Ordering::SeqCst);
                 TUNNEL_RUNNING.store(false, Ordering::SeqCst);
                 let mut guard = SHUTDOWN_TX.lock().unwrap();
                 *guard = None;
