@@ -4,7 +4,7 @@
 //! endpoint before the server performs expensive asymmetric handshake work.
 
 use crate::{CryptoError, Secret};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::net::SocketAddr;
 

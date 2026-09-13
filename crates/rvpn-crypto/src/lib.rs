@@ -5,10 +5,12 @@
 //! handshake must bind identities and the exact transcript before key use.
 
 mod auth;
+mod cookie;
 mod identity;
 mod obfuscation;
 
 pub use auth::{AuthConfig, AuthIdentity, AuthVerifier};
+pub use cookie::CookieKey;
 pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
 pub use obfuscation::{OBFUSCATION_OVERHEAD, ObfuscationKey};
 
