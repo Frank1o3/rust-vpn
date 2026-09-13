@@ -34,3 +34,4 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
         local_identity_seed="0cc8dce187836f6cb84bd74cf0785b42c00d328a7d685296b0e3bd574465d37d"
         mode="pinned-key"
         peer_public_key="3ac3dbe967dc0425e6199cd0ea48b4550873d441619aa97011e9ea24f60ce9b6"
+

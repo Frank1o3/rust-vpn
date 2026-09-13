@@ -77,7 +77,7 @@ impl TunDevice {
         request.data[..2].copy_from_slice(&flags.to_ne_bytes());
         // SAFETY: `request` is repr(C), initialized, and valid for the kernel
         // to read/write for the duration of this ioctl.
-        if unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF, &mut request) } < 0 {
+        if unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF as libc::Ioctl, &mut request) } < 0 {
             return Err(std::io::Error::last_os_error().into());
         }
         let name = request.assigned_name()?;
