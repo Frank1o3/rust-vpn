@@ -1,0 +1,174 @@
+//! Windows Wintun implementation of the RVPN layer-3 virtual device.
+//!
+//! Windows support intentionally exposes only TUN mode. Wintun is a layer-3
+//! virtual adapter, so TAP and `Both` are rejected instead of attempting to
+//! provide a synthetic layer-2 implementation.
+
+use crate::{DeviceMode, InterfaceError, TunConfig};
+use bytes::Bytes;
+use std::sync::Arc;
+
+const DEFAULT_ADAPTER_NAME: &str = "RVPN";
+const TUNNEL_TYPE: &str = "RVPN";
+const SESSION_CAPACITY: u32 = wintun::MAX_RING_CAPACITY;
+
+/// Windows layer-3 virtual device backed by Wintun.
+pub struct TunDevice {
+    adapter: Arc<wintun::Adapter>,
+    session: Arc<wintun::Session>,
+    name: String,
+    mtu: u16,
+    mode: DeviceMode,
+}
+
+impl TunDevice {
+    /// Creates or opens a Wintun adapter and starts a packet session.
+    ///
+    /// The process must have permission to create the adapter, which normally
+    /// means running elevated when the adapter does not already exist.
+    pub async fn create(config: TunConfig) -> Result<Self, InterfaceError> {
+        config.validate()?;
+
+        if config.mode != DeviceMode::Tun {
+            return Err(InterfaceError::UnsupportedPlatform);
+        }
+
+        let name = config
+            .name
+            .clone()
+            .unwrap_or_else(|| DEFAULT_ADAPTER_NAME.to_owned());
+        let mtu = config.mtu;
+
+        let (adapter, wintun) = tokio::task::spawn_blocking({
+            let name = name.clone();
+            move || -> Result<(Arc<wintun::Adapter>, wintun::Wintun), InterfaceError> {
+                let wintun = unsafe { wintun::load() }.map_err(wintun_error)?;
+                let adapter = match wintun::Adapter::open(&wintun, &name) {
+                    Ok(adapter) => adapter,
+                    Err(_) => wintun::Adapter::create(&wintun, &name, TUNNEL_TYPE, None)
+                        .map_err(wintun_error)?,
+                };
+
+                adapter.set_mtu(usize::from(mtu)).map_err(wintun_error)?;
+                Ok((adapter, wintun))
+            }
+        })
+        .await
+        .map_err(join_error)??;
+
+        let session = Arc::new(
+            adapter
+                .start_session(SESSION_CAPACITY)
+                .map_err(wintun_error)?,
+        );
+
+        let _ = wintun;
+
+        tracing::info!(interface = %name, mtu, "created Windows Wintun virtual device");
+
+        Ok(Self {
+            adapter,
+            session,
+            name,
+            mtu,
+            mode: DeviceMode::Tun,
+        })
+    }
+
+    /// Windows adapter friendly name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Configured maximum IPv4/IPv6 packet payload size.
+    pub const fn mtu(&self) -> u16 {
+        self.mtu
+    }
+
+    /// Windows currently exposes only the TUN/L3 mode.
+    pub const fn mode(&self) -> DeviceMode {
+        self.mode
+    }
+
+    /// Receives one IPv4/IPv6 packet from Wintun.
+    ///
+    /// The Wintun crate currently exposes a blocking receive API rather than a
+    /// native Tokio future, so the blocking operation is isolated on Tokio's
+    /// blocking thread pool. Dropping the device shuts down the Wintun session,
+    /// which also releases a blocked receiver.
+    pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
+        let session = Arc::clone(&self.session);
+        let mtu = self.mtu;
+
+        tokio::task::spawn_blocking(move || {
+            let packet = session.receive_blocking().map_err(wintun_error)?;
+            let bytes = packet.bytes();
+
+            validate_packet(bytes, mtu)?;
+            Ok::<Bytes, InterfaceError>(Bytes::copy_from_slice(bytes))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    /// Sends one IPv4/IPv6 packet through Wintun.
+    pub async fn send(&self, packet: &[u8]) -> Result<(), InterfaceError> {
+        validate_packet(packet, self.mtu)?;
+
+        let session = Arc::clone(&self.session);
+        let packet = packet.to_vec();
+
+        tokio::task::spawn_blocking(move || {
+            let packet_size = u16::try_from(packet.len()).map_err(|_| {
+                InterfaceError::PacketTooLarge {
+                    size: packet.len(),
+                    mtu: u16::MAX,
+                }
+            })?;
+
+            let mut wintun_packet = session
+                .allocate_send_packet(packet_size)
+                .map_err(wintun_error)?;
+            wintun_packet.bytes_mut().copy_from_slice(&packet);
+            session.send_packet(wintun_packet);
+            Ok::<(), InterfaceError>(())
+        })
+        .await
+        .map_err(join_error)?
+    }
+}
+
+impl Drop for TunDevice {
+    fn drop(&mut self) {
+        if let Err(error) = self.session.shutdown() {
+            tracing::debug!(%error, "failed to shut down Wintun session during device drop");
+        }
+
+        // Keep the adapter installed so the next RVPN session can reopen it.
+        // The network client is responsible for configuring and restoring the
+        // host-side routing/address state around the active session.
+        let _ = &self.adapter;
+    }
+}
+
+fn validate_packet(packet: &[u8], mtu: u16) -> Result<(), InterfaceError> {
+    if packet.len() > usize::from(mtu) {
+        return Err(InterfaceError::PacketTooLarge {
+            size: packet.len(),
+            mtu,
+        });
+    }
+
+    match packet.first().map(|byte| byte >> 4) {
+        Some(4 | 6) => Ok(()),
+        _ => Err(InterfaceError::InvalidIpPacket),
+    }
+}
+
+fn wintun_error(error: wintun::Error) -> InterfaceError {
+    InterfaceError::Io(std::io::Error::other(error.to_string()))
+}
+
+fn join_error(error: tokio::task::JoinError) -> InterfaceError {
+    InterfaceError::Io(std::io::Error::other(error.to_string()))
+}
