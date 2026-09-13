@@ -3,16 +3,11 @@
 bind="0.0.0.0:9000"
 pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
 
-ca_public_key="b11a23014ca5e8764c4699d7af2b4167e4e7a2d40756b5c1da5a1c292280f2b0"
-ca_seed="0b7e1d8a205750958f8c215705874556c6c938773a75bc9dddeeca8cee39baed"
-
 [interface]
-    name="rvpn-server0"
-    # Mode options: "tun" (Layer 3 IP), "tap" (Layer 2 Ethernet), or "both" (TUN + TAP concurrently)
     address="10.42.0.1/24"
-    addresses=["fd42::1/64"]
     mode="tun"
     mtu=1400
+    name="rvpn-server0"
 
 [forwarding]
     # Enable NAT masquerade and forwarding to route client internet traffic through the laptop
@@ -24,14 +19,9 @@ ca_seed="0b7e1d8a205750958f8c215705874556c6c938773a75bc9dddeeca8cee39baed"
     tunnel_cidr="10.42.0.0/24"
     tunnel_cidr_v6="fd42::/64"
 
-[[peers]]
-    allowed_ips=["10.42.0.2/32", "fd42::2/128"]
-    local_certificate="2b71d8a8b28676b91c14eccc9d8417749953bdfb381cb59e52792dded5f7110a000000006aa6953a000000007d72983ac36c13bb25eddb0036abb21623cef74a62cab07e7101d295f171ed08ad391dea1ec93225d5e8a993a8f98352e33e4da3ae7f9d3e38da5a97364fbc036cbfb803"
-    local_identity_seed="bd27468fbfe4e87f7c9cc0a122ecfc1f244249f7aaa2cc3d3b83e171c7aab4cf"
-    name="Laptop"
-    pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
-
-[[peers]]
-    allowed_ips=["10.42.0.3/32", "fd42::3/128"]
-    name="Phone"
-    pre_shared_key="a4b7e546efa6d5012f0f07844c3da965a96acb74e1381848d3d1734ef404d2cd"
+[certificate_authority]
+    ca_public_key="7903ffb78d4361f214863ba7fb11a1c496588de2c56fda9ef23167e83af21a67"
+    default_allowed_ips=["10.42.0.2/32"]
+    local_certificate="3b6c7003023d2c63b0f7f265c7674124de7951a9504e788f3f1d60b8967c0bfe000000006aa69cad000000007d729fe9649bbcb416af5738c38c50ae9a49dcb1fa5ae9e011f731a5921a7c4370e0c35732589d8f40f936c3155f19ab0547201e8d5a2fb1e5c8854f4d19b88722219408"
+    local_identity_seed="8a0fc6b23a2589610f23524794467cd9e159cd817d7dcd9e3bfc1ae75fd5ea64"
+    name="test-ca"

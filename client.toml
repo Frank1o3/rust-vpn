@@ -4,12 +4,10 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
 server="192.168.88.254:9000"
 
 [interface]
-    name="rvpn-client0"
-    # Mode options: "tun" (Layer 3 IP), "tap" (Layer 2 Ethernet), or "both" (TUN + TAP concurrently)
     address="10.42.0.2/24"
-    addresses=["fd42::2/64"]
     mode="tun"
     mtu=1400
+    name="rvpn-client0"
 
 [routing]
     # Point-to-point VPN subnets are reachable by default.
@@ -19,3 +17,9 @@ server="192.168.88.254:9000"
     endpoint_gateway="192.168.88.254" # local gateway on main PC to reach LAN
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
+
+[auth]
+    ca_public_key="7903ffb78d4361f214863ba7fb11a1c496588de2c56fda9ef23167e83af21a67"
+    local_certificate="03dcd83022cf92f12a48b2d885418fc8025c1ae0ca942c1dd5a78e0a191319e8000000006aa69cad000000007d729fe99f36d07391e2da10335bb85363d36de53531bb7740b92c210feab06e3553d43af08f72851e5e42ca864dc7b36ce2de90864bb46f2e21bc753d310a080ab1f000"
+    local_identity_seed="6b3dcce6b4aa37832ab530bf6f5e0755e173737af2b4258347b9dd8b137edb3b"
+    mode="certificate"
