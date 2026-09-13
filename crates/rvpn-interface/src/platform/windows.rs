@@ -13,7 +13,7 @@ const TUNNEL_TYPE: &str = "RVPN";
 const SESSION_CAPACITY: u32 = wintun::MAX_RING_CAPACITY;
 
 /// Windows layer-3 virtual device backed by Wintun.
-pub struct TunDevice {
+pub struct VirtualInterface {
     adapter: Arc<wintun::Adapter>,
     session: Arc<wintun::Session>,
     name: String,
@@ -21,7 +21,7 @@ pub struct TunDevice {
     mode: DeviceMode,
 }
 
-impl TunDevice {
+impl VirtualInterface {
     /// Creates or opens a Wintun adapter and starts a packet session.
     ///
     /// The process must have permission to create the adapter, which normally
@@ -117,12 +117,11 @@ impl TunDevice {
         let packet = packet.to_vec();
 
         tokio::task::spawn_blocking(move || {
-            let packet_size = u16::try_from(packet.len()).map_err(|_| {
-                InterfaceError::PacketTooLarge {
+            let packet_size =
+                u16::try_from(packet.len()).map_err(|_| InterfaceError::PacketTooLarge {
                     size: packet.len(),
                     mtu: u16::MAX,
-                }
-            })?;
+                })?;
 
             let mut wintun_packet = session
                 .allocate_send_packet(packet_size)
@@ -136,7 +135,7 @@ impl TunDevice {
     }
 }
 
-impl Drop for TunDevice {
+impl Drop for VirtualInterface {
     fn drop(&mut self) {
         if let Err(error) = self.session.shutdown() {
             tracing::debug!(%error, "failed to shut down Wintun session during device drop");
