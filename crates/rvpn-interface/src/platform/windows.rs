@@ -30,7 +30,7 @@ impl TunDevice {
         config.validate()?;
 
         if config.mode != DeviceMode::Tun {
-            return Err(InterfaceError::UnsupportedPlatform);
+            return Err(InterfaceError::UnsupportedMode(config.mode));
         }
 
         let name = config
@@ -39,7 +39,7 @@ impl TunDevice {
             .unwrap_or_else(|| DEFAULT_ADAPTER_NAME.to_owned());
         let mtu = config.mtu;
 
-        let (adapter, wintun) = tokio::task::spawn_blocking({
+        let (adapter, _wintun) = tokio::task::spawn_blocking({
             let name = name.clone();
             move || -> Result<(Arc<wintun::Adapter>, wintun::Wintun), InterfaceError> {
                 let wintun = unsafe { wintun::load() }.map_err(wintun_error)?;
@@ -61,8 +61,6 @@ impl TunDevice {
                 .start_session(SESSION_CAPACITY)
                 .map_err(wintun_error)?,
         );
-
-        let _ = wintun;
 
         tracing::info!(interface = %name, mtu, "created Windows Wintun virtual device");
 
