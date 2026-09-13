@@ -34,10 +34,3 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
         local_identity_seed="8a0fc6b23a2589610f23524794467cd9e159cd817d7dcd9e3bfc1ae75fd5ea64"
         mode="pinned-key"
         peer_public_key="1e9bb0646ae8ab6be13717b29082b71abfb6dd830de6adb8941cae2bc252286d"
-
-[certificate_authority]
-    ca_public_key="7903ffb78d4361f214863ba7fb11a1c496588de2c56fda9ef23167e83af21a67"
-    default_allowed_ips=["10.42.0.2/32"]
-    local_certificate="3b6c7003023d2c63b0f7f265c7674124de7951a9504e788f3f1d60b8967c0bfe000000006aa69cad000000007d729fe9649bbcb416af5738c38c50ae9a49dcb1fa5ae9e011f731a5921a7c4370e0c35732589d8f40f936c3155f19ab0547201e8d5a2fb1e5c8854f4d19b88722219408"
-    local_identity_seed="8a0fc6b23a2589610f23524794467cd9e159cd817d7dcd9e3bfc1ae75fd5ea64"
-    name="test-ca"
