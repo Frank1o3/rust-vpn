@@ -9,7 +9,7 @@
         "crates/rvpn-protocol",
         "crates/rvpn-transport",
     ] # We exlude rvpn-android since its for the android users
-    members=["apps/rvpn-android", "apps/rvpn-client", "apps/rvpn-server", "apps/rvpn-windows", "crates/rvpn-config", "crates/rvpn-core", "crates/rvpn-crypto", "crates/rvpn-interface", "crates/rvpn-protocol", "crates/rvpn-transport"]
+    members=["apps/rvpn-android", "apps/rvpn-client", "apps/rvpn-server", "crates/rvpn-config", "crates/rvpn-core", "crates/rvpn-crypto", "crates/rvpn-interface", "crates/rvpn-protocol", "crates/rvpn-transport"]
     resolver="3"
 
     [workspace.package]

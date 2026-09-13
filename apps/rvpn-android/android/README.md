@@ -21,7 +21,7 @@ Android 10+ (API 29+) VPN client for the RVPN protocol.
                             │ JNI (RvpnNative)
 ┌───────────────────────────▼────────────────────────────┐
 │           Rust Native Core (librvpn_android.so)        │
-│  - Wraps TUN fd via TunDevice::from_raw_fd()           │
+│  - Wraps TUN fd via VirtualInterface::from_raw_fd()           │
 │  - Runs Tokio event loop (handshake, seal/open, rekey) │
 │  - Handles graceful shutdown via watch channel         │
 └────────────────────────────────────────────────────────┘

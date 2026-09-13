@@ -7,7 +7,7 @@ mod tunnel;
 use anyhow::{Context, Result};
 use rvpn_config::{DeviceMode, ServerConfig};
 use rvpn_crypto::AEAD_TAG_LEN;
-use rvpn_interface::{DEFAULT_MTU, TunConfig, TunDevice};
+use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport};
 use std::{env, fs};
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
 
     let (tun, tap) = match mode {
         DeviceMode::Tun => {
-            let dev = TunDevice::create(TunConfig {
+            let dev = VirtualInterface::create(TunConfig {
                 name: config.interface.name.clone(),
                 mtu,
                 mode: DeviceMode::Tun,
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
             (Some(dev), None)
         }
         DeviceMode::Tap => {
-            let dev = TunDevice::create(TunConfig {
+            let dev = VirtualInterface::create(TunConfig {
                 name: config.interface.name.clone(),
                 mtu,
                 mode: DeviceMode::Tap,
@@ -73,13 +73,13 @@ async fn main() -> Result<()> {
                     .as_ref()
                     .map(|n| format!("{}-tap", n.chars().take(11).collect::<String>()))
             });
-            let tun_dev = TunDevice::create(TunConfig {
+            let tun_dev = VirtualInterface::create(TunConfig {
                 name: tun_name,
                 mtu,
                 mode: DeviceMode::Tun,
             })
             .await?;
-            let tap_dev = TunDevice::create(TunConfig {
+            let tap_dev = VirtualInterface::create(TunConfig {
                 name: tap_name,
                 mtu,
                 mode: DeviceMode::Tap,

@@ -4,7 +4,7 @@ use anyhow::Result;
 use rvpn_config::{CertificateAuthorityConfig, DeviceMode, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
-use rvpn_interface::TunDevice;
+use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
 use rvpn_transport::{SendOptions, UdpTransport};
 use std::{collections::HashMap, time::Duration};
@@ -35,8 +35,8 @@ pub async fn run_server_loop(
     certificate_authority: Option<CertificateAuthorityConfig>,
     obfuscation: Option<ObfuscationKey>,
     mode: DeviceMode,
-    tun: Option<TunDevice>,
-    tap: Option<TunDevice>,
+    tun: Option<VirtualInterface>,
+    tap: Option<VirtualInterface>,
     forwarding: ForwardingGuard,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {

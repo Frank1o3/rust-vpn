@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use rvpn_config::{DeviceMode, HandshakeConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
-use rvpn_interface::TunDevice;
+use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
@@ -58,7 +58,7 @@ pub async fn run_tunnel(
     // Take ownership of the Android TUN fd immediately. This guarantees that
     // every error path after this point drops the fd and tears down the VPN
     // interface instead of leaving Android's VPN interface orphaned.
-    let tun = TunDevice::from_raw_fd(
+    let tun = VirtualInterface::from_raw_fd(
         config.tun_fd,
         "rvpn-android".into(),
         config.mtu,

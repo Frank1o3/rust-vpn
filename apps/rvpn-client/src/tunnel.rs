@@ -3,7 +3,7 @@
 use anyhow::Result;
 use rvpn_config::ClientConfig;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
-use rvpn_interface::TunDevice;
+use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
 use rvpn_transport::{SendOptions, UdpTransport};
 use std::net::SocketAddr;
@@ -25,8 +25,8 @@ pub async fn run_data_plane(
     server: SocketAddr,
     auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
-    tun: Option<&TunDevice>,
-    tap: Option<&TunDevice>,
+    tun: Option<&VirtualInterface>,
+    tap: Option<&VirtualInterface>,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {
     loop {

@@ -51,14 +51,14 @@ impl IfReq {
 }
 
 /// Asynchronous Linux TUN/TAP virtual device.
-pub struct TunDevice {
+pub struct VirtualInterface {
     file: AsyncFd<File>,
     name: String,
     mtu: u16,
     mode: DeviceMode,
 }
 
-impl TunDevice {
+impl VirtualInterface {
     /// Creates a non-persistent Linux TUN/TAP device and brings it up.
     /// Closing/dropping this object closes its descriptor; Linux then removes
     /// a non-persistent device.
@@ -77,7 +77,14 @@ impl TunDevice {
         request.data[..2].copy_from_slice(&flags.to_ne_bytes());
         // SAFETY: `request` is repr(C), initialized, and valid for the kernel
         // to read/write for the duration of this ioctl.
-        if unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETIFF as libc::Ioctl, &mut request) } < 0 {
+        if unsafe {
+            libc::ioctl(
+                file.as_raw_fd(),
+                libc::TUNSETIFF as libc::Ioctl,
+                &mut request,
+            )
+        } < 0
+        {
             return Err(std::io::Error::last_os_error().into());
         }
         let name = request.assigned_name()?;
@@ -308,7 +315,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires /dev/net/tun plus CAP_NET_ADMIN; run with cargo test -p rvpn-interface -- --ignored"]
     async fn creates_a_real_tun_device() {
-        let tun = TunDevice::create(TunConfig::default()).await.unwrap();
+        let tun = VirtualInterface::create(TunConfig::default())
+            .await
+            .unwrap();
         assert!(!tun.name().is_empty());
         assert_eq!(tun.mtu(), crate::DEFAULT_MTU);
     }
@@ -318,7 +327,8 @@ mod tests {
         let mut fds = [0; 2];
         let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         assert_eq!(rc, 0);
-        let dev = TunDevice::from_raw_fd(fds[0], "test-tun".into(), 1400, DeviceMode::Tun).unwrap();
+        let dev = VirtualInterface::from_raw_fd(fds[0], "test-tun".into(), 1400, DeviceMode::Tun)
+            .unwrap();
         assert_eq!(dev.name(), "test-tun");
         assert_eq!(dev.mtu(), 1400);
         assert_eq!(dev.mode(), DeviceMode::Tun);

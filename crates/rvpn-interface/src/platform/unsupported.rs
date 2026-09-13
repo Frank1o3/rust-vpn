@@ -2,9 +2,9 @@ use crate::{DeviceMode, InterfaceError, TunConfig};
 use bytes::Bytes;
 
 /// Placeholder for a future native platform implementation.
-pub struct TunDevice;
+pub struct VirtualInterface;
 
-impl TunDevice {
+impl VirtualInterface {
     /// Always reports that this platform has no implementation yet.
     pub async fn create(_: TunConfig) -> Result<Self, InterfaceError> {
         Err(InterfaceError::UnsupportedPlatform)

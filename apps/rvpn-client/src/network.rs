@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result, bail};
 use rvpn_config::ClientConfig;
-use rvpn_interface::TunDevice;
+use rvpn_interface::VirtualInterface;
 use std::net::SocketAddr;
 use tokio::process::Command;
 
 pub async fn configure_client_network(
-    dev: &TunDevice,
+    dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
 ) -> Result<()> {
@@ -111,7 +111,11 @@ async fn preserve_server_route(server: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-pub async fn teardown_client_network(dev: &TunDevice, config: &ClientConfig, server: SocketAddr) {
+pub async fn teardown_client_network(
+    dev: &VirtualInterface,
+    config: &ClientConfig,
+    server: SocketAddr,
+) {
     if config.routing.default_route {
         for half in ["0.0.0.0/1", "128.0.0.0/1"] {
             let _ = run("ip", ["route", "del", half, "dev", dev.name()]).await;

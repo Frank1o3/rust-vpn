@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use rvpn_config::ServerConfig;
-use rvpn_interface::TunDevice;
+use rvpn_interface::VirtualInterface;
 use std::net::IpAddr;
 use tokio::process::Command;
 
@@ -78,7 +78,10 @@ pub fn ethernet_payload_ip(frame: &[u8], is_dest: bool) -> Option<IpAddr> {
 }
 
 /// Assigns IP addresses and activates the server's virtual interface.
-pub async fn configure_server_interface(dev: &TunDevice, config: &ServerConfig) -> Result<()> {
+pub async fn configure_server_interface(
+    dev: &VirtualInterface,
+    config: &ServerConfig,
+) -> Result<()> {
     if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
         for address in config
             .interface
