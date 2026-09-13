@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,8 +40,17 @@ class MainActivity : AppCompatActivity() {
 
     // Server section
     private lateinit var serverInput: EditText
+    private lateinit var authModeGroup: RadioGroup
+    private lateinit var pskGroup: View
+    private lateinit var pinnedKeyGroup: View
+    private lateinit var certificateGroup: View
     private lateinit var pskInput: EditText
     private lateinit var generatePskButton: Button
+    private lateinit var identitySeedInput: EditText
+    private lateinit var peerPublicKeyInput: EditText
+    private lateinit var certIdentitySeedInput: EditText
+    private lateinit var certificateInput: EditText
+    private lateinit var caPublicKeyInput: EditText
 
     // Advanced section
     private lateinit var retryIntervalInput: EditText
@@ -101,9 +111,22 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.saveTunnelButton).setOnClickListener { saveTunnelSection() }
 
         serverInput = findViewById(R.id.serverInput)
+        authModeGroup = findViewById(R.id.authModeGroup)
+        pskGroup = findViewById(R.id.pskGroup)
+        pinnedKeyGroup = findViewById(R.id.pinnedKeyGroup)
+        certificateGroup = findViewById(R.id.certificateGroup)
         pskInput = findViewById(R.id.pskInput)
         generatePskButton = findViewById(R.id.generatePskButton)
+        identitySeedInput = findViewById(R.id.identitySeedInput)
+        peerPublicKeyInput = findViewById(R.id.peerPublicKeyInput)
+        certIdentitySeedInput = findViewById(R.id.certIdentitySeedInput)
+        certificateInput = findViewById(R.id.certificateInput)
+        caPublicKeyInput = findViewById(R.id.caPublicKeyInput)
         findViewById<Button>(R.id.saveServerButton).setOnClickListener { saveServerSection() }
+
+        authModeGroup.setOnCheckedChangeListener { _, checkedId ->
+            showAuthGroup(authModeFromCheckedId(checkedId))
+        }
 
         retryIntervalInput = findViewById(R.id.retryIntervalInput)
         retryLimitInput = findViewById(R.id.retryLimitInput)
@@ -173,6 +196,24 @@ class MainActivity : AppCompatActivity() {
         sections.forEach { (sectionId, view) -> view.visibility = if (sectionId == id) View.VISIBLE else View.GONE }
     }
 
+    private fun authModeFromCheckedId(checkedId: Int): String = when (checkedId) {
+        R.id.radioPinnedKey -> "pinned-key"
+        R.id.radioCertificate -> "certificate"
+        else -> "psk"
+    }
+
+    private fun checkedIdFromAuthMode(mode: String): Int = when (mode) {
+        "pinned-key" -> R.id.radioPinnedKey
+        "certificate" -> R.id.radioCertificate
+        else -> R.id.radioPsk
+    }
+
+    private fun showAuthGroup(mode: String) {
+        pskGroup.visibility = if (mode == "psk") View.VISIBLE else View.GONE
+        pinnedKeyGroup.visibility = if (mode == "pinned-key") View.VISIBLE else View.GONE
+        certificateGroup.visibility = if (mode == "certificate") View.VISIBLE else View.GONE
+    }
+
     /** Grays out the IPv6 fields but never clears them, so a value typed in
      *  while disabled is still there if the switch is re-enabled later. */
     private fun applyIpv6Enabled(enabled: Boolean) {
@@ -199,7 +240,14 @@ class MainActivity : AppCompatActivity() {
         applyIpv6Enabled(config.ipv6Enabled)
 
         serverInput.setText(config.server)
+        authModeGroup.check(checkedIdFromAuthMode(config.authMode))
+        showAuthGroup(config.authMode)
         pskInput.setText(config.preSharedKey)
+        identitySeedInput.setText(config.localIdentitySeed)
+        peerPublicKeyInput.setText(config.peerPublicKey)
+        certIdentitySeedInput.setText(config.localIdentitySeed)
+        certificateInput.setText(config.localCertificate)
+        caPublicKeyInput.setText(config.caPublicKey)
 
         retryIntervalInput.setText(config.retryIntervalMs.toString())
         retryLimitInput.setText(config.retryLimit.toString())
@@ -208,24 +256,34 @@ class MainActivity : AppCompatActivity() {
         excludedAppsInput.setText(config.excludedApps.joinToString(", "))
     }
 
-    private fun currentConfig(): RvpnConfig = RvpnConfig.load(this).copy(
-        tunnelAddress = tunnelIpInput.text.toString().trim().ifEmpty { "10.42.0.2" },
-        ipv6Enabled = ipv6EnableSwitch.isChecked,
-        tunnelAddressV6 = tunnelIpv6Input.text.toString().trim(),
-        useDefaultRouteV4 = routeAllV4Switch.isChecked,
-        splitTunnelRoutesV4 = splitRoutesV4Input.text.toString().trim(),
-        useDefaultRouteV6 = routeAllV6Switch.isChecked,
-        splitTunnelRoutesV6 = splitRoutesV6Input.text.toString().trim(),
-        dnsServers = dnsInput.text.toString().trim().ifEmpty { "1.1.1.1" },
-        server = serverInput.text.toString().trim(),
-        preSharedKey = pskInput.text.toString().trim(),
-        retryIntervalMs = retryIntervalInput.text.toString().toLongOrNull() ?: 500L,
-        retryLimit = retryLimitInput.text.toString().toIntOrNull() ?: 5,
-        rekeyPacketLimit = rekeyLimitInput.text.toString().toLongOrNull() ?: 1048576L,
-        mtu = mtuInput.text.toString().toIntOrNull() ?: 1400,
-        excludedApps = excludedAppsInput.text.toString().split(",")
-            .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-    )
+    private fun currentConfig(): RvpnConfig {
+        val mode = authModeFromCheckedId(authModeGroup.checkedRadioButtonId)
+        val seed = if (mode == "certificate") certIdentitySeedInput.text.toString().trim()
+        else identitySeedInput.text.toString().trim()
+        return RvpnConfig.load(this).copy(
+            tunnelAddress = tunnelIpInput.text.toString().trim().ifEmpty { "10.42.0.2" },
+            ipv6Enabled = ipv6EnableSwitch.isChecked,
+            tunnelAddressV6 = tunnelIpv6Input.text.toString().trim(),
+            useDefaultRouteV4 = routeAllV4Switch.isChecked,
+            splitTunnelRoutesV4 = splitRoutesV4Input.text.toString().trim(),
+            useDefaultRouteV6 = routeAllV6Switch.isChecked,
+            splitTunnelRoutesV6 = splitRoutesV6Input.text.toString().trim(),
+            dnsServers = dnsInput.text.toString().trim().ifEmpty { "1.1.1.1" },
+            server = serverInput.text.toString().trim(),
+            authMode = mode,
+            preSharedKey = pskInput.text.toString().trim(),
+            localIdentitySeed = seed,
+            peerPublicKey = peerPublicKeyInput.text.toString().trim(),
+            localCertificate = certificateInput.text.toString().trim(),
+            caPublicKey = caPublicKeyInput.text.toString().trim(),
+            retryIntervalMs = retryIntervalInput.text.toString().toLongOrNull() ?: 500L,
+            retryLimit = retryLimitInput.text.toString().toIntOrNull() ?: 5,
+            rekeyPacketLimit = rekeyLimitInput.text.toString().toLongOrNull() ?: 1048576L,
+            mtu = mtuInput.text.toString().toIntOrNull() ?: 1400,
+            excludedApps = excludedAppsInput.text.toString().split(",")
+                .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        )
+    }
 
     private fun saveTunnelSection() {
         RvpnConfig.save(this, currentConfig())
@@ -237,9 +295,37 @@ class MainActivity : AppCompatActivity() {
             serverInput.error = "Server address required"
             return
         }
-        if (pskInput.text.toString().trim().length != 64) {
-            pskInput.error = "PSK must be 64 hexadecimal characters"
-            return
+        when (authModeFromCheckedId(authModeGroup.checkedRadioButtonId)) {
+            "psk" -> if (pskInput.text.toString().trim().length != 64) {
+                pskInput.error = "PSK must be 64 hexadecimal characters"
+                return
+            }
+
+            "pinned-key" -> {
+                if (identitySeedInput.text.toString().trim().length != 64) {
+                    identitySeedInput.error = "Identity seed must be 64 hexadecimal characters"
+                    return
+                }
+                if (peerPublicKeyInput.text.toString().trim().length != 64) {
+                    peerPublicKeyInput.error = "Public key must be 64 hexadecimal characters"
+                    return
+                }
+            }
+
+            "certificate" -> {
+                if (certIdentitySeedInput.text.toString().trim().length != 64) {
+                    certIdentitySeedInput.error = "Identity seed must be 64 hexadecimal characters"
+                    return
+                }
+                if (certificateInput.text.toString().trim().length != 224) {
+                    certificateInput.error = "Certificate must be 224 hexadecimal characters"
+                    return
+                }
+                if (caPublicKeyInput.text.toString().trim().length != 64) {
+                    caPublicKeyInput.error = "CA public key must be 64 hexadecimal characters"
+                    return
+                }
+            }
         }
         RvpnConfig.save(this, currentConfig())
         Toast.makeText(this, "Server settings saved", Toast.LENGTH_SHORT).show()
@@ -261,9 +347,17 @@ class MainActivity : AppCompatActivity() {
             serverInput.error = "Server address required"
             return
         }
-        if (config.preSharedKey.length != 64) {
+        val authValid = when (config.authMode) {
+            "psk" -> config.preSharedKey.length == 64
+            "pinned-key" -> config.localIdentitySeed.length == 64 && config.peerPublicKey.length == 64
+            "certificate" -> config.localIdentitySeed.length == 64 &&
+                    config.localCertificate.length == 224 && config.caPublicKey.length == 64
+
+            else -> false
+        }
+        if (!authValid) {
             showSection(R.id.nav_server)
-            pskInput.error = "PSK must be 64 hexadecimal characters"
+            Toast.makeText(this, "Fix the authentication fields before connecting", Toast.LENGTH_SHORT).show()
             return
         }
         val prepareIntent = VpnService.prepare(this)

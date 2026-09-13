@@ -112,7 +112,12 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
     _class: JClass<'local>,
     vpn_service: JObject<'local>,
     server_str: JString<'local>,
+    auth_mode_str: JString<'local>,
     psk_hex_str: JString<'local>,
+    local_identity_seed_str: JString<'local>,
+    peer_public_key_str: JString<'local>,
+    local_certificate_str: JString<'local>,
+    ca_public_key_str: JString<'local>,
     tun_fd: jint,
     mtu: jint,
     rekey_limit: jlong,
@@ -127,46 +132,82 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 return Ok(env.new_string("tunnel is already running")?.into_raw());
             }
 
-            let server_rust: String = match server_str.mutf8_chars(env) {
-                Ok(s) => s.into(),
-                Err(e) => {
+            macro_rules! read_str {
+                ($jstr:expr, $label:literal) => {
+                    match $jstr.mutf8_chars(env) {
+                        Ok(s) => String::from(s),
+                        Err(e) => {
+                            TUNNEL_RUNNING.store(false, Ordering::SeqCst);
+                            return Ok(env
+                                .new_string(format!("invalid {} string: {e}", $label))?
+                                .into_raw());
+                        }
+                    }
+                };
+            }
+            macro_rules! fail {
+                ($msg:expr) => {{
                     TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                    return Ok(env
-                        .new_string(format!("invalid server string: {e}"))?
-                        .into_raw());
-                }
-            };
+                    return Ok(env.new_string($msg)?.into_raw());
+                }};
+            }
+            macro_rules! decode_hex {
+                ($hex:expr, $len:expr, $label:literal) => {{
+                    if $hex.len() != $len * 2 {
+                        fail!(format!(
+                            "{} must be exactly {} hexadecimal characters",
+                            $label,
+                            $len * 2
+                        ));
+                    }
+                    let mut buf = [0u8; $len];
+                    if hex::decode_to_slice(&$hex, &mut buf).is_err() {
+                        fail!(format!("invalid hex encoding for {}", $label));
+                    }
+                    buf
+                }};
+            }
 
+            let server_rust = read_str!(server_str, "server");
             if let Err(e) = rvpn_config::validate_endpoint_syntax(&server_rust) {
-                TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                return Ok(env
-                    .new_string(format!("invalid server endpoint '{server_rust}': {e}"))?
-                    .into_raw());
+                fail!(format!("invalid server endpoint '{server_rust}': {e}"));
             }
 
-            let psk_hex: String = match psk_hex_str.mutf8_chars(env) {
-                Ok(s) => s.into(),
-                Err(e) => {
-                    TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                    return Ok(env
-                        .new_string(format!("invalid psk string: {e}"))?
-                        .into_raw());
+            let auth_mode = read_str!(auth_mode_str, "auth mode");
+            let psk_hex = read_str!(psk_hex_str, "psk");
+            let local_identity_seed_hex = read_str!(local_identity_seed_str, "local identity seed");
+            let peer_public_key_hex = read_str!(peer_public_key_str, "peer public key");
+            let local_certificate_hex = read_str!(local_certificate_str, "local certificate");
+            let ca_public_key_hex = read_str!(ca_public_key_str, "ca public key");
+
+            let auth = match auth_mode.as_str() {
+                "psk" => {
+                    let bytes = decode_hex!(psk_hex, 32, "pre-shared key");
+                    rvpn_crypto::AuthConfig::Psk(bytes)
                 }
+                "pinned-key" => {
+                    let local_seed =
+                        decode_hex!(local_identity_seed_hex, 32, "local identity seed");
+                    let peer_public_key = decode_hex!(peer_public_key_hex, 32, "peer public key");
+                    rvpn_crypto::AuthConfig::PinnedKey {
+                        local_seed,
+                        peer_public_key,
+                    }
+                }
+                "certificate" => {
+                    let local_seed =
+                        decode_hex!(local_identity_seed_hex, 32, "local identity seed");
+                    let local_certificate =
+                        decode_hex!(local_certificate_hex, 112, "local certificate");
+                    let ca_public_key = decode_hex!(ca_public_key_hex, 32, "ca public key");
+                    rvpn_crypto::AuthConfig::Certificate {
+                        local_seed,
+                        local_certificate,
+                        ca_public_key,
+                    }
+                }
+                other => fail!(format!("unknown auth mode '{other}'")),
             };
-
-            let mut psk_bytes = [0u8; 32];
-            if psk_hex.len() != 64 {
-                TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                return Ok(env
-                    .new_string("pre-shared key must be exactly 64 hexadecimal characters")?
-                    .into_raw());
-            }
-            if let Err(e) = hex::decode_to_slice(&psk_hex, &mut psk_bytes) {
-                TUNNEL_RUNNING.store(false, Ordering::SeqCst);
-                return Ok(env
-                    .new_string(format!("invalid PSK hex encoding: {e}"))?
-                    .into_raw());
-            }
 
             // Hold a global reference to the VpnService instance so the socket
             // protector closure can call back into it from the Tokio thread.
@@ -211,7 +252,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             let config = AndroidTunnelConfig {
                 tun_fd,
                 server: server_rust,
-                psk: psk_bytes,
+                auth,
                 obfuscation_key: None,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },
                 rekey_packet_limit: if rekey_limit < 0 {

@@ -19,6 +19,22 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
     tunnel_cidr="10.42.0.0/24"
     tunnel_cidr_v6="fd42::/64"
 
+[[peers]]
+    allowed_ips=["10.42.0.2/32"]
+    name="laptop"
+    [peers.auth]
+        local_identity_seed="8a0fc6b23a2589610f23524794467cd9e159cd817d7dcd9e3bfc1ae75fd5ea64"
+        mode="pinned-key"
+        peer_public_key="03dcd83022cf92f12a48b2d885418fc8025c1ae0ca942c1dd5a78e0a191319e8"
+
+[[peers]]
+    allowed_ips=["10.42.0.3/32"]
+    name="phone"
+    [peers.auth]
+        local_identity_seed="8a0fc6b23a2589610f23524794467cd9e159cd817d7dcd9e3bfc1ae75fd5ea64"
+        mode="pinned-key"
+        peer_public_key="1e9bb0646ae8ab6be13717b29082b71abfb6dd830de6adb8941cae2bc252286d"
+
 [certificate_authority]
     ca_public_key="7903ffb78d4361f214863ba7fb11a1c496588de2c56fda9ef23167e83af21a67"
     default_allowed_ips=["10.42.0.2/32"]

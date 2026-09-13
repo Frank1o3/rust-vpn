@@ -131,7 +131,12 @@ class RvpnService : VpnService() {
             val error = RvpnNative.startTunnel(
                 vpnService = this,
                 server = config.server,
+                authMode = config.authMode,
                 pskHex = config.preSharedKey,
+                localIdentitySeedHex = config.localIdentitySeed,
+                peerPublicKeyHex = config.peerPublicKey,
+                localCertificateHex = config.localCertificate,
+                caPublicKeyHex = config.caPublicKey,
                 tunFd = tunFd,
                 mtu = config.mtu,
                 rekeyPacketLimit = config.rekeyPacketLimit,

@@ -11,44 +11,115 @@
         android:orientation="vertical">
 
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Advanced" android:textSize="22sp" android:textStyle="bold"
+            android:text="Server Settings" android:textSize="22sp" android:textStyle="bold"
             android:layout_marginBottom="16dp" />
 
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Handshake retry interval (ms)" android:textStyle="bold"
+            android:text="Server Endpoint (IP:Port)" android:textStyle="bold"
             android:layout_marginBottom="4dp" />
-        <EditText android:id="@+id/retryIntervalInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="500" android:inputType="number"
-            android:layout_marginBottom="16dp" />
+        <EditText android:id="@+id/serverInput" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:hint="e.g. 192.168.1.100:9000"
+            android:inputType="textUri" android:layout_marginBottom="16dp" />
 
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Handshake retry limit" android:textStyle="bold"
+            android:text="Authentication Mode" android:textStyle="bold"
             android:layout_marginBottom="4dp" />
-        <EditText android:id="@+id/retryLimitInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="5" android:inputType="number"
-            android:layout_marginBottom="16dp" />
+        <RadioGroup android:id="@+id/authModeGroup" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="vertical"
+            android:layout_marginBottom="12dp">
+            <RadioButton android:id="@+id/radioPsk" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="Pre-Shared Key" />
+            <RadioButton android:id="@+id/radioPinnedKey" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="Pinned Public Key" />
+            <RadioButton android:id="@+id/radioCertificate" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="Certificate (CA-signed)" />
+        </RadioGroup>
 
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Rekey packet limit (0 = disabled)" android:textStyle="bold"
-            android:layout_marginBottom="4dp" />
-        <EditText android:id="@+id/rekeyLimitInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="1048576" android:inputType="number"
-            android:layout_marginBottom="16dp" />
+        <!-- PSK fields -->
+        <LinearLayout android:id="@+id/pskGroup" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="vertical">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Pre-Shared Key (64 hex chars)" android:textStyle="bold" />
+                <Button android:id="@+id/generatePskButton" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="Generate"
+                    android:textSize="12sp" />
+            </LinearLayout>
+            <EditText android:id="@+id/pskInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="32-byte hexadecimal PSK"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="8dp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Each device (laptop, phone, etc.) needs its own PSK and allowed_ips entry in server.toml — don't reuse the same key across devices."
+                android:textSize="12sp" android:textColor="#757575"
+                android:layout_marginBottom="16dp" />
+        </LinearLayout>
 
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="MTU" android:textStyle="bold" android:layout_marginBottom="4dp" />
-        <EditText android:id="@+id/mtuInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="1400" android:inputType="number"
-            android:layout_marginBottom="16dp" />
+        <!-- Pinned-key fields -->
+        <LinearLayout android:id="@+id/pinnedKeyGroup" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="vertical"
+            android:visibility="gone">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="This Device's Identity Seed (64 hex chars)" android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+            <EditText android:id="@+id/identitySeedInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="32-byte hex seed"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="12dp" />
 
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Excluded apps (package names, comma-separated)" android:textStyle="bold"
-            android:layout_marginBottom="4dp" />
-        <EditText android:id="@+id/excludedAppsInput" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:hint="com.example.app, com.other.app"
-            android:inputType="textMultiLine" android:layout_marginBottom="16dp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Server's Public Key (64 hex chars)" android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+            <EditText android:id="@+id/peerPublicKeyInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="32-byte hex public key"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="8dp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Generate identities with `cargo run -p rvpn-crypto --example gen_ca_and_cert` (or a raw keypair tool) on your PC. The server must list this device's public key as one of its peers."
+                android:textSize="12sp" android:textColor="#757575"
+                android:layout_marginBottom="16dp" />
+        </LinearLayout>
 
-        <Button android:id="@+id/saveAdvancedButton" android:layout_width="match_parent"
+        <!-- Certificate fields -->
+        <LinearLayout android:id="@+id/certificateGroup" android:layout_width="match_parent"
+            android:layout_height="wrap_content" android:orientation="vertical"
+            android:visibility="gone">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="This Device's Identity Seed (64 hex chars)" android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+            <EditText android:id="@+id/certIdentitySeedInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="32-byte hex seed"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="12dp" />
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="This Device's Certificate (224 hex chars)" android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+            <EditText android:id="@+id/certificateInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="112-byte hex certificate"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="12dp" />
+
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="CA Public Key (64 hex chars)" android:textStyle="bold"
+                android:layout_marginBottom="4dp" />
+            <EditText android:id="@+id/caPublicKeyInput" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:hint="32-byte hex public key"
+                android:fontFamily="monospace" android:inputType="textNoSuggestions"
+                android:layout_marginBottom="8dp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Any device holding a certificate signed by this CA can connect — the server does not need to list it individually."
+                android:textSize="12sp" android:textColor="#757575"
+                android:layout_marginBottom="16dp" />
+        </LinearLayout>
+
+        <Button android:id="@+id/saveServerButton" android:layout_width="match_parent"
             android:layout_height="wrap_content" android:text="Save" />
 
     </LinearLayout>

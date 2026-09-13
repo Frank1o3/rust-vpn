@@ -20,8 +20,6 @@ pub struct InitiatorHandshake {
 
 /// Responder state after emitting an authenticated response.
 pub struct ResponderHandshake {
-    #[warn(dead_code)]
-    identity: AuthIdentity,
     verifier: AuthVerifier,
     key_pair: EphemeralKeyPair,
     transcript: HandshakeTranscript,
@@ -254,7 +252,6 @@ impl ResponderHandshake {
         transcript.set_response(response)?;
         Ok((
             Self {
-                identity,
                 verifier,
                 key_pair,
                 transcript,

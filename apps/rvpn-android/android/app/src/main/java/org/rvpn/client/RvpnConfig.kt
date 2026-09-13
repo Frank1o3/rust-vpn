@@ -8,7 +8,17 @@ import java.security.SecureRandom
  */
 data class RvpnConfig(
     val server: String = "10.0.0.1:9000",
+    /** "psk", "pinned-key", or "certificate". */
+    val authMode: String = "psk",
     val preSharedKey: String = "",
+    /** Used by pinned-key and certificate modes: this device's own Ed25519 seed. */
+    val localIdentitySeed: String = "",
+    /** Used by pinned-key mode: the server's exact Ed25519 public key. */
+    val peerPublicKey: String = "",
+    /** Used by certificate mode: this device's cert, issued by the trusted CA. */
+    val localCertificate: String = "",
+    /** Used by certificate mode: the CA's public key. */
+    val caPublicKey: String = "",
     val tunnelAddress: String = "10.42.0.2",
     val tunnelPrefixLength: Int = 24,
     val ipv6Enabled: Boolean = false,
@@ -32,7 +42,12 @@ data class RvpnConfig(
     companion object {
         private const val PREFS_NAME = "rvpn_prefs"
         private const val KEY_SERVER = "server"
+        private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_PSK = "psk"
+        private const val KEY_LOCAL_IDENTITY_SEED = "local_identity_seed"
+        private const val KEY_PEER_PUBLIC_KEY = "peer_public_key"
+        private const val KEY_LOCAL_CERTIFICATE = "local_certificate"
+        private const val KEY_CA_PUBLIC_KEY = "ca_public_key"
         private const val KEY_TUNNEL_ADDR = "tunnel_addr"
         private const val KEY_TUNNEL_PREFIX = "tunnel_prefix"
         private const val KEY_IPV6_ENABLED = "ipv6_enabled"
@@ -53,7 +68,12 @@ data class RvpnConfig(
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return RvpnConfig(
                 server = prefs.getString(KEY_SERVER, "10.0.0.1:9000") ?: "10.0.0.1:9000",
+                authMode = prefs.getString(KEY_AUTH_MODE, "psk") ?: "psk",
                 preSharedKey = prefs.getString(KEY_PSK, "") ?: "",
+                localIdentitySeed = prefs.getString(KEY_LOCAL_IDENTITY_SEED, "") ?: "",
+                peerPublicKey = prefs.getString(KEY_PEER_PUBLIC_KEY, "") ?: "",
+                localCertificate = prefs.getString(KEY_LOCAL_CERTIFICATE, "") ?: "",
+                caPublicKey = prefs.getString(KEY_CA_PUBLIC_KEY, "") ?: "",
                 tunnelAddress = prefs.getString(KEY_TUNNEL_ADDR, "10.42.0.2") ?: "10.42.0.2",
                 tunnelPrefixLength = prefs.getInt(KEY_TUNNEL_PREFIX, 24),
                 ipv6Enabled = prefs.getBoolean(KEY_IPV6_ENABLED, false),
@@ -76,7 +96,12 @@ data class RvpnConfig(
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_SERVER, config.server)
+                .putString(KEY_AUTH_MODE, config.authMode)
                 .putString(KEY_PSK, config.preSharedKey)
+                .putString(KEY_LOCAL_IDENTITY_SEED, config.localIdentitySeed)
+                .putString(KEY_PEER_PUBLIC_KEY, config.peerPublicKey)
+                .putString(KEY_LOCAL_CERTIFICATE, config.localCertificate)
+                .putString(KEY_CA_PUBLIC_KEY, config.caPublicKey)
                 .putString(KEY_TUNNEL_ADDR, config.tunnelAddress)
                 .putInt(KEY_TUNNEL_PREFIX, config.tunnelPrefixLength)
                 .putBoolean(KEY_IPV6_ENABLED, config.ipv6Enabled)

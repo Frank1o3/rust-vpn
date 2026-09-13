@@ -29,7 +29,7 @@ pub struct AndroidTunnelConfig {
     /// authentication; pinned-key/certificate modes are available at the
     /// Rust API level (`rvpn_crypto::AuthConfig`) but not yet wired into the
     /// Kotlin settings screens.
-    pub psk: [u8; 32],
+    pub auth: rvpn_crypto::AuthConfig,
     /// Optional wire obfuscation key. When set, every datagram is wrapped in
     /// a stream-cipher shell to defeat passive DPI fingerprinting. Not yet
     /// exposed in the Kotlin settings UI.
@@ -95,7 +95,7 @@ pub async fn run_tunnel(
         retry_interval_ms: config.retry_interval_ms,
         retry_limit: config.retry_limit,
     };
-    let auth = AuthConfig::Psk(config.psk);
+    let auth = config.auth.clone();
 
     tracing::info!(%server, "initiating RVPN handshake from Android client");
     let mut session = establish(

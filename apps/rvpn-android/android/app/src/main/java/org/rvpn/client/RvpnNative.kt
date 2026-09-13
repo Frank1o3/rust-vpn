@@ -67,7 +67,16 @@ object RvpnNative {
      *
      * @param vpnService The running Android [VpnService] instance (used to call protect(fd)).
      * @param server The server address in host:port format (e.g. "10.0.0.1:9000").
-     * @param pskHex The 32-byte pre-shared key encoded as a 64-character hexadecimal string.
+     * @param authMode One of "psk", "pinned-key", or "certificate".
+     * @param pskHex 64-hex-char PSK; used when authMode == "psk", otherwise ignored (pass "").
+     * @param localIdentitySeedHex 64-hex-char Ed25519 seed; used by "pinned-key" and
+     *   "certificate" modes, otherwise ignored (pass "").
+     * @param peerPublicKeyHex 64-hex-char Ed25519 public key of the server; used only
+     *   by "pinned-key" mode, otherwise ignored (pass "").
+     * @param localCertificateHex 224-hex-char certificate; used only by "certificate"
+     *   mode, otherwise ignored (pass "").
+     * @param caPublicKeyHex 64-hex-char CA public key; used only by "certificate"
+     *   mode, otherwise ignored (pass "").
      * @param tunFd The raw file descriptor of the virtual TUN device from [VpnService.Builder.establish].
      * @param mtu Configured MTU.
      * @param rekeyPacketLimit Number of packets before rekeying (0 to disable).
@@ -78,7 +87,12 @@ object RvpnNative {
     external fun startTunnel(
         vpnService: VpnService,
         server: String,
+        authMode: String,
         pskHex: String,
+        localIdentitySeedHex: String,
+        peerPublicKeyHex: String,
+        localCertificateHex: String,
+        caPublicKeyHex: String,
         tunFd: Int,
         mtu: Int,
         rekeyPacketLimit: Long,
