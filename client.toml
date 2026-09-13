@@ -19,6 +19,7 @@ server="192.168.88.254:9000"
     gateway_v6="fd42::1"
 
 [auth]
-    local_identity_seed="6b3dcce6b4aa37832ab530bf6f5e0755e173737af2b4258347b9dd8b137edb3b"
+
+    local_identity_seed="75bebfbed1ec1fd3130aeb03b377300767eb19658ab0349f7b7de3f3a27f78a2"
     mode="pinned-key"
-    peer_public_key="3b6c7003023d2c63b0f7f265c7674124de7951a9504e788f3f1d60b8967c0bfe"
+    peer_public_key="092bf3b225421ebeb53fc14cae391ae15b567fcf6fe8aa3e58b95e6f570f8713"
