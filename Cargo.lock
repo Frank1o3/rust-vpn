@@ -451,7 +451,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-android"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-client"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-config"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "hex",
  "ipnet",
@@ -502,14 +502,14 @@ dependencies = [
 
 [[package]]
 name = "rvpn-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rvpn-crypto"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bytes",
  "chacha20",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-interface"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bytes",
  "libc",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-protocol"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bytes",
  "rvpn-core",
@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-server"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-transport"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bytes",
  "thiserror",
