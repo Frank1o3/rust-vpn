@@ -18,3 +18,4 @@
 [[bench]]
     harness=false
     name="transport_bench"
+    path="src/benches/transport_bench.rs"
