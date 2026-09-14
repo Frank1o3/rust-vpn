@@ -107,7 +107,7 @@ pub async fn run_tunnel(
     let handshake_policy = HandshakeConfig {
         retry_interval_ms: config.retry_interval_ms,
         retry_limit: config.retry_limit,
-        retry_jitter_ms: config.retry_interval_ms,
+        ..Default::default()
     };
     let auth = config.auth.clone();
 
@@ -265,7 +265,7 @@ async fn establish(
     old: Option<&ProtectedSession>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<ProtectedSession> {
-    let (handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
+    let (mut handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
     let (kind, session_id, key_phase) = match old {
         Some(session) => (
             PacketKind::Rekey,
@@ -278,7 +278,7 @@ async fn establish(
         None => (PacketKind::Handshake, SessionId::ZERO, 0),
     };
     let old_phase = old.map_or(0, ProtectedSession::key_phase);
-    let initiation_packet = Packet {
+    let mut initiation_packet = Packet {
         header: Header {
             kind,
             key_phase: old_phase,
@@ -301,7 +301,11 @@ async fn establish(
             transport
                 .send_to(server, wire, SendOptions::default())
                 .await?;
-            let deadline = Instant::now() + Duration::from_millis(policy.retry_jitter_ms);
+            let deadline = Instant::now()
+                + rvpn_config::jittered_retry_interval(
+                    policy.retry_interval_ms,
+                    policy.retry_jitter_ms,
+                );
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -324,18 +328,32 @@ async fn establish(
                                     if packet.header.kind == kind
                                         && (old.is_none() || packet.header.session_id == session_id)
                                     {
-                                        if let Ok(response @ HandshakeMessage::Response { .. }) =
-                                            HandshakeMessage::decode(packet.payload)
-                                        {
-                                            let advertised_session = match response {
-                                                HandshakeMessage::Response { session_id, .. } => session_id,
-                                                _ => unreachable!(),
-                                            };
-                                            if packet.header.session_id == advertised_session
-                                                && handshake.authenticates_response(response)?
-                                            {
-                                                break 'retry response;
+                                        match HandshakeMessage::decode(packet.payload) {
+                                            Ok(response @ HandshakeMessage::Response { .. }) => {
+                                                let advertised_session = match response {
+                                                    HandshakeMessage::Response { session_id, .. } => session_id,
+                                                    _ => unreachable!(),
+                                                };
+                                                if packet.header.session_id == advertised_session
+                                                    && handshake.authenticates_response(response)?
+                                                {
+                                                    break 'retry response;
+                                                }
                                             }
+                                            Ok(HandshakeMessage::CookieReply { cookie }) => {
+                                                // Cheap, immediate resend with the proven
+                                                // cookie attached; doesn't consume a retry
+                                                // attempt or wait out the deadline.
+                                                handshake.attach_cookie(cookie);
+                                                initiation_packet.payload = handshake.initiation().encode();
+                                                let encoded = initiation_packet.encode();
+                                                let wire = match obfuscation {
+                                                    Some(key) => key.wrap(&encoded)?,
+                                                    None => encoded,
+                                                };
+                                                transport.send_to(server, wire, SendOptions::default()).await?;
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -383,7 +401,11 @@ async fn establish(
             .send_to(server, wire, SendOptions::default())
             .await?;
         if attempt != policy.retry_limit {
-            sleep(Duration::from_millis(policy.retry_jitter_ms)).await;
+            sleep(rvpn_config::jittered_retry_interval(
+                policy.retry_interval_ms,
+                policy.retry_jitter_ms,
+            ))
+            .await;
         }
     }
     Ok(new_session)
