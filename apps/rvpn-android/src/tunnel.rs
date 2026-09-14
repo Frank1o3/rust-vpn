@@ -61,7 +61,7 @@ pub async fn run_tunnel(
     )
     .context("opening Android TUN device")?;
 
-    let server = rvpn_config::resolve_endpoint(&config.server)
+    let mut server = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving RVPN server endpoint")?;
     tracing::info!(endpoint = %config.server, %server, "resolved RVPN server endpoint");
@@ -167,9 +167,7 @@ pub async fn run_tunnel(
             }
             datagram = transport.receive() => {
                 let datagram = datagram.context("receiving UDP datagram")?;
-                if datagram.peer != server {
-                    continue;
-                }
+                let peer = datagram.peer;
                 let payload = match &obfuscation {
                     Some(key) => match key.unwrap(&datagram.payload) {
                         Ok(payload) => payload,
@@ -180,24 +178,36 @@ pub async fn run_tunnel(
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
-                        if session.open(packet).is_ok() {
-                            tracing::info!("server closed the RVPN session");
-                            return Ok(());
+                        match session.open(packet) {
+                            Ok(_) => {
+                                if peer != server {
+                                    tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
+                                    server = peer;
+                                }
+                                tracing::info!("server closed the RVPN session");
+                                return Ok(());
+                            }
+                            Err(_) => continue,
                         }
-                        continue;
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Rekey => {
-                        if session.open(packet).is_ok() {
-                            session = establish(
-                                &transport,
-                                server,
-                                &auth,
-                                obfuscation.as_ref(),
-                                &handshake_policy,
-                                Some(&session),
-                                &mut shutdown,
-                            ).await?;
-                            tracing::info!(key_phase = session.key_phase(), "rotated session keys at server request");
+                        match session.open(packet) {
+                            Ok(_) => {
+                                if peer != server {
+                                    tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
+                                    server = peer;
+                                }
+                                session = establish(
+                                    &transport,
+                                    server,
+                                    &auth,
+                                    obfuscation.as_ref(),
+                                    &handshake_policy,
+                                    Some(&session),
+                                    &mut shutdown,
+                                ).await?;
+                            }
+                            Err(_) => continue,
                         }
                         continue;
                     }
@@ -210,6 +220,10 @@ pub async fn run_tunnel(
 
                 match session.open(packet) {
                     Ok(plaintext) => {
+                        if peer != server {
+                            tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
+                            server = peer;
+                        }
                         let len = plaintext.len();
                         if let Err(error) = tun.send(&plaintext).await {
                             tracing::warn!(%error, "failed to inject packet into Android TUN interface");
