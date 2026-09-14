@@ -1,8 +1,3 @@
-//! RVPN framing, handshake messages, and replay metadata.
-//!
-//! Protocol headers are serialized as AEAD additional authenticated data by the
-//! session coordinator. This crate does not implement encryption itself.
-
 mod authenticated_handshake;
 mod handshake;
 mod packet;

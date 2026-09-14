@@ -1,6 +1,3 @@
-//! Typed orchestration for RVPN's PSK-, pinned-key-, or certificate-authenticated
-//! ephemeral handshake.
-
 use crate::{AuthProof, HandshakeMessage, HandshakeTranscript, ProtectedSession, ProtocolError};
 use rvpn_core::SessionId;
 use rvpn_crypto::{
@@ -10,7 +7,6 @@ use rvpn_crypto::{
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-/// Initiator state after emitting an initiation message.
 pub struct InitiatorHandshake {
     identity: AuthIdentity,
     verifier: AuthVerifier,
@@ -18,7 +14,6 @@ pub struct InitiatorHandshake {
     initiation: HandshakeMessage,
 }
 
-/// Responder state after emitting an authenticated response.
 pub struct ResponderHandshake {
     verifier: AuthVerifier,
     key_pair: EphemeralKeyPair,
@@ -115,13 +110,10 @@ impl InitiatorHandshake {
         ))
     }
 
-    /// Current (possibly cookie-updated) initiation message.
     pub const fn initiation(&self) -> HandshakeMessage {
         self.initiation
     }
 
-    /// Records a cookie from a `CookieReply` for the next initiation resend.
-    /// Does not touch the already-generated ephemeral key.
     pub fn attach_cookie(&mut self, cookie: [u8; 32]) {
         if let HandshakeMessage::Initiation {
             public_key, random, ..
@@ -135,9 +127,6 @@ impl InitiatorHandshake {
         }
     }
 
-    /// Verifies a server response, then returns the client finish, the
-    /// session, and the server's proven identity (`None` for PSK mode, since
-    /// a shared secret doesn't carry an identity of its own).
     pub fn finish(
         self,
         response: HandshakeMessage,
@@ -156,9 +145,6 @@ impl InitiatorHandshake {
         self.finish_for_session(response, session_id, 0)
     }
 
-    /// Checks whether a response is authenticated for this initiator without
-    /// consuming the one-use ephemeral key. This lets a client safely ignore
-    /// responses intended for other provisioned server identities.
     pub fn authenticates_response(
         &self,
         response: HandshakeMessage,
@@ -171,7 +157,6 @@ impl InitiatorHandshake {
         Ok(verify_proof(&self.verifier, &data, &proof).is_ok())
     }
 
-    /// Completes a fresh exchange for an existing session identity and key phase.
     pub fn finish_for_session(
         self,
         response: HandshakeMessage,
@@ -219,7 +204,6 @@ impl InitiatorHandshake {
 }
 
 impl ResponderHandshake {
-    /// Processes an initiation and returns an authenticated server response.
     pub fn accept(
         identity: AuthIdentity,
         verifier: AuthVerifier,
@@ -234,7 +218,6 @@ impl ResponderHandshake {
         )
     }
 
-    /// Accepts a rekey exchange for an already-established session.
     pub fn accept_for_session(
         identity: AuthIdentity,
         verifier: AuthVerifier,
@@ -282,8 +265,6 @@ impl ResponderHandshake {
         ))
     }
 
-    /// Verifies the client finish and returns the established protected
-    /// session, plus the client's proven identity (`None` for PSK mode).
     pub fn finish(
         self,
         finish: HandshakeMessage,
@@ -308,7 +289,6 @@ impl ResponderHandshake {
     }
 }
 
-/// Authentication and key-establishment failures.
 #[derive(Debug, Error)]
 pub enum HandshakeError {
     #[error("unexpected handshake message for the current role")]

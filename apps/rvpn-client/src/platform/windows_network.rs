@@ -1,9 +1,3 @@
-//! Windows network address and routing configuration for the RVPN client.
-//!
-//! Windows uses the built-in NetTCPIP PowerShell cmdlets here instead of the
-//! Linux `ip` utility. The public API intentionally mirrors the Linux backend
-//! so the rest of `rvpn-client` remains platform-neutral.
-
 use anyhow::{Context, Result, bail};
 use rvpn_config::ClientConfig;
 use rvpn_interface::VirtualInterface;

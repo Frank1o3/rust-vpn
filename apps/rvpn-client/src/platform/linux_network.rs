@@ -1,5 +1,3 @@
-//! Network address assignment and routing configuration for the RVPN client.
-
 use anyhow::{Context, Result, bail};
 use rvpn_config::ClientConfig;
 use rvpn_interface::VirtualInterface;

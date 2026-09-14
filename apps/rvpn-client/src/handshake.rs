@@ -1,5 +1,3 @@
-//! Handshake initiation, confirmation, and rekeying for the RVPN client.
-
 use anyhow::{Context, Result, bail};
 use rvpn_config::HandshakeConfig;
 use rvpn_core::SessionId;
@@ -21,7 +19,6 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
     })
 }
 
-/// Checks whether the session should rekey and performs the rekey flight if needed.
 pub async fn maybe_rekey(
     session: &mut ProtectedSession,
     transport: &UdpTransport,
@@ -46,7 +43,6 @@ pub async fn maybe_rekey(
     Ok(())
 }
 
-/// Retransmits each handshake flight. Rekeys retain the established session ID.
 pub async fn establish(
     transport: &UdpTransport,
     server: SocketAddr,
@@ -163,9 +159,6 @@ pub async fn establish(
         payload: finish.encode(),
     };
     for attempt in 1..=policy.retry_limit {
-        // NOTE: this previously re-encoded `initiation_packet` here instead of
-        // `finish_packet` -- a copy/paste bug that meant the finish flight was
-        // never actually sent on retransmit passes. Fixed to send the finish.
         let wire = wrap(finish_packet.encode(), obfuscation)?;
         transport
             .send_to(server, wire, SendOptions::default())

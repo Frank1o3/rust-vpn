@@ -1,5 +1,3 @@
-//! Responder handshake handling, rekey flights, and session establishment.
-
 use anyhow::{Context, Result};
 use rvpn_config::{CertificateAuthorityConfig, HandshakeConfig, PeerIdentity};
 use rvpn_core::SessionId;
@@ -19,14 +17,6 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// Validates or challenges a fresh (non-rekey) initiation.
-///
-/// Returns `true` only when the initiation carried a cookie proving the
-/// sender can receive traffic at `endpoint` — the caller should then run the
-/// expensive per-identity handshake loop. On `false`, a cheap `CookieReply`
-/// has already been sent and no asymmetric crypto has run at all, so a
-/// spoofed source address costs the server one HMAC computation, not N
-/// X25519 keygens + N Ed25519 signs.
 pub async fn challenge_or_admit(
     transport: &UdpTransport,
     cookie_key: &CookieKey,

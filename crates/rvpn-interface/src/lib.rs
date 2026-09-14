@@ -1,7 +1,3 @@
-//! Platform-neutral asynchronous Layer-3 (TUN) and Layer-2 (TAP) virtual-interface API.
-//!
-//! Linux creation needs access to `/dev/net/tun` and normally `CAP_NET_ADMIN`.
-
 mod config;
 mod error;
 mod platform;

@@ -1,28 +1,31 @@
-//! Reusable, asynchronous transport for opaque UDP datagrams.
-//!
-//! This crate neither parses RVPN packets nor protects them cryptographically.
-//! It currently implements bounded UDP I/O and received-packet events. Reliable
-//! delivery, acknowledgements, retransmission, and ordered receive buffers are
-//! intentionally future work.
-
+mod buffer_pool;
 mod config;
+mod congestion;
 mod delivery;
 mod error;
 mod events;
+mod keepalive;
+mod metrics;
+mod mtu;
 mod packet;
 mod transport;
 
+pub use buffer_pool::BufferPool;
 pub use config::{MAX_UDP_PAYLOAD_SIZE, TransportConfig};
+pub use congestion::{OutboundQueue, OutboundQueueReceiver, QueuedDatagram};
 pub use delivery::{DeliveryMode, Ordering, Priority, Reliability, SendOptions};
 pub use error::TransportError;
 pub use events::{EventTransport, TransportEvent, TransportEvents};
-pub use packet::{PacketId, ReceivedDatagram, TransportPacket};
-pub use transport::UdpTransport;
+pub use keepalive::KeepaliveScheduler;
+pub use metrics::{MetricsSnapshot, TransportMetrics};
+pub use mtu::{AdaptiveMtu, MtuChangeReason, MtuSnapshot};
+pub use packet::{PacketId, ReceivedDatagram, RecvMeta, TransportPacket};
+pub use transport::{TransportTuning, UdpTransport};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
+    use bytes::{Bytes, BytesMut};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use tokio::time::{Duration, timeout};
 
@@ -171,6 +174,101 @@ mod tests {
         assert!(
             matches!(&first, TransportEvent::PacketReceived(packet) if packet.payload == b"ok"[..])
                 || matches!(&second, TransportEvent::PacketReceived(packet) if packet.payload == b"ok"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn effective_mtu_starts_at_configured_maximum() {
+        let mut config = TransportConfig::new(localhost());
+        config.max_datagram_size = 1400;
+        let transport = UdpTransport::open(config).await.unwrap();
+        assert_eq!(transport.effective_mtu(), 1400);
+        let snapshot = transport.mtu_snapshot();
+        assert_eq!(snapshot.target_mtu, 1400);
+        assert_eq!(snapshot.maximum_mtu, 1400);
+        assert!(snapshot.minimum_mtu <= 1400);
+    }
+
+    #[tokio::test]
+    async fn metrics_track_successful_sends_and_receives() {
+        let receiver = UdpTransport::bind(localhost()).await.unwrap();
+        let receiver_address = receiver.local_addr().unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+        sender
+            .send_to(
+                receiver_address,
+                Bytes::from_static(b"metrics"),
+                SendOptions::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(sender.metrics_snapshot().packets_sent, 1);
+        assert_eq!(sender.metrics_snapshot().bytes_sent, 7);
+
+        receiver.receive().await.unwrap();
+        assert_eq!(receiver.metrics_snapshot().packets_received, 1);
+        assert_eq!(receiver.metrics_snapshot().bytes_received, 7);
+    }
+
+    #[tokio::test]
+    async fn receive_into_reuses_the_callers_buffer() {
+        let receiver = UdpTransport::bind(localhost()).await.unwrap();
+        let receiver_address = receiver.local_addr().unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+
+        let mut buf = BytesMut::new();
+        for payload in [&b"first"[..], &b"second-longer"[..]] {
+            sender
+                .send_to(
+                    receiver_address,
+                    Bytes::copy_from_slice(payload),
+                    SendOptions::default(),
+                )
+                .await
+                .unwrap();
+            let meta = timeout(Duration::from_secs(1), receiver.receive_into(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(&buf[..meta.len], payload);
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_receives_do_not_corrupt_buffers() {
+        let receiver = std::sync::Arc::new(UdpTransport::bind(localhost()).await.unwrap());
+        let receiver_address = receiver.local_addr().unwrap();
+        let sender = UdpTransport::bind(localhost()).await.unwrap();
+
+        let a = tokio::spawn({
+            let receiver = std::sync::Arc::clone(&receiver);
+            async move { receiver.receive().await }
+        });
+        let b = tokio::spawn({
+            let receiver = std::sync::Arc::clone(&receiver);
+            async move { receiver.receive().await }
+        });
+
+        for payload in [&b"one"[..], &b"two"[..]] {
+            sender
+                .send_to(
+                    receiver_address,
+                    Bytes::copy_from_slice(payload),
+                    SendOptions::default(),
+                )
+                .await
+                .unwrap();
+        }
+
+        let (first, second) = tokio::join!(a, b);
+        let mut payloads: Vec<Bytes> = vec![
+            first.unwrap().unwrap().payload,
+            second.unwrap().unwrap().payload,
+        ];
+        payloads.sort();
+        assert_eq!(
+            payloads,
+            vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")]
         );
     }
 }

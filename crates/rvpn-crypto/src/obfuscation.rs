@@ -1,13 +1,3 @@
-//! Wire-level obfuscation: makes RVPN datagrams indistinguishable from random
-//! bytes to a passive observer. This is independent of, and layered outside,
-//! the AEAD packet protection in this crate -- it defeats fingerprinting, not
-//! forgery, so a valid inner packet is still required after unwrapping.
-//!
-//! Nonces are random rather than a counter, which is fine at this layer:
-//! the security property this buys is "doesn't look like RVPN traffic", not
-//! confidentiality (that's the inner AEAD's job), so the birthday bound on
-//! random 96-bit nonces is not the binding constraint here.
-
 use crate::CryptoError;
 use bytes::{Bytes, BytesMut};
 use chacha20::{
@@ -18,25 +8,16 @@ use rand::{TryRng, rngs::SysRng};
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
-/// Upper bound on random padding appended to each obfuscated datagram.
 const MAX_PADDING: usize = 255;
-/// Worst-case bytes added on top of the inner datagram by [`ObfuscationKey::wrap`].
-/// Reserve this in transport `max_datagram_size` budgets wherever obfuscation
-/// might be enabled.
 pub const OBFUSCATION_OVERHEAD: usize = NONCE_LEN + 1 + MAX_PADDING;
 
-/// Shared secret used only to make wire traffic look like random noise.
-/// Deliberately separate from any peer's PSK or identity key, since it is
-/// meant to apply uniformly across peers/auth modes for one deployment.
 pub struct ObfuscationKey([u8; KEY_LEN]);
 
 impl ObfuscationKey {
-    /// Constructs a key from securely provisioned 32-byte material.
     pub fn from_bytes(bytes: [u8; KEY_LEN]) -> Self {
         Self(bytes)
     }
 
-    /// Generates a fresh key for out-of-band provisioning.
     pub fn generate() -> Result<Self, CryptoError> {
         let mut bytes = [0; KEY_LEN];
         SysRng
@@ -45,7 +26,6 @@ impl ObfuscationKey {
         Ok(Self(bytes))
     }
 
-    /// Wraps an already-encoded RVPN datagram for transmission.
     pub fn wrap(&self, inner: &[u8]) -> Result<Bytes, CryptoError> {
         let mut nonce = [0u8; NONCE_LEN];
         SysRng
@@ -76,7 +56,6 @@ impl ObfuscationKey {
         Ok(output.freeze())
     }
 
-    /// Reverses [`Self::wrap`], returning the original encoded RVPN datagram.
     pub fn unwrap(&self, datagram: &[u8]) -> Result<Bytes, CryptoError> {
         if datagram.len() < NONCE_LEN + 1 {
             return Err(CryptoError::ObfuscationTooShort);

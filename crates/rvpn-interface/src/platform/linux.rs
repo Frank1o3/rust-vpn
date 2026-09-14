@@ -1,5 +1,3 @@
-//! Linux `/dev/net/tun` implementation.
-
 use crate::{DeviceMode, InterfaceError, TunConfig};
 use bytes::{Bytes, BytesMut};
 use std::{
@@ -15,10 +13,6 @@ use tokio::io::unix::AsyncFd;
 const TUN_PATH: &str = "/dev/net/tun";
 const IFREQ_UNION_SIZE: usize = 24;
 
-/// Linux's `ifreq` layout for `TUNSETIFF` and `SIOCSIFMTU`.
-///
-/// Only `ifr_name`, the flags (`data[..2]`), and MTU (`data[..4]`) are used.
-/// Keeping this local confines the platform ABI and its unsafe ioctl boundary.
 #[repr(C)]
 struct IfReq {
     name: [libc::c_char; libc::IFNAMSIZ],
@@ -50,7 +44,6 @@ impl IfReq {
     }
 }
 
-/// Asynchronous Linux TUN/TAP virtual device.
 pub struct VirtualInterface {
     file: AsyncFd<File>,
     name: String,
@@ -59,9 +52,6 @@ pub struct VirtualInterface {
 }
 
 impl VirtualInterface {
-    /// Creates a non-persistent Linux TUN/TAP device and brings it up.
-    /// Closing/dropping this object closes its descriptor; Linux then removes
-    /// a non-persistent device.
     pub async fn create(config: TunConfig) -> Result<Self, InterfaceError> {
         config.validate()?;
         let file = OpenOptions::new()
@@ -75,8 +65,7 @@ impl VirtualInterface {
             DeviceMode::Tun | DeviceMode::Both => (libc::IFF_TUN | libc::IFF_NO_PI) as i16,
         };
         request.data[..2].copy_from_slice(&flags.to_ne_bytes());
-        // SAFETY: `request` is repr(C), initialized, and valid for the kernel
-        // to read/write for the duration of this ioctl.
+
         if unsafe {
             libc::ioctl(
                 file.as_raw_fd(),
@@ -89,7 +78,7 @@ impl VirtualInterface {
         }
         let name = request.assigned_name()?;
         set_mtu(&name, config.mtu)?;
-        // Automatically activate the link (IFF_UP | IFF_RUNNING) via ioctl.
+
         let _ = set_up(&name);
         tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, "created Linux virtual device");
         Ok(Self {
@@ -100,10 +89,6 @@ impl VirtualInterface {
         })
     }
 
-    /// Wraps an existing, already opened TUN file descriptor (such as one
-    /// supplied by Android's `VpnService.Builder.establish()`).
-    ///
-    /// The descriptor will be set to non-blocking mode (`O_NONBLOCK`).
     pub fn from_raw_fd(
         fd: RawFd,
         name: String,
@@ -125,34 +110,30 @@ impl VirtualInterface {
         })
     }
 
-    /// Kernel-assigned interface name.
     pub fn name(&self) -> &str {
         &self.name
     }
-    /// Configured maximum IP packet payload size.
+
     pub const fn mtu(&self) -> u16 {
         self.mtu
     }
-    /// Operating mode (TUN or TAP).
+
     pub const fn mode(&self) -> DeviceMode {
         self.mode
     }
 
-    /// Receives one raw packet or Ethernet frame. Only one receive strategy should be active.
     pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
         let max_packet_len = if self.mode == DeviceMode::Tap {
             self.mtu as usize + 18
         } else {
             self.mtu as usize
         };
-        // +1 sentinel: if the kernel reports more than max_packet_len bytes the
-        // packet is oversized.  We never observe the extra byte's content.
+
         let capacity = max_packet_len + 1;
         let mut buffer = BytesMut::with_capacity(capacity);
         loop {
             let mut ready = self.file.readable().await?;
             match ready.try_io(|file| {
-                // SAFETY: bytes are written by the kernel's read before we slice them.
                 unsafe { buffer.set_len(capacity) };
                 let result = file.get_ref().read(&mut buffer);
                 if let Ok(n) = result {
@@ -167,14 +148,13 @@ impl VirtualInterface {
                             mtu: max_packet_len as u16,
                         });
                     }
-                    // buffer is already truncated to `length` in the closure above.
+
                     let bytes = buffer.split().freeze();
                     validate_packet(&bytes, self.mtu, self.mode)?;
                     return Ok(bytes);
                 }
                 Ok(Err(error)) => return Err(error.into()),
                 Err(_) => {
-                    // AsyncFd signals WouldBlock; reset the length and retry.
                     unsafe { buffer.set_len(0) };
                     continue;
                 }
@@ -182,7 +162,6 @@ impl VirtualInterface {
         }
     }
 
-    /// Writes one raw packet or Ethernet frame to the operating system through the device.
     pub async fn send(&self, packet: &[u8]) -> Result<(), InterfaceError> {
         validate_packet(packet, self.mtu, self.mode)?;
         loop {
@@ -241,14 +220,13 @@ fn set_mtu(name: &str, mtu: u16) -> Result<(), InterfaceError> {
     }
     let mut request = IfReq::new(Some(name));
     request.data[..4].copy_from_slice(&(mtu as libc::c_int).to_ne_bytes());
-    // SAFETY: the socket and `ifreq` are valid for this ioctl call.
     let result = unsafe { libc::ioctl(socket, libc::SIOCSIFMTU as libc::Ioctl, &mut request) };
     let error = if result < 0 {
         Some(std::io::Error::last_os_error())
     } else {
         None
     };
-    // SAFETY: `socket` was returned by libc::socket and is closed exactly once.
+
     unsafe { libc::close(socket) };
     error.map_or(Ok(()), |error| Err(error.into()))
 }
@@ -259,7 +237,6 @@ fn set_up(name: &str) -> Result<(), InterfaceError> {
         return Err(std::io::Error::last_os_error().into());
     }
     let mut request = IfReq::new(Some(name));
-    // SAFETY: the socket and `ifreq` are valid for this ioctl call.
     if unsafe { libc::ioctl(socket, libc::SIOCGIFFLAGS as libc::Ioctl, &mut request) } < 0 {
         let error = std::io::Error::last_os_error();
         unsafe { libc::close(socket) };
@@ -333,7 +310,6 @@ mod tests {
         assert_eq!(dev.mtu(), 1400);
         assert_eq!(dev.mode(), DeviceMode::Tun);
 
-        // Send a valid IPv4 packet header across the pair
         let packet = [0x45, 0x00, 0x00, 0x14];
         let written = unsafe { libc::write(fds[1], packet.as_ptr() as *const _, packet.len()) };
         assert_eq!(written as usize, packet.len());
@@ -341,7 +317,6 @@ mod tests {
         let received = dev.recv().await.unwrap();
         assert_eq!(&received[..], &packet[..]);
 
-        // Clean up peer socket
         unsafe { libc::close(fds[1]) };
     }
 }

@@ -1,9 +1,3 @@
-//! Established cryptographic building blocks for RVPN.
-//!
-//! This foundation uses ephemeral X25519, HKDF-SHA-256, and
-//! ChaCha20-Poly1305. It does not yet authenticate peers: a future protocol
-//! handshake must bind identities and the exact transcript before key use.
-
 mod auth;
 mod cookie;
 mod identity;
@@ -30,17 +24,14 @@ use zeroize::Zeroize;
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
-/// ChaCha20-Poly1305 authentication-tag bytes appended to ciphertext.
 pub const AEAD_TAG_LEN: usize = 16;
 const INFO_C2S: &[u8] = b"rvpn-v1/session/client-to-server";
 const INFO_S2C: &[u8] = b"rvpn-v1/session/server-to-client";
 const PSK_LEN: usize = 32;
 
-/// Memory-cleared secret bytes.
 pub struct Secret<const N: usize>([u8; N]);
 
 impl<const N: usize> Secret<N> {
-    /// Obtains secret bytes from the operating system's cryptographic RNG.
     pub fn random() -> Result<Self, CryptoError> {
         let mut bytes = [0; N];
         SysRng
@@ -58,12 +49,10 @@ impl<const N: usize> Secret<N> {
     }
 }
 
-/// Generates non-secret random protocol bytes from the operating-system CSPRNG.
 pub fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
     Ok(Secret::<N>::random()?.0)
 }
 
-/// Computes the SHA-256 transcript hash supplied to session-key derivation.
 pub fn transcript_hash(transcript: &[u8]) -> [u8; KEY_LEN] {
     Sha256::digest(transcript).into()
 }
@@ -80,32 +69,25 @@ impl<const N: usize> core::fmt::Debug for Secret<N> {
     }
 }
 
-/// Public X25519 key bytes for protocol serialization.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicKeyBytes([u8; KEY_LEN]);
 
 impl PublicKeyBytes {
-    /// Creates a public key representation from 32 wire bytes.
     pub const fn new(bytes: [u8; KEY_LEN]) -> Self {
         Self(bytes)
     }
 
-    /// Returns the wire representation.
     pub const fn to_bytes(self) -> [u8; KEY_LEN] {
         self.0
     }
 }
 
-/// A one-use ephemeral X25519 key pair.
 pub struct EphemeralKeyPair {
-    // StaticSecret permits construction from caller-supplied OS randomness.
-    // This wrapper consumes it in `agree`, preserving one-use semantics.
     secret: StaticSecret,
     public: PublicKeyBytes,
 }
 
 impl EphemeralKeyPair {
-    /// Generates a fresh ephemeral key pair.
     pub fn generate() -> Result<Self, CryptoError> {
         let bytes = Secret::<KEY_LEN>::random()?.0;
         let secret = StaticSecret::from(bytes);
@@ -113,12 +95,10 @@ impl EphemeralKeyPair {
         Ok(Self { secret, public })
     }
 
-    /// Returns the public half of this key pair.
     pub const fn public_key(&self) -> PublicKeyBytes {
         self.public
     }
 
-    /// Consumes the private key to calculate a shared secret with `peer`.
     pub fn agree(self, peer: PublicKeyBytes) -> Result<SharedSecret, CryptoError> {
         let bytes = self
             .secret
@@ -131,7 +111,6 @@ impl EphemeralKeyPair {
     }
 }
 
-/// X25519 shared secret, intentionally usable only for key derivation.
 pub struct SharedSecret(Secret<KEY_LEN>);
 
 impl core::fmt::Debug for SharedSecret {
@@ -140,25 +119,17 @@ impl core::fmt::Debug for SharedSecret {
     }
 }
 
-/// A 256-bit pre-shared key used to authenticate the initial RVPN handshake.
-///
-/// This is a bootstrap authentication mechanism for the first client/server
-/// implementation. A later identity system may replace it without changing
-/// the X25519, HKDF, or packet-AEAD boundaries.
 pub struct HandshakePsk(Secret<PSK_LEN>);
 
 impl HandshakePsk {
-    /// Constructs a PSK from securely provisioned 32-byte key material.
     pub fn from_bytes(bytes: [u8; PSK_LEN]) -> Self {
         Self(Secret::from_bytes(bytes))
     }
 
-    /// Generates a fresh PSK for secure out-of-band provisioning.
     pub fn generate() -> Result<Self, CryptoError> {
         Ok(Self(Secret::random()?))
     }
 
-    /// Computes a 32-byte HMAC-SHA-256 over canonical handshake data.
     pub fn authenticate(&self, data: &[u8]) -> [u8; PSK_LEN] {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_bytes())
             .expect("fixed-length HMAC keys are always accepted");
@@ -166,7 +137,6 @@ impl HandshakePsk {
         mac.finalize().into_bytes().into()
     }
 
-    /// Verifies a handshake authenticator in constant time.
     pub fn verify(&self, data: &[u8], tag: &[u8; PSK_LEN]) -> bool {
         let mut mac = Hmac::<Sha256>::new_from_slice(self.0.as_bytes())
             .expect("fixed-length HMAC keys are always accepted");
@@ -181,21 +151,18 @@ impl core::fmt::Debug for HandshakePsk {
     }
 }
 
-/// Session side used to assign directional key material.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionRole {
     Initiator,
     Responder,
 }
 
-/// Directional session keys for one protocol key phase.
 pub struct SessionKeys {
     send: Secret<KEY_LEN>,
     receive: Secret<KEY_LEN>,
 }
 
 impl SessionKeys {
-    /// Derives directional keys bound to an authenticated handshake transcript.
     pub fn derive(
         shared: SharedSecret,
         transcript_hash: &[u8; KEY_LEN],
@@ -218,7 +185,6 @@ impl SessionKeys {
         })
     }
 
-    /// Encrypts a payload and authenticates its protocol header as AAD.
     pub fn seal(
         &self,
         nonce: PacketNonce,
@@ -228,7 +194,6 @@ impl SessionKeys {
         crypt(true, self.send.as_bytes(), nonce, aad, plaintext)
     }
 
-    /// Verifies AAD and decrypts a payload.
     pub fn open(
         &self,
         nonce: PacketNonce,
@@ -245,12 +210,10 @@ impl core::fmt::Debug for SessionKeys {
     }
 }
 
-/// A deterministic AEAD nonce built from a unique key phase and packet sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PacketNonce([u8; NONCE_LEN]);
 
 impl PacketNonce {
-    /// Builds a nonce. The caller must never repeat this pair for one key.
     pub fn from_sequence(key_phase: u32, sequence: u64) -> Self {
         let mut bytes = [0; NONCE_LEN];
         bytes[..4].copy_from_slice(&key_phase.to_be_bytes());
@@ -280,7 +243,6 @@ fn crypt(
     result.map(Bytes::from)
 }
 
-/// Cryptographic failures without exposing sensitive material.
 #[derive(Debug, Error)]
 pub enum CryptoError {
     #[error("secure randomness is unavailable: {0}")]

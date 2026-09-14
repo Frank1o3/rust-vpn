@@ -1,5 +1,3 @@
-//! Bidirectional packet forwarding loop between virtual devices and UDP transport.
-
 use anyhow::Result;
 use rvpn_config::ClientConfig;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
@@ -17,7 +15,6 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
     })
 }
 
-/// Runs the active data plane loop until a shutdown signal or session termination.
 pub async fn run_data_plane(
     mut session: ProtectedSession,
     transport: &UdpTransport,

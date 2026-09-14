@@ -1,9 +1,3 @@
-//! Generates a CA identity, a peer identity, and a certificate binding the
-//! peer to the CA, printing hex-encoded values ready to paste into RVPN
-//! TOML configuration.
-//!
-//! Run with: cargo run -p rvpn-crypto --example gen_ca_and_cert
-
 use rvpn_crypto::IdentityKeyPair;
 use std::time::{SystemTime, UNIX_EPOCH};
 

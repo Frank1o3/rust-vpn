@@ -1,9 +1,6 @@
-//! Tunnel statistics and telemetry tracking.
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-/// Live statistics for an active RVPN tunnel session.
 #[derive(Debug, Default)]
 pub struct TunnelStats {
     pub bytes_tx: AtomicU64,
@@ -38,7 +35,6 @@ impl TunnelStats {
     }
 }
 
-/// Immutable snapshot of tunnel metrics at a point in time.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StatsSnapshot {
     pub bytes_tx: u64,

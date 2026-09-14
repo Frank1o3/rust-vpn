@@ -1,16 +1,8 @@
-//! Coordination of protocol framing with cryptographic packet protection.
-
 use crate::{Header, Packet, PacketKind, ProtocolError, ReplayError, ReplayWindow};
 use bytes::Bytes;
 use rvpn_core::SessionId;
 use rvpn_crypto::{CryptoError, PacketNonce, SessionKeys};
 use thiserror::Error;
-
-/// One established packet-protection phase for a known RVPN session.
-///
-/// A caller may construct this only after its handshake has authenticated peers
-/// and bound the transcript used to derive `keys`. Handshake packets themselves
-/// are intentionally not accepted by this post-handshake packet protector.
 pub struct ProtectedSession {
     session_id: SessionId,
     key_phase: u32,
@@ -20,7 +12,6 @@ pub struct ProtectedSession {
 }
 
 impl ProtectedSession {
-    /// Creates a packet-protection session at the supplied negotiated key phase.
     pub fn new(session_id: SessionId, key_phase: u32, keys: SessionKeys) -> Self {
         Self {
             session_id,
@@ -31,28 +22,22 @@ impl ProtectedSession {
         }
     }
 
-    /// Returns the session identifier authenticated in every protected header.
     pub const fn session_id(&self) -> SessionId {
         self.session_id
     }
 
-    /// Active generation of the packet-protection keys.
     pub const fn key_phase(&self) -> u32 {
         self.key_phase
     }
 
-    /// Whether callers should complete a rekey before sending more traffic.
     pub const fn should_rekey(&self, packet_limit: u64) -> bool {
         self.next_send_sequence >= packet_limit
     }
 
-    /// Encrypts a post-handshake payload and binds its header as AEAD AAD.
     pub fn seal(&mut self, kind: PacketKind, plaintext: &[u8]) -> Result<Packet, SessionError> {
         if kind == PacketKind::Handshake {
             return Err(SessionError::HandshakeNotProtected);
         }
-        // A rekey must occur before the counter wraps. Reserving the all-ones
-        // value gives the next phase a clear boundary and prevents nonce reuse.
         if self.next_send_sequence == u64::MAX {
             return Err(SessionError::SequenceExhausted);
         }
@@ -71,10 +56,6 @@ impl ProtectedSession {
         Ok(Packet { header, payload })
     }
 
-    /// Authenticates, decrypts, then replay-checks a packet for this session.
-    ///
-    /// Authentication intentionally precedes marking the replay window: forged
-    /// packets must not advance the window or cause a denial of legitimate data.
     pub fn open(&mut self, packet: Packet) -> Result<Bytes, SessionError> {
         if packet.header.kind == PacketKind::Handshake {
             return Err(SessionError::HandshakeNotProtected);
@@ -96,7 +77,6 @@ impl ProtectedSession {
     }
 }
 
-/// Errors that join packet framing, authentication, and replay policy.
 #[derive(Debug, Error)]
 pub enum SessionError {
     #[error("handshake packets are not handled by an established session")]

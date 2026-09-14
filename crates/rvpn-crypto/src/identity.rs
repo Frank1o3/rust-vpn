@@ -1,21 +1,15 @@
-//! Long-term Ed25519 identity keys and short-lived certificates, for
-//! certificate-based peer authentication as an alternative to a PSK.
-
 use crate::{CryptoError, Secret};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 const SEED_LEN: usize = 32;
 const SIG_LEN: usize = 64;
-/// subject_pubkey(32) + not_before(8) + not_after(8) + issuer_signature(64)
 const CERT_LEN: usize = 32 + 8 + 8 + 64;
 
-/// A long-term Ed25519 signing identity for a peer or a certificate authority.
 pub struct IdentityKeyPair {
     signing: SigningKey,
 }
 
 impl IdentityKeyPair {
-    /// Generates a fresh identity key.
     pub fn generate() -> Result<Self, CryptoError> {
         let seed = Secret::<SEED_LEN>::random()?.0;
         Ok(Self {
@@ -23,32 +17,24 @@ impl IdentityKeyPair {
         })
     }
 
-    /// Restores an identity key from a securely provisioned 32-byte seed.
     pub fn from_seed(seed: [u8; SEED_LEN]) -> Self {
         Self {
             signing: SigningKey::from_bytes(&seed),
         }
     }
 
-    /// Returns the raw 32-byte seed. Only needed for provisioning tools that
-    /// must persist a freshly generated identity; regular handshake code
-    /// never needs this.
     pub fn to_seed_bytes(&self) -> [u8; SEED_LEN] {
         self.signing.to_bytes()
     }
 
-    /// Returns the public half for distribution to peers.
     pub fn public_key(&self) -> IdentityPublicKey {
         IdentityPublicKey(self.signing.verifying_key().to_bytes())
     }
 
-    /// Signs arbitrary transcript bytes with this identity.
     pub fn sign(&self, message: &[u8]) -> [u8; SIG_LEN] {
         self.signing.sign(message).to_bytes()
     }
 
-    /// Issues a certificate binding `subject` for the given Unix-second
-    /// validity window, signed by this key acting as issuer/CA.
     pub fn issue_certificate(
         &self,
         subject: IdentityPublicKey,
@@ -79,7 +65,6 @@ fn signed_fields(subject: IdentityPublicKey, not_before: u64, not_after: u64) ->
     signed
 }
 
-/// Wire-format Ed25519 public key for a peer or certificate authority.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IdentityPublicKey([u8; 32]);
 
@@ -96,7 +81,6 @@ impl IdentityPublicKey {
         VerifyingKey::from_bytes(&self.0).map_err(|_| CryptoError::InvalidIdentityKey)
     }
 
-    /// Verifies a signature over `message` under this public key.
     pub fn verify(&self, message: &[u8], signature: &[u8; SIG_LEN]) -> bool {
         let Ok(key) = self.verifying_key() else {
             return false;
@@ -105,7 +89,6 @@ impl IdentityPublicKey {
     }
 }
 
-/// A short-lived binding of a subject's identity key, signed by a CA.
 #[derive(Clone, Copy, Debug)]
 pub struct Certificate {
     pub subject: IdentityPublicKey,
@@ -137,8 +120,6 @@ impl Certificate {
         }
     }
 
-    /// Verifies this certificate was issued by `ca` and is valid at `now`
-    /// (Unix seconds).
     pub fn verify(&self, ca: &IdentityPublicKey, now: u64) -> bool {
         if now < self.not_before || now > self.not_after {
             return false;

@@ -1,7 +1,3 @@
-//! RVPN Android client native library.
-//!
-//! Provides JNI bindings, live telemetry, and the tunnel runtime for Android's `VpnService`.
-
 pub mod jni;
 pub mod stats;
 pub mod tunnel;

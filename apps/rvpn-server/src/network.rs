@@ -1,12 +1,9 @@
-//! Packet inspection, Ethernet decoding, and server interface configuration.
-
 use anyhow::{Context, Result, bail};
 use rvpn_config::ServerConfig;
 use rvpn_interface::VirtualInterface;
 use std::net::IpAddr;
 use tokio::process::Command;
 
-/// Extracts the IPv4 or IPv6 source address from a raw packet.
 pub fn packet_source(packet: &[u8]) -> Option<IpAddr> {
     match packet.first()? >> 4 {
         4 if packet.len() >= 20 => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[12..16]).ok()?)),
@@ -15,7 +12,6 @@ pub fn packet_source(packet: &[u8]) -> Option<IpAddr> {
     }
 }
 
-/// Extracts the IPv4 or IPv6 destination address from a raw packet.
 pub fn packet_destination(packet: &[u8]) -> Option<IpAddr> {
     match packet.first()? >> 4 {
         4 if packet.len() >= 20 => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[16..20]).ok()?)),
@@ -24,7 +20,6 @@ pub fn packet_destination(packet: &[u8]) -> Option<IpAddr> {
     }
 }
 
-/// Extracts the 6-byte source MAC address from an Ethernet frame.
 pub fn ethernet_src_mac(frame: &[u8]) -> Option<[u8; 6]> {
     if frame.len() >= 12 {
         let mut mac = [0u8; 6];
@@ -35,12 +30,10 @@ pub fn ethernet_src_mac(frame: &[u8]) -> Option<[u8; 6]> {
     }
 }
 
-/// Checks whether a MAC address is broadcast (FF:FF:FF:FF:FF:FF) or multicast.
 pub fn is_broadcast_or_multicast_mac(mac: &[u8; 6]) -> bool {
     mac[0] & 1 == 1
 }
 
-/// Extracts IP addresses (IPv4, IPv6, or ARP) encapsulated within an Ethernet frame.
 pub fn ethernet_payload_ip(frame: &[u8], is_dest: bool) -> Option<IpAddr> {
     if frame.len() < 14 {
         return None;
@@ -77,7 +70,6 @@ pub fn ethernet_payload_ip(frame: &[u8], is_dest: bool) -> Option<IpAddr> {
     }
 }
 
-/// Assigns IP addresses and activates the server's virtual interface.
 pub async fn configure_server_interface(
     dev: &VirtualInterface,
     config: &ServerConfig,
@@ -96,7 +88,6 @@ pub async fn configure_server_interface(
     Ok(())
 }
 
-/// Executes a system network command, capturing error output on failure.
 pub async fn run<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
     let output = Command::new(program)
         .args(args)

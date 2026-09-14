@@ -1,5 +1,3 @@
-//! Multi-client server event pump connecting TUN/TAP virtual interfaces and UDP transport.
-
 use anyhow::Result;
 use rvpn_config::{CertificateAuthorityConfig, DeviceMode, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
@@ -28,7 +26,6 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
     })
 }
 
-/// Runs the multi-client server routing and processing loop.
 pub async fn run_server_loop(
     transport: UdpTransport,
     config: ServerConfig,

@@ -1,5 +1,3 @@
-//! JNI bindings for Android `VpnService` integration.
-
 use crate::stats::{StatsSnapshot, TunnelStats};
 use crate::tunnel::{AndroidTunnelConfig, run_tunnel};
 use jni::{
@@ -262,8 +260,6 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 other => fail!(format!("unknown auth mode '{other}'")),
             };
 
-            // Hold a global reference to the VpnService instance so the socket
-            // protector closure can call back into it from the Tokio thread.
             let vpn_service_global: Global<JObject> = env.new_global_ref(vpn_service)?;
 
             let socket_protector = Arc::new(move |fd: RawFd| -> bool {

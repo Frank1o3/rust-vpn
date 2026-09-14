@@ -2,12 +2,9 @@ use bytes::{Buf, Bytes, BytesMut};
 use rvpn_core::SessionId;
 use thiserror::Error;
 
-/// Current on-wire RVPN version.
 pub const VERSION: u8 = 1;
-/// Header bytes, which are intended to become AEAD additional authenticated data.
 pub const HEADER_LEN: usize = 1 + 1 + 4 + 8 + SessionId::LENGTH;
 
-/// Semantic class of an RVPN packet.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PacketKind {
@@ -33,21 +30,15 @@ impl TryFrom<u8> for PacketKind {
     }
 }
 
-/// Metadata used for routing, nonce construction, and authenticated binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Header {
-    /// Packet interpretation for the protocol state machine.
     pub kind: PacketKind,
-    /// Key generation used to derive the packet nonce.
     pub key_phase: u32,
-    /// Per-key-phase packet sequence number.
     pub sequence: u64,
-    /// Session to which this packet belongs.
     pub session_id: SessionId,
 }
 
 impl Header {
-    /// Serializes this header for use as the exact AEAD additional data.
     pub fn encode(self) -> [u8; HEADER_LEN] {
         let mut bytes = [0; HEADER_LEN];
         bytes[0] = VERSION;
@@ -59,17 +50,13 @@ impl Header {
     }
 }
 
-/// One complete RVPN datagram. Data payloads are normally AEAD ciphertext.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Packet {
-    /// Authenticated metadata.
     pub header: Header,
-    /// Opaque protocol payload.
     pub payload: Bytes,
 }
 
 impl Packet {
-    /// Serializes one packet without inspecting its opaque payload.
     pub fn encode(&self) -> Bytes {
         let mut output = BytesMut::with_capacity(HEADER_LEN + self.payload.len());
         output.extend_from_slice(&self.header.encode());
@@ -77,7 +64,6 @@ impl Packet {
         output.freeze()
     }
 
-    /// Parses a complete packet datagram.
     pub fn decode(mut input: Bytes) -> Result<Self, ProtocolError> {
         if input.remaining() < HEADER_LEN {
             return Err(ProtocolError::TruncatedHeader);
@@ -103,7 +89,6 @@ impl Packet {
     }
 }
 
-/// Framing and validation failures.
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum ProtocolError {
     #[error("packet header is truncated")]

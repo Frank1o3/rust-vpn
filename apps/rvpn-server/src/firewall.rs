@@ -1,5 +1,3 @@
-//! Linux IP forwarding, firewall NAT rules (nftables and iptables), and teardown guards.
-
 use anyhow::{Context, Result};
 use rvpn_config::{FirewallBackend, ForwardingConfig};
 use std::fs;

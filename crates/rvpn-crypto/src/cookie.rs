@@ -1,8 +1,3 @@
-//! Stateless anti-DoS cookies for RVPN's initial handshake.
-//!
-//! A cookie proves that the peer can receive traffic at the claimed UDP
-//! endpoint before the server performs expensive asymmetric handshake work.
-
 use crate::{CryptoError, Secret};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -12,23 +7,17 @@ const COOKIE_LEN: usize = 32;
 const COOKIE_BUCKET_SECONDS: u64 = 60;
 const DOMAIN: &[u8] = b"rvpn-v1/handshake/cookie";
 
-/// Stateless server-side cookie signer.
-///
-/// The secret lives only for the lifetime of the server process. A restart
-/// invalidates outstanding cookies, which is intentional.
 pub struct CookieKey {
     secret: Secret<32>,
 }
 
 impl CookieKey {
-    /// Generates a fresh cookie signing key.
     pub fn generate() -> Result<Self, CryptoError> {
         Ok(Self {
             secret: Secret::random()?,
         })
     }
 
-    /// Creates a cookie bound to the peer endpoint and exact initiation.
     pub fn mint(
         &self,
         endpoint: SocketAddr,
@@ -44,7 +33,6 @@ impl CookieKey {
         )
     }
 
-    /// Verifies a cookie against the current or immediately previous bucket.
     pub fn verify(
         &self,
         endpoint: SocketAddr,

@@ -1,15 +1,8 @@
 use thiserror::Error;
 
-/// Number of `u64` words in the bitmap — 32 × 64 = 2 048 sequence-number window.
 const WORDS: usize = 32;
 const WINDOW: u64 = (WORDS as u64) * 64;
 
-/// A 2 048-packet anti-replay window for one `(session, key phase)`.
-///
-/// The window is implemented as an array of 32 × `u64` bitmaps (2 048 bits total),
-/// which gives the receiver enough headroom to tolerate aggressive OS scheduling
-/// jitter and out-of-order delivery at 10 Gbps before discarding legitimate packets.
-/// WireGuard uses 2 048 as well; RFC 4303 specifies 64 as the minimum.
 #[derive(Debug)]
 pub struct ReplayWindow {
     highest: Option<u64>,
@@ -26,7 +19,6 @@ impl Default for ReplayWindow {
 }
 
 impl ReplayWindow {
-    /// Records a fresh sequence or rejects a duplicate/too-old sequence.
     pub fn check_and_record(&mut self, sequence: u64) -> Result<(), ReplayError> {
         let Some(highest) = self.highest else {
             self.highest = Some(sequence);
@@ -37,7 +29,6 @@ impl ReplayWindow {
         if sequence > highest {
             let shift = sequence - highest;
             if shift >= WINDOW {
-                // The entire old window falls outside the new position; reset.
                 self.seen = [0; WORDS];
             } else {
                 self.shift_window(shift);
@@ -58,22 +49,16 @@ impl ReplayWindow {
         Ok(())
     }
 
-    /// Sets the bit corresponding to `sequence` in the circular bitmap.
     fn set_bit(&mut self, sequence: u64) {
         let idx = (sequence % WINDOW) as usize;
         self.seen[idx / 64] |= 1_u64 << (idx % 64);
     }
 
-    /// Returns `true` if the bit for `sequence` is already set.
     fn test_bit(&self, sequence: u64) -> bool {
         let idx = (sequence % WINDOW) as usize;
         self.seen[idx / 64] & (1_u64 << (idx % 64)) != 0
     }
 
-    /// Clears the bitmap slots that are about to be reused by the `shift` new
-    /// sequences advancing past `highest`.  Each incoming sequence wraps into
-    /// the circular buffer at `(seq % WINDOW)`, so we must zero the slot before
-    /// the new sequence lands in it.
     fn shift_window(&mut self, shift: u64) {
         let highest = self.highest.expect("called only when highest is Some");
         for s in 1..=shift {

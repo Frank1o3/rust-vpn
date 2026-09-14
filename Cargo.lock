@@ -603,8 +603,10 @@ name = "rvpn-transport"
 version = "0.2.0"
 dependencies = [
  "bytes",
+ "libc",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

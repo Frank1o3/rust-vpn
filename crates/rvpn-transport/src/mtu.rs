@@ -1,46 +1,15 @@
-//! Adaptive effective-MTU tracking, decoupled from any specific platform.
-//!
-//! Configuration supplies a *target* MTU (the operator's preference) and a
-//! *minimum* MTU (the floor RVPN will not shrink below). The transport
-//! maintains a separate *effective* MTU that starts at the target and only
-//! moves in response to sustained, distinguishable evidence:
-//!
-//! * a hard, authoritative "too large" signal (the OS reporting `EMSGSIZE`
-//!   on send) drops the effective MTU immediately, because the evidence is
-//!   unambiguous;
-//! * a *soft* signal -- repeated caller-reported path failures -- only
-//!   drops the effective MTU after a sustained run of failures, and never
-//!   more than once per [`AdaptiveMtu::MIN_CHANGE_INTERVAL`], to avoid
-//!   reacting to an isolated lost packet;
-//! * after a sustained run of successes *and* the cooldown has elapsed, the
-//!   effective MTU is cautiously probed upward in small steps back toward
-//!   the target, and only kept if the probe itself proves stable.
-//!
-//! This module intentionally has no notion of "congestion" -- queueing
-//! delay and packet loss unrelated to size belong to [`crate::metrics`] and
-//! the caller's own reliability/backpressure handling, not to MTU sizing.
-//! The distinction matters: shrinking the MTU does nothing to relieve a
-//! congested link, and would just waste path capacity while achieving
-//! nothing to reduce it.
-
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-/// A single transition of the effective MTU, useful for logging.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MtuChangeReason {
-    /// The OS reported the datagram exceeded the path MTU.
     PathMtuExceeded,
-    /// A sustained run of caller-reported path failures.
     SustainedInstability,
-    /// A cautious upward probe after a sustained run of successes.
     ProbeUp,
-    /// An upward probe was reverted after it failed to prove stable.
     ProbeReverted,
 }
 
-/// A point-in-time view of the adaptive MTU controller's state.
 #[derive(Clone, Copy, Debug)]
 pub struct MtuSnapshot {
     pub target_mtu: usize,
@@ -55,13 +24,10 @@ struct MtuState {
     consecutive_failures: u32,
     consecutive_successes: u32,
     last_change: Instant,
-    /// Set while an upward probe's outcome is still being evaluated.
     probe_candidate: Option<usize>,
     probe_started: Option<Instant>,
 }
 
-/// Tracks a target/effective/minimum/maximum MTU and applies hysteresis so
-/// the effective value only moves on real, sustained evidence.
 #[derive(Debug)]
 pub struct AdaptiveMtu {
     target_mtu: usize,
@@ -72,25 +38,16 @@ pub struct AdaptiveMtu {
 }
 
 impl AdaptiveMtu {
-    /// Consecutive soft failures required before shrinking the effective MTU.
     const FAILURE_THRESHOLD: u32 = 5;
-    /// Consecutive successes required before a probe upward is attempted.
     const SUCCESS_THRESHOLD: u32 = 64;
-    /// Minimum time between any two effective-MTU changes (hysteresis).
     const MIN_CHANGE_INTERVAL: Duration = Duration::from_secs(5);
-    /// How long an upward probe is given to prove itself before committing.
     const PROBE_EVALUATION_WINDOW: Duration = Duration::from_secs(3);
-    /// Successes required, once probing, to keep the probe.
     const PROBE_SUCCESS_THRESHOLD: u32 = 16;
-    /// Fraction the effective MTU shrinks by on sustained soft failure.
     const STEP_DOWN_NUMERATOR: usize = 9;
     const STEP_DOWN_DENOMINATOR: usize = 10;
-    /// Fraction of the remaining gap to target covered by one upward probe.
     const STEP_UP_NUMERATOR: usize = 1;
     const STEP_UP_DENOMINATOR: usize = 8;
 
-    /// Creates a controller starting at `target_mtu`, the caller's preferred
-    /// value. `minimum_mtu` is clamped to be no larger than `target_mtu`.
     pub fn new(target_mtu: usize, minimum_mtu: usize) -> Self {
         let target_mtu = target_mtu.max(1);
         let minimum_mtu = minimum_mtu.min(target_mtu).max(1);
@@ -121,7 +78,6 @@ impl AdaptiveMtu {
         self.maximum_mtu
     }
 
-    /// The MTU higher layers should currently size packets against.
     pub fn effective_mtu(&self) -> usize {
         self.effective_mtu.load(Ordering::Acquire)
     }
@@ -137,15 +93,6 @@ impl AdaptiveMtu {
         }
     }
 
-    /// Records a successful send at the current effective MTU. Feeds both
-    /// the failure-streak reset and eligibility for an upward probe.
-    ///
-    /// Note this is a *weak* positive signal: it only means the local
-    /// socket accepted the send, not that the datagram was actually
-    /// delivered end-to-end. It is enough to avoid probing upward during an
-    /// actively failing path, but genuine end-to-end confirmation (for
-    /// example, from protocol-level acknowledgements) would make upward
-    /// probing more confident -- see the crate-level "future work" notes.
     pub fn record_success(&self) -> Option<MtuChangeReason> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.consecutive_failures = 0;
@@ -178,24 +125,16 @@ impl AdaptiveMtu {
                 state.probe_candidate = Some(candidate);
                 state.probe_started = Some(Instant::now());
                 state.consecutive_successes = 0;
-                // Probing doesn't change the effective MTU yet -- only a
-                // proven probe does, in the branch above.
             }
         }
         None
     }
 
-    /// Records a caller-observed path failure (timeout, retransmit, etc.).
-    /// This is a *soft* signal: it only shrinks the effective MTU once
-    /// [`Self::FAILURE_THRESHOLD`] consecutive failures have accumulated
-    /// and the change-interval cooldown has elapsed.
     pub fn record_path_failure(&self) -> Option<MtuChangeReason> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.consecutive_successes = 0;
 
         if state.probe_candidate.is_some() {
-            // A failure during an upward probe reverts it immediately --
-            // no reason to keep testing a candidate that just failed.
             state.probe_candidate = None;
             state.probe_started = None;
             state.consecutive_failures = 0;
@@ -220,13 +159,6 @@ impl AdaptiveMtu {
         None
     }
 
-    /// Records the OS's own, authoritative "this datagram exceeds the path
-    /// MTU" signal (`EMSGSIZE`/`WSAEMSGSIZE`). Unlike
-    /// [`Self::record_path_failure`], this is definitive evidence, not a
-    /// heuristic, so it acts immediately rather than waiting for a
-    /// sustained run -- but it still respects the change-interval cooldown
-    /// to avoid thrashing against a flapping path, and it still steps down
-    /// gradually rather than jumping straight to the floor.
     pub fn record_oversized(&self, attempted: usize) -> Option<MtuChangeReason> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.consecutive_failures = 0;

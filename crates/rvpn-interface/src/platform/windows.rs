@@ -1,9 +1,3 @@
-//! Windows Wintun implementation of the RVPN layer-3 virtual device.
-//!
-//! Windows support intentionally exposes only TUN mode. Wintun is a layer-3
-//! virtual adapter, so TAP and `Both` are rejected instead of attempting to
-//! provide a synthetic layer-2 implementation.
-
 use crate::{DeviceMode, InterfaceError, TunConfig};
 use bytes::Bytes;
 use std::sync::Arc;
@@ -12,7 +6,6 @@ const DEFAULT_ADAPTER_NAME: &str = "RVPN";
 const TUNNEL_TYPE: &str = "RVPN";
 const SESSION_CAPACITY: u32 = wintun::MAX_RING_CAPACITY;
 
-/// Windows layer-3 virtual device backed by Wintun.
 pub struct VirtualInterface {
     adapter: Arc<wintun::Adapter>,
     session: Arc<wintun::Session>,
@@ -22,10 +15,6 @@ pub struct VirtualInterface {
 }
 
 impl VirtualInterface {
-    /// Creates or opens a Wintun adapter and starts a packet session.
-    ///
-    /// The process must have permission to create the adapter, which normally
-    /// means running elevated when the adapter does not already exist.
     pub async fn create(config: TunConfig) -> Result<Self, InterfaceError> {
         config.validate()?;
 
@@ -73,27 +62,18 @@ impl VirtualInterface {
         })
     }
 
-    /// Windows adapter friendly name.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Configured maximum IPv4/IPv6 packet payload size.
     pub const fn mtu(&self) -> u16 {
         self.mtu
     }
 
-    /// Windows currently exposes only the TUN/L3 mode.
     pub const fn mode(&self) -> DeviceMode {
         self.mode
     }
 
-    /// Receives one IPv4/IPv6 packet from Wintun.
-    ///
-    /// The Wintun crate currently exposes a blocking receive API rather than a
-    /// native Tokio future, so the blocking operation is isolated on Tokio's
-    /// blocking thread pool. Dropping the device shuts down the Wintun session,
-    /// which also releases a blocked receiver.
     pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
         let session = Arc::clone(&self.session);
         let mtu = self.mtu;
@@ -109,7 +89,6 @@ impl VirtualInterface {
         .map_err(join_error)?
     }
 
-    /// Sends one IPv4/IPv6 packet through Wintun.
     pub async fn send(&self, packet: &[u8]) -> Result<(), InterfaceError> {
         validate_packet(packet, self.mtu)?;
 
@@ -141,9 +120,6 @@ impl Drop for VirtualInterface {
             tracing::debug!(%error, "failed to shut down Wintun session during device drop");
         }
 
-        // Keep the adapter installed so the next RVPN session can reopen it.
-        // The network client is responsible for configuring and restoring the
-        // host-side routing/address state around the active session.
         let _ = &self.adapter;
     }
 }

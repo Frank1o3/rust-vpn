@@ -2,7 +2,6 @@ use thiserror::Error;
 
 use crate::DeviceMode;
 
-/// Virtual network device creation, I/O, and validation errors.
 #[derive(Debug, Error)]
 pub enum InterfaceError {
     #[error("TUN/TAP interfaces are not supported on this platform")]

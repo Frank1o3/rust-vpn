@@ -13,46 +13,24 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-/// Configuration for the Android RVPN tunnel.
 pub struct AndroidTunnelConfig {
-    /// Established TUN file descriptor provided by Android's `VpnService`.
     pub tun_fd: RawFd,
-    /// VPN server endpoint as `host:port` or `ip:port`; resolved via DNS
-    /// once at tunnel startup (see [`rvpn_config::resolve_endpoint`]).
     pub server: String,
-    /// 32-byte pre-shared key. The Android UI currently only exposes PSK
-    /// authentication; pinned-key/certificate modes are available at the
-    /// Rust API level (`rvpn_crypto::AuthConfig`) but not yet wired into the
-    /// Kotlin settings screens.
     pub auth: rvpn_crypto::AuthConfig,
-    /// Optional wire obfuscation key. When set, every datagram is wrapped in
-    /// a stream-cipher shell to defeat passive DPI fingerprinting. Not yet
-    /// exposed in the Kotlin settings UI.
     pub obfuscation_key: Option<[u8; 32]>,
-    /// Configured MTU.
     pub mtu: u16,
-    /// Packet limit before rotating session keys (0 to disable).
     pub rekey_packet_limit: u64,
-    /// Handshake retransmission interval in milliseconds.
     pub retry_interval_ms: u64,
-    /// Handshake retransmission limit.
     pub retry_limit: u32,
-    /// Callback to protect the UDP transport socket from VPN loopback routing.
     pub socket_protector: Option<Arc<dyn Fn(RawFd) -> bool + Send + Sync + 'static>>,
-    /// Shared tunnel telemetry and statistics counter.
     pub stats: Option<Arc<crate::stats::TunnelStats>>,
-    /// Called exactly once after the initial handshake succeeds.
     pub on_connected: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
 
-/// Runs the Android VPN tunnel to completion or until shutdown is signaled.
 pub async fn run_tunnel(
     config: AndroidTunnelConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    // Take ownership of the Android TUN fd immediately. This guarantees that
-    // every error path after this point drops the fd and tears down the VPN
-    // interface instead of leaving Android's VPN interface orphaned.
     let tun = VirtualInterface::from_raw_fd(
         config.tun_fd,
         "rvpn-android".into(),
