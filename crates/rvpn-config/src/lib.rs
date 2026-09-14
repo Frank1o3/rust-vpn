@@ -381,6 +381,12 @@ pub struct CertificateAuthorityConfig {
     /// subject public key (printed by `gen_ca_and_cert`).
     #[serde(default)]
     pub peer_overrides: HashMap<String, Vec<String>>,
+    /// Hex-encoded Ed25519 subject public keys rejected even though their
+    /// certificate hasn't expired yet — e.g. a lost or compromised device.
+    /// Checked only *after* the certificate's signature already verified,
+    /// so it never gives an unauthenticated probe information.
+    #[serde(default)]
+    pub revoked_subjects: Vec<String>,
 }
 
 impl CertificateAuthorityConfig {
@@ -388,6 +394,9 @@ impl CertificateAuthorityConfig {
         decode_psk(&self.ca_public_key)?;
         decode_psk(&self.local_identity_seed)?;
         decode_certificate(&self.local_certificate)?;
+        for subject in &self.revoked_subjects {
+            decode_psk(subject)?;
+        }
         for prefixes in
             std::iter::once(&self.default_allowed_ips).chain(self.peer_overrides.values())
         {
@@ -426,6 +435,12 @@ impl CertificateAuthorityConfig {
                     "certificate_authority allowed_ips must contain valid CIDR prefixes",
                 )
             })
+    }
+
+    pub fn is_revoked(&self, subject_hex: &str) -> bool {
+        self.revoked_subjects
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(subject_hex))
     }
 }
 

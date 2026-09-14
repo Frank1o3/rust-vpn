@@ -247,6 +247,10 @@ pub fn finish_pending(
                 return Ok(());
             };
             let subject_hex = hex::encode(subject.to_bytes());
+            if ca.is_revoked(&subject_hex) {
+                tracing::warn!(subject = %subject_hex, session_id = ?id, "rejecting handshake from revoked certificate subject");
+                return Ok(());
+            }
             let allowed_ips = ca.resolve_allowed_ips(&subject_hex)?;
             rvpn_config::PeerIdentity {
                 name: format!("cert:{}", &subject_hex[..subject_hex.len().min(16)]),
