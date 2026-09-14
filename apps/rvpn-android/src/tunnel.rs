@@ -7,12 +7,7 @@ use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
 use rvpn_transport::{SendOptions, TransportConfig, UdpTransport};
-use std::{
-    net::SocketAddr,
-    os::fd::RawFd,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, os::fd::RawFd, sync::Arc, time::Instant};
 use tokio::{
     sync::watch,
     time::{sleep, timeout},
