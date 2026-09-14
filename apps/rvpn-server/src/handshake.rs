@@ -3,12 +3,64 @@
 use anyhow::{Context, Result};
 use rvpn_config::{CertificateAuthorityConfig, HandshakeConfig, PeerIdentity};
 use rvpn_core::SessionId;
-use rvpn_crypto::ObfuscationKey;
+use rvpn_crypto::{CookieKey, ObfuscationKey};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rvpn_protocol::{HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
 use std::{collections::HashMap, net::SocketAddr};
 
 use crate::state::{ActivePeer, PendingHandshake, PendingSource};
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Validates or challenges a fresh (non-rekey) initiation.
+///
+/// Returns `true` only when the initiation carried a cookie proving the
+/// sender can receive traffic at `endpoint` — the caller should then run the
+/// expensive per-identity handshake loop. On `false`, a cheap `CookieReply`
+/// has already been sent and no asymmetric crypto has run at all, so a
+/// spoofed source address costs the server one HMAC computation, not N
+/// X25519 keygens + N Ed25519 signs.
+pub async fn challenge_or_admit(
+    transport: &UdpTransport,
+    cookie_key: &CookieKey,
+    obfuscation: Option<&ObfuscationKey>,
+    endpoint: SocketAddr,
+    initiation: &HandshakeMessage,
+) -> Result<bool> {
+    let HandshakeMessage::Initiation {
+        public_key,
+        random,
+        cookie,
+    } = initiation
+    else {
+        return Ok(false);
+    };
+    let now = unix_now();
+    if let Some(cookie) = cookie {
+        if cookie_key.verify(endpoint, public_key, random, cookie, now) {
+            return Ok(true);
+        }
+    }
+    let expected = cookie_key.mint(endpoint, public_key, random, now);
+    let reply = Packet {
+        header: Header {
+            kind: PacketKind::Handshake,
+            key_phase: 0,
+            sequence: 0,
+            session_id: SessionId::ZERO,
+        },
+        payload: HandshakeMessage::CookieReply { cookie: expected }.encode(),
+    };
+    send_wire(transport, endpoint, reply.encode(), obfuscation).await?;
+    Ok(false)
+}
 
 async fn send_wire(
     transport: &UdpTransport,

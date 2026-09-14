@@ -19,7 +19,7 @@ use rand::{TryRng, rngs::SysRng};
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 /// Upper bound on random padding appended to each obfuscated datagram.
-const MAX_PADDING: usize = 64;
+const MAX_PADDING: usize = 255;
 /// Worst-case bytes added on top of the inner datagram by [`ObfuscationKey::wrap`].
 /// Reserve this in transport `max_datagram_size` budgets wherever obfuscation
 /// might be enabled.
@@ -66,8 +66,8 @@ impl ObfuscationKey {
         body.extend_from_slice(inner);
         body.extend_from_slice(&padding);
 
-        let mut cipher = ChaCha20::new_from_slices(&self.0, &nonce)
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let mut cipher =
+            ChaCha20::new_from_slices(&self.0, &nonce).map_err(|_| CryptoError::InvalidKey)?;
         cipher.apply_keystream(&mut body);
 
         let mut output = BytesMut::with_capacity(NONCE_LEN + body.len());
@@ -83,8 +83,8 @@ impl ObfuscationKey {
         }
         let (nonce, body) = datagram.split_at(NONCE_LEN);
         let mut body = body.to_vec();
-        let mut cipher = ChaCha20::new_from_slices(&self.0, nonce)
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let mut cipher =
+            ChaCha20::new_from_slices(&self.0, nonce).map_err(|_| CryptoError::InvalidKey)?;
         cipher.apply_keystream(&mut body);
 
         let padding_len = body[0] as usize;

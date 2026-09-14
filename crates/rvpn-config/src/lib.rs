@@ -492,6 +492,15 @@ pub struct HandshakeConfig {
     pub retry_interval_ms: u64,
     #[serde(default = "default_retry_limit")]
     pub retry_limit: u32,
+    /// +/- jitter (ms) applied around `retry_interval_ms` on every
+    /// retransmission, so retries don't repeat at a fixed, fingerprint-able
+    /// cadence. Zero disables jitter.
+    #[serde(default = "default_retry_jitter_ms")]
+    pub retry_jitter_ms: u64,
+}
+
+const fn default_retry_jitter_ms() -> u64 {
+    150
 }
 
 const fn default_retry_interval_ms() -> u64 {
@@ -506,8 +515,28 @@ impl Default for HandshakeConfig {
         Self {
             retry_interval_ms: default_retry_interval_ms(),
             retry_limit: default_retry_limit(),
+            retry_jitter_ms: default_retry_jitter_ms(),
         }
     }
+}
+
+/// Returns `base_ms` perturbed by up to +/- `jitter_ms`, floored at 1ms.
+/// This only needs to defeat passive averaging of a fixed cadence, not
+/// resist an adversary who can see our clock, so a non-cryptographic
+/// jitter source is fine here.
+pub fn jittered_retry_interval(base_ms: u64, jitter_ms: u64) -> std::time::Duration {
+    if jitter_ms == 0 {
+        return std::time::Duration::from_millis(base_ms.max(1));
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0) as u64;
+    let span = 2 * jitter_ms + 1;
+    let offset = (nanos % span) as i64 - jitter_ms as i64;
+    let millis = (base_ms as i64 + offset).max(1) as u64;
+    std::time::Duration::from_millis(millis)
 }
 
 impl HandshakeConfig {

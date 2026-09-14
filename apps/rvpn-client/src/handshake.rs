@@ -55,7 +55,7 @@ pub async fn establish(
     policy: &HandshakeConfig,
     old: Option<&ProtectedSession>,
 ) -> Result<ProtectedSession> {
-    let (handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
+    let (mut handshake, initiation) = InitiatorHandshake::start(auth.identity(), auth.verifier())?;
     let (kind, session_id, key_phase) = match old {
         Some(session) => (
             PacketKind::Rekey,
@@ -68,7 +68,7 @@ pub async fn establish(
         None => (PacketKind::Handshake, SessionId::ZERO, 0),
     };
     let old_phase = old.map_or(0, ProtectedSession::key_phase);
-    let initiation_packet = Packet {
+    let mut initiation_packet = Packet {
         header: Header {
             kind,
             key_phase: old_phase,
@@ -84,7 +84,7 @@ pub async fn establish(
             transport
                 .send_to(server, wire, SendOptions::default())
                 .await?;
-            let deadline = Instant::now() + Duration::from_millis(policy.retry_interval_ms);
+            let deadline = Instant::now() + Duration::from_millis(policy.retry_jitter_ms);
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -103,18 +103,30 @@ pub async fn establish(
                             if packet.header.kind == kind
                                 && (old.is_none() || packet.header.session_id == session_id)
                             {
-                                if let Ok(response @ HandshakeMessage::Response { .. }) =
-                                    HandshakeMessage::decode(packet.payload)
-                                {
-                                    let advertised_session = match response {
-                                        HandshakeMessage::Response { session_id, .. } => session_id,
-                                        _ => unreachable!(),
-                                    };
-                                    if packet.header.session_id == advertised_session
-                                        && handshake.authenticates_response(response)?
-                                    {
-                                        break 'retry response;
+                                match HandshakeMessage::decode(packet.payload) {
+                                    Ok(response @ HandshakeMessage::Response { .. }) => {
+                                        let advertised_session = match response {
+                                            HandshakeMessage::Response { session_id, .. } => {
+                                                session_id
+                                            }
+                                            _ => unreachable!(),
+                                        };
+                                        if packet.header.session_id == advertised_session
+                                            && handshake.authenticates_response(response)?
+                                        {
+                                            break 'retry response;
+                                        }
                                     }
+                                    Ok(HandshakeMessage::CookieReply { cookie }) => {
+                                        // Cheap, immediate resend — doesn't consume a retry attempt.
+                                        handshake.attach_cookie(cookie);
+                                        initiation_packet.payload = handshake.initiation().encode();
+                                        let wire = wrap(initiation_packet.encode(), obfuscation)?;
+                                        transport
+                                            .send_to(server, wire, SendOptions::default())
+                                            .await?;
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -159,7 +171,7 @@ pub async fn establish(
             .send_to(server, wire, SendOptions::default())
             .await?;
         if attempt != policy.retry_limit {
-            sleep(Duration::from_millis(policy.retry_interval_ms)).await;
+            sleep(Duration::from_millis(policy.retry_jitter_ms)).await;
         }
     }
     Ok(new_session)

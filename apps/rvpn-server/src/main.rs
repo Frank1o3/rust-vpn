@@ -28,6 +28,8 @@ async fn main() -> Result<()> {
     let obfuscation = config
         .obfuscation_key_bytes()?
         .map(rvpn_crypto::ObfuscationKey::from_bytes);
+    let cookie_key =
+        rvpn_crypto::CookieKey::generate().context("generating anti-amplification cookie key")?;
     let mode = config.interface.mode();
     let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
     let frame_overhead = match mode {
@@ -111,6 +113,7 @@ async fn main() -> Result<()> {
         certificate_authority,
         obfuscation,
         mode,
+        cookie_key,
         tun,
         tap,
         forwarding,

@@ -107,6 +107,7 @@ pub async fn run_tunnel(
     let handshake_policy = HandshakeConfig {
         retry_interval_ms: config.retry_interval_ms,
         retry_limit: config.retry_limit,
+        retry_jitter_ms: config.retry_interval_ms,
     };
     let auth = config.auth.clone();
 
@@ -300,7 +301,7 @@ async fn establish(
             transport
                 .send_to(server, wire, SendOptions::default())
                 .await?;
-            let deadline = Instant::now() + Duration::from_millis(policy.retry_interval_ms);
+            let deadline = Instant::now() + Duration::from_millis(policy.retry_jitter_ms);
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -382,7 +383,7 @@ async fn establish(
             .send_to(server, wire, SendOptions::default())
             .await?;
         if attempt != policy.retry_limit {
-            sleep(Duration::from_millis(policy.retry_interval_ms)).await;
+            sleep(Duration::from_millis(policy.retry_jitter_ms)).await;
         }
     }
     Ok(new_session)

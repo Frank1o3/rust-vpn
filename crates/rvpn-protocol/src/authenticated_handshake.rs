@@ -94,7 +94,6 @@ fn verify_proof(
 }
 
 impl InitiatorHandshake {
-    /// Generates and returns the first handshake message.
     pub fn start(
         identity: AuthIdentity,
         verifier: AuthVerifier,
@@ -103,6 +102,7 @@ impl InitiatorHandshake {
         let initiation = HandshakeMessage::Initiation {
             public_key: key_pair.public_key().to_bytes(),
             random: random_bytes()?,
+            cookie: None,
         };
         Ok((
             Self {
@@ -113,6 +113,26 @@ impl InitiatorHandshake {
             },
             initiation,
         ))
+    }
+
+    /// Current (possibly cookie-updated) initiation message.
+    pub const fn initiation(&self) -> HandshakeMessage {
+        self.initiation
+    }
+
+    /// Records a cookie from a `CookieReply` for the next initiation resend.
+    /// Does not touch the already-generated ephemeral key.
+    pub fn attach_cookie(&mut self, cookie: [u8; 32]) {
+        if let HandshakeMessage::Initiation {
+            public_key, random, ..
+        } = self.initiation
+        {
+            self.initiation = HandshakeMessage::Initiation {
+                public_key,
+                random,
+                cookie: Some(cookie),
+            };
+        }
     }
 
     /// Verifies a server response, then returns the client finish, the

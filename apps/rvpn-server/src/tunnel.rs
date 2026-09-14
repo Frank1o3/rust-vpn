@@ -7,12 +7,13 @@ use rvpn_crypto::ObfuscationKey;
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
 use rvpn_transport::{SendOptions, UdpTransport};
-use std::{collections::HashMap, time::Duration};
-use tokio::time::{MissedTickBehavior, interval};
+use std::collections::HashMap;
+use tokio::time::{Instant, sleep};
 
 use crate::firewall::ForwardingGuard;
 use crate::handshake::{
-    begin_initial, begin_rekey, finish_pending, maybe_send_rekey, retransmit_pending,
+    begin_initial, begin_rekey, challenge_or_admit, finish_pending, maybe_send_rekey,
+    retransmit_pending,
 };
 use crate::network::{
     ethernet_payload_ip, ethernet_src_mac, is_broadcast_or_multicast_mac, packet_destination,
@@ -35,6 +36,7 @@ pub async fn run_server_loop(
     certificate_authority: Option<CertificateAuthorityConfig>,
     obfuscation: Option<ObfuscationKey>,
     mode: DeviceMode,
+    cookie_key: rvpn_crypto::CookieKey,
     tun: Option<VirtualInterface>,
     tap: Option<VirtualInterface>,
     forwarding: ForwardingGuard,
@@ -44,8 +46,10 @@ pub async fn run_server_loop(
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
     let mut pending: HashMap<SessionId, PendingHandshake> = HashMap::new();
     let mut mac_table: HashMap<[u8; 6], SessionId> = HashMap::new();
-    let mut retry_tick = interval(Duration::from_millis(config.handshake.retry_interval_ms));
-    retry_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut retry_sleep = Box::pin(sleep(rvpn_config::jittered_retry_interval(
+        config.handshake.retry_interval_ms,
+        config.handshake.retry_jitter_ms,
+    )));
 
     loop {
         tokio::select! {
@@ -55,9 +59,13 @@ pub async fn run_server_loop(
                 forwarding.cleanup().await;
                 return Ok(());
             }
-            _ = retry_tick.tick() => {
-                retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await?;
-            }
+            () = &mut retry_sleep => {
+            retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await?;
+            retry_sleep.as_mut().reset(Instant::now() + rvpn_config::jittered_retry_interval(
+                config.handshake.retry_interval_ms,
+                config.handshake.retry_jitter_ms,
+            ));
+        }
             outbound_tun = async {
                 if let Some(t) = &tun {
                     t.recv().await
@@ -148,7 +156,9 @@ pub async fn run_server_loop(
                 match packet.header.kind {
                     PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::ZERO => {
                         if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
-                            begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation).await?;
+                            if challenge_or_admit(&transport, &cookie_key, obfuscation, datagram.peer, &initiation).await? {
+                                begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation).await?;
+                            }
                         }
                     }
                     PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {

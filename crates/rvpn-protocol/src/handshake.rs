@@ -10,7 +10,9 @@ const PSK_PROOF_LEN: usize = 32;
 const SIGNATURE_PROOF_LEN: usize = 64;
 const CERTIFICATE_LEN: usize = 112;
 const CERTIFICATE_PROOF_LEN: usize = CERTIFICATE_LEN + SIGNATURE_PROOF_LEN;
-const INITIATION_LEN: usize = 1 + PUBLIC_KEY_LEN + RANDOM_LEN;
+const COOKIE_LEN: usize = 32;
+const INITIATION_LEN: usize = 1 + PUBLIC_KEY_LEN + RANDOM_LEN + 1 + COOKIE_LEN;
+const COOKIE_REPLY_LEN: usize = 1 + COOKIE_LEN;
 const SERVER_AUTH_DOMAIN: &[u8] = b"rvpn-v1/handshake/server";
 const CLIENT_AUTH_DOMAIN: &[u8] = b"rvpn-v1/handshake/client";
 
@@ -116,6 +118,7 @@ pub enum HandshakeMessage {
     Initiation {
         public_key: [u8; PUBLIC_KEY_LEN],
         random: [u8; RANDOM_LEN],
+        cookie: Option<[u8; COOKIE_LEN]>,
     },
     /// Server response authenticated over the initiation and response fields.
     Response {
@@ -125,18 +128,37 @@ pub enum HandshakeMessage {
         proof: AuthProof,
     },
     /// Client confirmation authenticated over the complete prior transcript.
-    Finish { proof: AuthProof },
+    Finish {
+        proof: AuthProof,
+    },
+    CookieReply {
+        cookie: [u8; COOKIE_LEN],
+    },
 }
 
 impl HandshakeMessage {
     /// Encodes one strict, self-delimiting handshake message.
     pub fn encode(self) -> Bytes {
         match self {
-            Self::Initiation { public_key, random } => {
+            Self::Initiation {
+                public_key,
+                random,
+                cookie,
+            } => {
                 let mut output = BytesMut::with_capacity(INITIATION_LEN);
                 output.put_u8(1);
                 output.extend_from_slice(&public_key);
                 output.extend_from_slice(&random);
+                match cookie {
+                    Some(cookie) => {
+                        output.put_u8(1);
+                        output.extend_from_slice(&cookie);
+                    }
+                    None => {
+                        output.put_u8(0);
+                        output.extend_from_slice(&[0; COOKIE_LEN]);
+                    }
+                }
                 output.freeze()
             }
             Self::Response {
@@ -161,6 +183,12 @@ impl HandshakeMessage {
                 proof.encode_into(&mut output);
                 output.freeze()
             }
+            Self::CookieReply { cookie } => {
+                let mut output = BytesMut::with_capacity(COOKIE_REPLY_LEN);
+                output.put_u8(4);
+                output.extend_from_slice(&cookie);
+                output.freeze()
+            }
         }
     }
 
@@ -177,7 +205,15 @@ impl HandshakeMessage {
                 let mut random = [0; RANDOM_LEN];
                 input.copy_to_slice(&mut public_key);
                 input.copy_to_slice(&mut random);
-                Ok(Self::Initiation { public_key, random })
+                let has_cookie = input.get_u8();
+                let mut cookie_bytes = [0; COOKIE_LEN];
+                input.copy_to_slice(&mut cookie_bytes);
+                let cookie = (has_cookie == 1).then_some(cookie_bytes);
+                Ok(Self::Initiation {
+                    public_key,
+                    random,
+                    cookie,
+                })
             }
             2 => {
                 const FIXED: usize = 1 + PUBLIC_KEY_LEN + RANDOM_LEN + SessionId::LENGTH;
@@ -203,6 +239,15 @@ impl HandshakeMessage {
                 input.advance(1);
                 let proof = AuthProof::decode(&input)?;
                 Ok(Self::Finish { proof })
+            }
+            4 => {
+                if input.remaining() != COOKIE_REPLY_LEN {
+                    return Err(ProtocolError::InvalidHandshake);
+                }
+                input.advance(1);
+                let mut cookie = [0; COOKIE_LEN];
+                input.copy_to_slice(&mut cookie);
+                Ok(Self::CookieReply { cookie })
             }
             _ => Err(ProtocolError::InvalidHandshake),
         }
@@ -374,6 +419,7 @@ mod tests {
         let initiation = HandshakeMessage::Initiation {
             public_key: [1; 32],
             random: [2; 32],
+            cookie: None,
         };
         let response = HandshakeMessage::Response {
             public_key: [3; 32],
