@@ -1,7 +1,7 @@
 # RVPN Client configuration for 'Laptop' (generated)
 
 server="192.168.88.253:9000"
-obfuscation_key="a5eba2efde54d44775c95d4bcc5d926f9ff4ed06ffb53676dff86072eef720eb"
+obfuscation_key="2bdd6f85d985dee8ab38025ffaf38d0f0e0061189847ddbedbebcf8887820e8f"
 
 [interface]
     address="10.42.0.2/24"
@@ -9,18 +9,19 @@ obfuscation_key="a5eba2efde54d44775c95d4bcc5d926f9ff4ed06ffb53676dff86072eef720e
     mode="tun"
     mtu=1400
     name="rvpn-pc-laptop"
+    dns_servers="192.168.88.1"
 
 [routing]
     default_route=true
     default_route_v6=true
-    endpoint_gateway="192.168.88.253"
+    endpoint_gateway="192.168.88.253:9000"
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
 
 [auth]
     mode="pinned-key"
-    local_identity_seed="15c79d9a4ce71aea7adec1064fb3aab074cf6e70b844c525482e371dc400b8c7"
-    peer_public_key="3ca7e69bb93fe66b001b33d7a4e7875b0d9c85c6ba64990f0d04fcac1206f4d7"
+    local_identity_seed="79d083713b2356df7b91565c8a111136ed93a8db24eb48161830eaaf3d0072ce"
+    peer_public_key="c6e728cadfd437a3ccb91c068cf79b6158667ad619ed253cbe2729ed4d530a54"
 
 [handshake]
     retry_interval_ms=150

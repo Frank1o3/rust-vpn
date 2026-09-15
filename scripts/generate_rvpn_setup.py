@@ -153,6 +153,23 @@ def issue_certificate(ca_seed_hex: str, subject_public_key_hex: str, days: int) 
 # Network helpers
 # --------------------------------------------------------------------------
 
+def derive_dns_from_endpoint_external(endpoint_external: str) -> str:
+    """
+    Derive the LAN gateway/DNS address from an IPv4 endpoint address.
+
+    Example:
+        192.168.88.253 -> 192.168.88.1
+    """
+    address = ipaddress.ip_address(endpoint_external)
+
+    if not isinstance(address, ipaddress.IPv4Address):
+        raise ValueError(
+            "Automatic DNS derivation currently requires an IPv4 endpoint_external address."
+        )
+
+    octets = endpoint_external.split(".")
+    return ".".join(octets[:3] + ["1"])
+
 def detect_external_interface() -> Optional[str]:
     """Best-effort detection of the interface carrying the default route.
 
@@ -223,13 +240,15 @@ def toml_list(values: list[str]) -> str:
 class SetupConfig:
     bind_address: str
     bind_port: int
-    client_server_address: str  # host:port as reached by clients
+    client_server_address: str
+    endpoint_external: str
+    dns_servers: str
     interface_name: str
     mode: str
     mtu: int
-    server_v4: str  # e.g. 10.42.0.1/24
+    server_v4: str
     ipv6_enabled: bool
-    server_v6: str  # e.g. fd42::1/64, empty if disabled
+    server_v6: str
     forwarding_enabled: bool
     forwarding_backend: str
     external_interface: str
@@ -237,7 +256,7 @@ class SetupConfig:
     tunnel_cidr_v6: str
     obfuscation_enabled: bool
     obfuscation_key: str
-    auth_mode: str  # psk | pinned-key | certificate
+    auth_mode: str
     ca: Optional[KeyPair] = None
     ca_cert_days: int = 3650
     endpoint_gateway: str = ""
@@ -266,11 +285,23 @@ def gather_setup() -> SetupConfig:
     bind_port = prompt_int("Bind port", default=9000)
 
     default_client_addr = None if bind_address == "0.0.0.0" else bind_address
-    client_server_address = prompt(
-        "Server address as reached by clients (host or IP)",
+    endpoint_external = prompt(
+        "External endpoint IP/hostname used by clients",
         default=default_client_addr,
         required=default_client_addr is None,
     )
+
+    client_server_address = f"{endpoint_external}:{bind_port}"
+
+    dns_servers = ""
+    try:
+        dns_servers = derive_dns_from_endpoint_external(endpoint_external)
+        print(f"  -> derived client DNS server: {dns_servers}")
+    except ValueError:
+        print(
+            "  -> DNS could not be derived automatically because the endpoint "
+            "is not an IPv4 address."
+        )
 
     interface_name = prompt("Server interface name", default="rvpn-server0")
     mode = prompt_choice("Interface mode", ["tun", "tap", "both"], default="tun")
@@ -326,7 +357,9 @@ def gather_setup() -> SetupConfig:
     return SetupConfig(
         bind_address=bind_address,
         bind_port=bind_port,
-        client_server_address=f"{client_server_address}:{bind_port}",
+        client_server_address=client_server_address,
+        endpoint_external=endpoint_external,
+        dns_servers=dns_servers,
         interface_name=interface_name,
         mode=mode,
         mtu=mtu,
@@ -482,14 +515,16 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
         addresses.append(f"{peer.tunnel_v6}/{prefix_length(setup.server_v6)}")
 
     lines.append("[interface]")
-    lines.append(f"    address={toml_str(f'{peer.tunnel_v4}/{prefix_length(setup.server_v4)}')}")
+    lines.append(
+        f"    address={toml_str(f'{peer.tunnel_v4}/{prefix_length(setup.server_v4)}')}"
+    )
     if addresses:
         lines.append(f"    addresses={toml_list(addresses)}")
-    # Client peers use TUN. Android's VpnService exposes a TUN interface,
-    # and the desktop client is also intended to use the virtual TUN device.
     lines.append(f"    mode={toml_str('tun')}")
     lines.append(f"    mtu={setup.mtu}")
-    lines.append(f"    name={toml_str(f"rvpn-{peer.platform}-{slugify(peer.name)}")}")
+    lines.append(f"    name={toml_str(f'rvpn-{peer.platform}-{slugify(peer.name)}')}")
+    if setup.dns_servers:
+        lines.append(f"    dns_servers={toml_str(setup.dns_servers)}")
     lines.append("")
 
     lines.append("[routing]")
