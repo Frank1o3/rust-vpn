@@ -246,6 +246,7 @@ class SetupConfig:
 @dataclass
 class PeerSetup:
     name: str
+    platform: str  # "pc" or "android"
     tunnel_v4: str
     tunnel_v6: str
     # server-side auth material
@@ -347,16 +348,40 @@ def gather_setup() -> SetupConfig:
 
 
 def gather_peers(setup: SetupConfig) -> list[PeerSetup]:
-    peer_count = prompt_int("How many peers (clients) to generate", default=1)
-    peers: list[PeerSetup] = []
-    for index in range(1, peer_count + 1):
-        print(f"\n-- Peer {index} --")
-        name = prompt("Peer name", default=f"peer-{index}")
-        # offset 1 is the server's own address; peers start at offset 2.
-        tunnel_v4 = host_at_offset(setup.server_v4, index + 1)
-        tunnel_v6 = host_at_offset(setup.server_v6, index + 1) if setup.ipv6_enabled else ""
+    pc_count = prompt_int("How many PC peers to generate", default=0)
+    android_count = prompt_int("How many Android peers to generate", default=1)
 
-        peer = PeerSetup(name=name, tunnel_v4=tunnel_v4, tunnel_v6=tunnel_v6)
+    if pc_count < 0 or android_count < 0:
+        raise ValueError("Peer counts cannot be negative.")
+
+    peer_specs: list[tuple[str, int]] = (
+        [("pc", index) for index in range(1, pc_count + 1)]
+        + [("android", index) for index in range(1, android_count + 1)]
+    )
+
+    peers: list[PeerSetup] = []
+
+    for global_index, (platform, platform_index) in enumerate(peer_specs, start=1):
+        print(f"\n-- {platform.capitalize()} peer {platform_index} --")
+
+        default_name = f"{platform}-{platform_index}"
+        name = prompt("Peer name", default=default_name)
+
+        # Offset 1 is the server's own address; peers start at offset 2.
+        # Every generated peer receives a unique address regardless of platform.
+        tunnel_v4 = host_at_offset(setup.server_v4, global_index + 1)
+        tunnel_v6 = (
+            host_at_offset(setup.server_v6, global_index + 1)
+            if setup.ipv6_enabled
+            else ""
+        )
+
+        peer = PeerSetup(
+            name=name,
+            platform=platform,
+            tunnel_v4=tunnel_v4,
+            tunnel_v6=tunnel_v6,
+        )
 
         if setup.auth_mode == "psk":
             peer.server_psk = generate_hex_secret(32)
@@ -373,10 +398,13 @@ def gather_peers(setup: SetupConfig) -> list[PeerSetup]:
             peer.client_seed_hex = client_identity.seed
             peer.client_pub_hex = client_identity.public_key
             peer.client_certificate_hex = issue_certificate(
-                setup.ca.seed, client_identity.public_key, setup.ca_cert_days
+                setup.ca.seed,
+                client_identity.public_key,
+                setup.ca_cert_days,
             )
 
         peers.append(peer)
+
     return peers
 
 
@@ -457,9 +485,11 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
     lines.append(f"    address={toml_str(f'{peer.tunnel_v4}/{prefix_length(setup.server_v4)}')}")
     if addresses:
         lines.append(f"    addresses={toml_list(addresses)}")
-    lines.append(f"    mode={toml_str(setup.mode)}")
+    # Client peers use TUN. Android's VpnService exposes a TUN interface,
+    # and the desktop client is also intended to use the virtual TUN device.
+    lines.append(f"    mode={toml_str('tun')}")
     lines.append(f"    mtu={setup.mtu}")
-    lines.append(f"    name={toml_str('rvpn-client0')}")
+    lines.append(f"    name={toml_str(f"rvpn-{peer.platform}-{slugify(peer.name)}")}")
     lines.append("")
 
     lines.append("[routing]")
@@ -488,6 +518,13 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
         lines.append(f"    local_certificate={toml_str(peer.client_certificate_hex)}")
         lines.append(f"    ca_public_key={toml_str(setup.ca.public_key)}")
     lines.append("")
+    lines.append("[handshake]")
+    lines.append("    retry_interval_ms=150")
+    lines.append("    retry_limit=5")
+    lines.append("")
+    lines.append("[rekey]")
+    lines.append("    packet_limit=1000000")
+    lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -514,13 +551,19 @@ def main() -> int:
     print(f"\nWrote {server_path}")
 
     for peer in peers:
-        client_path = args.output_dir / f"client-{slugify(peer.name)}.toml"
+        client_path = (
+            args.output_dir
+            / f"client-{peer.platform}-{slugify(peer.name)}.toml"
+        )
         client_path.write_text(render_client_toml(setup, peer), encoding="utf-8")
         print(f"Wrote {client_path}")
 
     print(
-        "\nDone. Paste each client-*.toml file's contents into the RVPN "
-        "Android app's Config tab (or use as a desktop client.toml directly)."
+        "\nDone. PC and Android client TOML files were generated separately."
+    )
+    print(
+        "Android files can be pasted into the Android app's Config tab; "
+        "PC files can be used as desktop client configurations."
     )
     if setup.auth_mode == "certificate":
         print("Keep the CA seed offline -- it was not written to any file above.")
