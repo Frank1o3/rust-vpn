@@ -21,7 +21,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let mut args = env::args().skip(1);
-    let path = args.next().context("usage: rvpn-client <client.toml> [--gui]")?;
+    let path = args
+        .next()
+        .context("usage: rvpn-client <client.toml> [--gui]")?;
     let gui = args.any(|arg| arg == "--gui");
     let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
 
@@ -57,11 +59,9 @@ fn run_gui(config: ClientConfig) -> Result<()> {
 
             let os_shutdown = Box::pin(shutdown_signal());
             let gui_shutdown = Box::pin(gui_shutdown(os_shutdown, shutdown_rx));
-            if let Err(error) = runtime.block_on(run_client(
-                config,
-                Some(thread_state),
-                Some(gui_shutdown),
-            )) {
+            if let Err(error) =
+                runtime.block_on(run_client(config, Some(thread_state), Some(gui_shutdown)))
+            {
                 tracing::error!(%error, "RVPN client stopped with an error");
             }
         })?;
@@ -142,7 +142,7 @@ async fn run_client(
 
     if let Some(state) = &gui_state {
         let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-        state.connected(format!("{:?}", session.session_id()), mtu);
+        state.connected(format!("{:?}", session.session_id()), mtu.into());
         state.set_key_phase(session.key_phase());
     }
 
@@ -245,7 +245,7 @@ async fn gui_shutdown(
 async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut sigterm = signal(SignalKind::terminate()).context("register SIGTERM handler")?;
         let mut sighup = signal(SignalKind::hangup()).context("register SIGHUP handler")?;
         tokio::select! {
