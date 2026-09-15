@@ -90,7 +90,6 @@ impl GuiState {
     }
 
     pub fn update_transport(&mut self, metrics: MetricsSnapshot, mtu: MtuSnapshot) {
-        self.configured_mtu = mtu.maximum_mtu;
         self.effective_mtu = mtu.effective_mtu;
         self.mtu_state = if mtu.probing {
             "Probing".into()
