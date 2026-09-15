@@ -89,7 +89,7 @@ fn run_gui(config: ClientConfig) -> Result<()> {
 async fn run_client(
     config: ClientConfig,
     gui_state: Option<gui::GuiStateHandle>,
-    shutdown: Option<tokio::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>>,
+    shutdown: Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>>,
 ) -> Result<()> {
     tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
     let server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
