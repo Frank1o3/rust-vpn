@@ -104,6 +104,14 @@ impl UdpTransport {
         self.mtu.record_path_failure();
     }
 
+    /// Records that a caller dropped a datagram locally due to backpressure
+    /// (for example, an [`crate::OutboundQueue::try_enqueue`] failure), so
+    /// it shows up in [`Self::metrics_snapshot`] alongside every other
+    /// transport counter instead of only reaching a debug log.
+    pub fn record_dropped_backpressure(&self) {
+        self.metrics.record_dropped_backpressure();
+    }
+
     /// Sends opaque bytes to the configured remote peer.
     pub async fn send(
         &self,

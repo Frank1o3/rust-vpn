@@ -3,7 +3,7 @@ use rvpn_config::ClientConfig;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
-use rvpn_transport::{SendOptions, TransportError, UdpTransport};
+use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::net::SocketAddr;
 
 use crate::handshake::{establish, maybe_rekey};
@@ -43,6 +43,13 @@ pub async fn run_data_plane(
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {
     let keepalive = transport.keepalive();
+    // Sealed TUN/TAP datagrams are handed to this bounded queue instead of
+    // being sent inline, so a momentarily slow or congested socket send
+    // never blocks this select! loop from servicing handshake retransmits,
+    // rekeys, or inbound decrypt in the same iteration. Sealing itself
+    // still happens synchronously below since it needs &mut session.
+    let (outbound, mut outbound_rx) = OutboundQueue::new(256);
+
     loop {
         tokio::select! {
             signal = &mut shutdown_signal => {
@@ -70,11 +77,11 @@ pub async fn run_data_plane(
 
                 return Ok(());
             }
-            // Keepalive: fire a sealed empty Data packet to keep NAT mappings
-            // alive. Uses the KeepaliveScheduler from the transport so any
-            // real send/receive automatically resets the deadline.
+            // Keepalive: fire a sealed, empty Keepalive packet to keep NAT
+            // mappings alive. Uses the KeepaliveScheduler from the transport
+            // so any real send/receive automatically resets the deadline.
             () = keepalive.wait_for_due() => {
-                match session.seal(PacketKind::Data, b"") {
+                match session.seal(PacketKind::Keepalive, b"") {
                     Ok(sealed) => {
                         match wrap(sealed.encode(), obfuscation) {
                             Ok(wire) => {
@@ -91,6 +98,14 @@ pub async fn run_data_plane(
                     Err(e) => tracing::debug!(%e, "keepalive seal failed; session may need rekey"),
                 }
             }
+            // Drains sealed datagrams queued by the TUN/TAP read arms below.
+            queued = outbound_rx.recv() => {
+                if let Some(datagram) = queued {
+                    if let Err(e) = send_wire(transport, datagram.peer, datagram.payload).await {
+                        tracing::debug!(%e, "queued datagram send failed");
+                    }
+                }
+            }
             packet = async {
                 if let Some(dev) = tun {
                     dev.recv().await
@@ -102,8 +117,9 @@ pub async fn run_data_plane(
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
-                if let Err(e) = send_wire(transport, server, wire).await {
-                    tracing::warn!(%e, "failed to send TUN packet to server");
+                if let Err(e) = outbound.try_enqueue(server, wire) {
+                    transport.record_dropped_backpressure();
+                    tracing::debug!(%e, "outbound queue full; dropping TUN packet under backpressure");
                 }
             }
             frame = async {
@@ -117,8 +133,9 @@ pub async fn run_data_plane(
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::DataTap, &frame)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
-                if let Err(e) = send_wire(transport, server, wire).await {
-                    tracing::warn!(%e, "failed to send TAP frame to server");
+                if let Err(e) = outbound.try_enqueue(server, wire) {
+                    transport.record_dropped_backpressure();
+                    tracing::debug!(%e, "outbound queue full; dropping TAP frame under backpressure");
                 }
             }
             datagram = transport.receive() => {
@@ -136,6 +153,12 @@ pub async fn run_data_plane(
                 };
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data || packet.header.kind == PacketKind::DataTap => packet,
+                    Ok(packet) if packet.header.kind == PacketKind::Keepalive => {
+                        // Authenticates the sender and advances the replay
+                        // window; nothing more to do with an empty keepalive.
+                        let _ = session.open(packet);
+                        continue;
+                    }
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
                         if session.open(packet).is_ok() {
                             tracing::info!("server closed the session");

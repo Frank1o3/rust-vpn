@@ -28,7 +28,9 @@ impl Config {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum AuthMode {
-    Psk { pre_shared_key: String },
+    Psk {
+        pre_shared_key: String,
+    },
     PinnedKey {
         local_identity_seed: String,
         peer_public_key: String,

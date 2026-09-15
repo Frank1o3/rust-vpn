@@ -10,10 +10,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 #[derive(Debug)]
 pub enum TransportEvent {
     PacketReceived(TransportPacket),
-    DatagramDropped {
-        size: usize,
-        maximum: usize,
-    },
+    DatagramDropped { size: usize, maximum: usize },
     ReceiveFailed(TransportError),
 }
 

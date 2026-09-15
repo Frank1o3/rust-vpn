@@ -13,6 +13,7 @@ pub enum PacketKind {
     Rekey = 3,
     Close = 4,
     DataTap = 5,
+    Keepalive = 6,
 }
 
 impl TryFrom<u8> for PacketKind {
@@ -25,6 +26,7 @@ impl TryFrom<u8> for PacketKind {
             3 => Ok(Self::Rekey),
             4 => Ok(Self::Close),
             5 => Ok(Self::DataTap),
+            6 => Ok(Self::Keepalive),
             _ => Err(ProtocolError::UnknownPacketKind(value)),
         }
     }
@@ -146,6 +148,20 @@ mod tests {
                 session_id: SessionId::new([7; 16]),
             },
             payload: Bytes::from_static(b"ethernet-frame"),
+        };
+        assert_eq!(Packet::decode(packet.encode()).unwrap(), packet);
+    }
+
+    #[test]
+    fn keepalive_round_trips_like_data() {
+        let packet = Packet {
+            header: Header {
+                kind: PacketKind::Keepalive,
+                key_phase: 0,
+                sequence: 5,
+                session_id: SessionId::new([1; 16]),
+            },
+            payload: Bytes::new(),
         };
         assert_eq!(Packet::decode(packet.encode()).unwrap(), packet);
     }

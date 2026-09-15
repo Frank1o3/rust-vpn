@@ -85,7 +85,8 @@ impl IdentityPublicKey {
         let Ok(key) = self.verifying_key() else {
             return false;
         };
-        key.verify(message, &Signature::from_bytes(signature)).is_ok()
+        key.verify(message, &Signature::from_bytes(signature))
+            .is_ok()
     }
 }
 

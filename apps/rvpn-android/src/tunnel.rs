@@ -6,7 +6,7 @@ use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
-use rvpn_transport::{SendOptions, TransportConfig, TransportError, UdpTransport};
+use rvpn_transport::{OutboundQueue, SendOptions, TransportConfig, TransportError, UdpTransport};
 use std::{net::SocketAddr, os::fd::RawFd, sync::Arc, time::Instant};
 use tokio::{
     sync::watch,
@@ -55,6 +55,13 @@ pub async fn run_tunnel(
     )
     .context("opening Android TUN device")?;
 
+    // `server` is reassigned on every authenticated endpoint change below
+    // and read again on later loop iterations (passed into `establish`,
+    // `maybe_rekey`, and `send_wire`); rustc's per-branch liveness check
+    // doesn't see that far across `tokio::select!` loop iterations and
+    // flags some of those writes as unread, so the lint is suppressed here
+    // rather than restructuring otherwise-correct code.
+    #[allow(unused_assignments)]
     let mut server = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving RVPN server endpoint")?;
@@ -124,6 +131,10 @@ pub async fn run_tunnel(
     );
 
     let keepalive = transport.keepalive();
+    // Sealed TUN datagrams are queued here instead of sent inline, so a
+    // slow/congested socket send never blocks this select! loop from
+    // servicing shutdown, rekeys, or inbound decrypt in the same iteration.
+    let (outbound, mut outbound_rx) = OutboundQueue::new(256);
 
     loop {
         tokio::select! {
@@ -141,9 +152,9 @@ pub async fn run_tunnel(
                     return Ok(());
                 }
             }
-            // Keepalive: keep NAT mappings alive with an empty sealed Data packet.
+            // Keepalive: keep NAT mappings alive with a sealed, empty Keepalive packet.
             () = keepalive.wait_for_due() => {
-                match session.seal(PacketKind::Data, b"") {
+                match session.seal(PacketKind::Keepalive, b"") {
                     Ok(sealed) => {
                         let encoded = sealed.encode();
                         let wire = match &obfuscation {
@@ -166,6 +177,14 @@ pub async fn run_tunnel(
                     Err(e) => tracing::debug!(%e, "Android keepalive seal failed; session may need rekey"),
                 }
             }
+            // Drains sealed datagrams queued by the TUN read arm below.
+            queued = outbound_rx.recv() => {
+                if let Some(datagram) = queued {
+                    if let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await {
+                        tracing::debug!(%e, "queued datagram send failed");
+                    }
+                }
+            }
             packet = tun.recv() => {
                 let packet = packet.context("reading packet from Android TUN interface")?;
                 if let Some(stats) = &config.stats {
@@ -184,8 +203,9 @@ pub async fn run_tunnel(
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let encoded = sealed.encode();
                 let wire = match &obfuscation { Some(key) => key.wrap(&encoded)?, None => encoded };
-                if let Err(e) = send_wire(&transport, server, wire).await {
-                    tracing::warn!(%e, "failed to send Android TUN packet to server");
+                if let Err(e) = outbound.try_enqueue(server, wire) {
+                    transport.record_dropped_backpressure();
+                    tracing::debug!(%e, "outbound queue full; dropping Android TUN packet under backpressure");
                 }
             }
             datagram = transport.receive() => {
@@ -200,6 +220,18 @@ pub async fn run_tunnel(
                 };
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data => packet,
+                    Ok(packet) if packet.header.kind == PacketKind::Keepalive => {
+                        match session.open(packet) {
+                            Ok(_) => {
+                                if peer != server {
+                                    tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
+                                    server = peer;
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                        continue;
+                    }
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
                         match session.open(packet) {
                             Ok(_) => {
@@ -243,7 +275,8 @@ pub async fn run_tunnel(
 
                 match session.open(packet) {
                     Ok(plaintext) => {
-                        // Discard keepalive packets (empty sealed Data).
+                        // Discard any legacy empty-Data keepalives from an
+                        // older packet format.
                         if plaintext.is_empty() {
                             continue;
                         }

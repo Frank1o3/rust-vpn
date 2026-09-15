@@ -1,6 +1,7 @@
 use bytes::BytesMut;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rvpn_transport::{AdaptiveMtu, BufferPool};
+use std::hint::black_box;
 
 fn bench_buffer_pool(c: &mut Criterion) {
     let pool = BufferPool::new(1500, 32);

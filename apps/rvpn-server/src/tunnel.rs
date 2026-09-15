@@ -4,7 +4,7 @@ use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
-use rvpn_transport::{SendOptions, TransportError, UdpTransport};
+use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use tokio::time::{Instant, sleep};
@@ -66,6 +66,12 @@ pub async fn run_server_loop(
         config.handshake.retry_jitter_ms,
     )));
     let keepalive = transport.keepalive();
+    // Sealed TUN/TAP datagrams for any active peer are queued here instead
+    // of being sent inline, decoupling a slow/congested send to one peer
+    // from servicing handshakes, rekeys, and other peers' traffic in the
+    // same select! iteration. Shared across peers since sealing (which
+    // needs &mut peer.session) still happens synchronously per-peer below.
+    let (outbound, mut outbound_rx) = OutboundQueue::new(1024);
 
     loop {
         tokio::select! {
@@ -82,11 +88,12 @@ pub async fn run_server_loop(
                     config.handshake.retry_jitter_ms,
                 ));
             }
-            // Keepalive: send a sealed empty Data packet to every active peer to
-            // keep NAT mappings alive and let the client detect liveness.
+            // Keepalive: send a sealed empty Keepalive packet to every active
+            // peer to keep NAT mappings alive and let the client detect
+            // liveness.
             () = keepalive.wait_for_due() => {
                 for peer in active.values_mut() {
-                    match peer.session.seal(PacketKind::Data, b"") {
+                    match peer.session.seal(PacketKind::Keepalive, b"") {
                         Ok(sealed) => {
                             match wrap(sealed.encode(), obfuscation) {
                                 Ok(wire) => {
@@ -102,6 +109,14 @@ pub async fn run_server_loop(
                 }
                 keepalive.record_keepalive_sent();
             }
+            // Drains sealed datagrams queued by the TUN/TAP outbound arms below.
+            queued = outbound_rx.recv() => {
+                if let Some(datagram) = queued {
+                    if let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await {
+                        tracing::debug!(%e, "queued datagram send failed");
+                    }
+                }
+            }
             outbound_tun = async {
                 if let Some(t) = &tun {
                     t.recv().await
@@ -109,14 +124,15 @@ pub async fn run_server_loop(
                     std::future::pending().await
                 }
             } => {
-                let outbound = outbound_tun?;
-                let Some(destination) = packet_destination(&outbound) else { continue; };
+                let outbound_pkt = outbound_tun?;
+                let Some(destination) = packet_destination(&outbound_pkt) else { continue; };
                 if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
                     maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
-                    let packet = peer.session.seal(PacketKind::Data, &outbound)?;
+                    let packet = peer.session.seal(PacketKind::Data, &outbound_pkt)?;
                     let wire = wrap(packet.encode(), obfuscation)?;
-                    if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
-                        tracing::warn!(peer = %peer.identity.name, %e, "failed to send TUN packet to peer");
+                    if let Err(e) = outbound.try_enqueue(peer.endpoint, wire) {
+                        transport.record_dropped_backpressure();
+                        tracing::debug!(peer = %peer.identity.name, %e, "outbound queue full; dropping TUN packet");
                     }
                 } else {
                     tracing::debug!(%destination, "no RVPN peer owns outbound TUN destination");
@@ -129,16 +145,17 @@ pub async fn run_server_loop(
                     std::future::pending().await
                 }
             } => {
-                let outbound = outbound_tap?;
-                if outbound.len() < 14 { continue; }
-                let dst_mac: [u8; 6] = outbound[0..6].try_into().unwrap();
+                let outbound_frame = outbound_tap?;
+                if outbound_frame.len() < 14 { continue; }
+                let dst_mac: [u8; 6] = outbound_frame[0..6].try_into().unwrap();
                 if is_broadcast_or_multicast_mac(&dst_mac) {
                     for peer in active.values_mut() {
                         maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
-                        if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
+                        if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound_frame) {
                             if let Ok(wire) = wrap(packet.encode(), obfuscation) {
-                                if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
-                                    tracing::debug!(peer = %peer.identity.name, %e, "failed to broadcast TAP frame");
+                                if let Err(e) = outbound.try_enqueue(peer.endpoint, wire) {
+                                    transport.record_dropped_backpressure();
+                                    tracing::debug!(peer = %peer.identity.name, %e, "outbound queue full; dropping broadcast TAP frame");
                                 }
                             }
                         }
@@ -146,22 +163,24 @@ pub async fn run_server_loop(
                 } else if let Some(target_session) = mac_table.get(&dst_mac) {
                     if let Some(peer) = active.get_mut(target_session) {
                         maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
-                        let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
+                        let packet = peer.session.seal(PacketKind::DataTap, &outbound_frame)?;
                         let wire = wrap(packet.encode(), obfuscation)?;
-                        if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
-                            tracing::warn!(peer = %peer.identity.name, %e, "failed to send TAP frame to peer");
+                        if let Err(e) = outbound.try_enqueue(peer.endpoint, wire) {
+                            transport.record_dropped_backpressure();
+                            tracing::debug!(peer = %peer.identity.name, %e, "outbound queue full; dropping TAP frame");
                         }
                     }
                 } else {
-                    let dest_ip = ethernet_payload_ip(&outbound, true);
+                    let dest_ip = ethernet_payload_ip(&outbound_frame, true);
                     let mut sent = false;
                     if let Some(destination) = dest_ip {
                         if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
                             maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
-                            let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
+                            let packet = peer.session.seal(PacketKind::DataTap, &outbound_frame)?;
                             let wire = wrap(packet.encode(), obfuscation)?;
-                            if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
-                                tracing::warn!(peer = %peer.identity.name, %e, "failed to send TAP frame to peer via IP lookup");
+                            if let Err(e) = outbound.try_enqueue(peer.endpoint, wire) {
+                                transport.record_dropped_backpressure();
+                                tracing::debug!(peer = %peer.identity.name, %e, "outbound queue full; dropping TAP frame via IP lookup");
                             } else {
                                 sent = true;
                             }
@@ -169,10 +188,11 @@ pub async fn run_server_loop(
                     }
                     if !sent {
                         for peer in active.values_mut() {
-                            if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
+                            if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound_frame) {
                                 if let Ok(wire) = wrap(packet.encode(), obfuscation) {
-                                    if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
-                                        tracing::debug!(peer = %peer.identity.name, %e, "failed to flood TAP frame");
+                                    if let Err(e) = outbound.try_enqueue(peer.endpoint, wire) {
+                                        transport.record_dropped_backpressure();
+                                        tracing::debug!(peer = %peer.identity.name, %e, "outbound queue full; dropping flooded TAP frame");
                                     }
                                 }
                             }
@@ -220,6 +240,13 @@ pub async fn run_server_loop(
                             }
                         }
                     }
+                    PacketKind::Keepalive => {
+                        if let Some(peer) = active.get_mut(&packet.header.session_id) {
+                            // Authenticates the sender and advances the
+                            // replay window; nothing more to do.
+                            let _ = peer.session.open(packet);
+                        }
+                    }
                     PacketKind::Data | PacketKind::DataTap | PacketKind::Close => {
                         let Some(peer) = active.get_mut(&packet.header.session_id) else { continue; };
                         let packet_kind = packet.header.kind;
@@ -246,7 +273,8 @@ pub async fn run_server_loop(
                                 }
                             }
                             Ok(plaintext) if packet_kind == PacketKind::Data => {
-                                // Discard keepalive packets (empty payload sealed as Data).
+                                // Discard any legacy empty-Data keepalives from
+                                // clients still on an older packet format.
                                 if plaintext.is_empty() {
                                     continue;
                                 }

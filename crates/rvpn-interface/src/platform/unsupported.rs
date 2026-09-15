@@ -32,7 +32,7 @@ impl VirtualInterface {
     pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
         Err(InterfaceError::UnsupportedPlatform)
     }
-    
+
     pub async fn send(&self, _: &[u8]) -> Result<(), InterfaceError> {
         Err(InterfaceError::UnsupportedPlatform)
     }

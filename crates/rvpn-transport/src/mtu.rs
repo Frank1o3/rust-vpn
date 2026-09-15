@@ -249,7 +249,11 @@ mod tests {
 
         let before = mtu.effective_mtu();
         mtu.record_oversized(before);
-        assert_eq!(mtu.effective_mtu(), before, "cooldown must suppress a second reduction");
+        assert_eq!(
+            mtu.effective_mtu(),
+            before,
+            "cooldown must suppress a second reduction"
+        );
     }
 
     #[test]
