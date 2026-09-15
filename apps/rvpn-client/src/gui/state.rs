@@ -51,6 +51,7 @@ impl Default for GuiState {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct GuiSnapshot {
     pub connected: bool,
     pub server: String,
