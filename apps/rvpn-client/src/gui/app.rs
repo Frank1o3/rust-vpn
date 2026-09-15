@@ -65,7 +65,10 @@ impl DashboardApp {
 
 impl eframe::App for DashboardApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let state = self.state.snapshot();
+        let state = {
+            let guard = self.state.lock().expect("GUI state mutex poisoned");
+            guard.snapshot()
+        };
 
         ui.heading("RVPN Client");
         ui.separator();

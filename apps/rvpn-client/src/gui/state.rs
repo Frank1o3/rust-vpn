@@ -50,9 +50,60 @@ impl Default for GuiState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct GuiSnapshot {
+    pub connected: bool,
+    pub server: String,
+    pub uptime: u64,
+    pub session_id: String,
+    pub key_phase: String,
+
+    pub bytes_tx: u64,
+    pub bytes_rx: u64,
+    pub packets_tx: u64,
+    pub packets_rx: u64,
+
+    pub configured_mtu: usize,
+    pub effective_mtu: usize,
+    pub mtu_state: String,
+    pub last_mtu_change: Option<String>,
+
+    pub mtu_changes: u64,
+    pub send_errors: u64,
+    pub dropped_oversized: u64,
+    pub dropped_backpressure: u64,
+    pub keepalives_sent: u64,
+}
+
 pub type GuiStateHandle = Arc<Mutex<GuiState>>;
 
 impl GuiState {
+    pub fn snapshot(&self) -> GuiSnapshot {
+        GuiSnapshot {
+            connected: self.connected,
+            server: self.server.clone(),
+            uptime: self.uptime,
+            session_id: self.session_id.clone(),
+            key_phase: self.key_phase.clone(),
+
+            bytes_tx: self.bytes_tx,
+            bytes_rx: self.bytes_rx,
+            packets_tx: self.packets_tx,
+            packets_rx: self.packets_rx,
+
+            configured_mtu: self.configured_mtu,
+            effective_mtu: self.effective_mtu,
+            mtu_state: self.mtu_state.clone(),
+            last_mtu_change: self.last_mtu_change.clone(),
+
+            mtu_changes: self.mtu_changes,
+            send_errors: self.send_errors,
+            dropped_oversized: self.dropped_oversized,
+            dropped_backpressure: self.dropped_backpressure,
+            keepalives_sent: self.keepalives_sent,
+        }
+    }
+
     pub fn handle() -> GuiStateHandle {
         Arc::new(Mutex::new(Self::default()))
     }
