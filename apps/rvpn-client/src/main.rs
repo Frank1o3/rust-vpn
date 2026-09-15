@@ -23,19 +23,19 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let path = args
         .next()
-        .context("usage: rvpn-client <client.toml> [--headless]")?;
+        .context("usage: rvpn-client <client.toml> [--tray]")?;
 
-    let headless = args.any(|arg| arg == "--headless");
+    let tray = args.any(|arg| arg == "--tray");
     let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
 
-    if headless {
+    if tray {
+        run_tray_app(config)
+    } else {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("creating Tokio runtime")?
             .block_on(run_client(config, None, None))
-    } else {
-        run_tray_app(config)
     }
 }
 
