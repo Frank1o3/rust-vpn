@@ -1,4 +1,3 @@
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
@@ -19,10 +18,10 @@ impl DashboardApp {
     }
 
     fn snapshot(&self) -> super::state::GuiState {
-        self.state
-            .lock()
-            .unwrap_or_else(Mutex::into_inner)
-            .clone()
+        match self.state.lock() {
+            Ok(state) => state.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     fn section_heading(ui: &mut egui::Ui, title: &str) {
