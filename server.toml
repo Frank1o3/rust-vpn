@@ -23,15 +23,33 @@ pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6
     name="laptop"
 
     [peers.auth]
-        local_identity_seed="68d2217954ba6a0768753149952f065f2a1d8beeb9b1cdcd326020b27ea66332"
+        local_identity_seed="f2c3d0772c0faaa424e67d9a48f0b2f23f0673dce305da3a361a60251e64d2d4"
         mode="pinned-key"
-        peer_public_key="3d39d8b8eb88805924e585026fcb9581e2781d13b43d9f0a909626c2d412a149"
+        peer_public_key="42d2f9e2c132320b2e31b45de9a97d0cc7e6215beec1372f60cf0c8fe5497fa8"
 
 [[peers]]
     allowed_ips=["10.42.0.3/32", "fd42::3/128"]
-    name="phone"
+    name="Pand"
 
     [peers.auth]
-        local_identity_seed="0cc8dce187836f6cb84bd74cf0785b42c00d328a7d685296b0e3bd574465d37d"
+        local_identity_seed="1bbd34f7024e2b5912c2aca9e585d105e68507c6c09fc3b728a46d8bea651932"
         mode="pinned-key"
-        peer_public_key="3ac3dbe967dc0425e6199cd0ea48b4550873d441619aa97011e9ea24f60ce9b6"
+        peer_public_key="64c12029b03899cd5d1f79a2d439a9cca5f1e25549255b51250ecfaf42da7252"
+
+[[peers]]
+    allowed_ips=["10.42.0.4/32", "fd42::4/128"]
+    name="ShowNex"
+
+    [peers.auth]
+        local_identity_seed="2a4f6570d08cde72724a64390a635a762f2da3215115280c577e0417de05f0f9"
+        mode="pinned-keys"
+        peer_public_key="e749485f90630ffbb6b6dd4d79ce65dd6a918fa8e6b4be83eac55cb8a58757b5"
+
+[[peers]]
+    allowed_ips=["10.42.0.5/32", "fd42::5"]
+    name="Franklin"
+
+    [peers.auth]
+        local_identity_seed="9f31fff106af64a5118a089fac038f3c4e364618ea41d4606b56ead3388c3e7b"
+        mode="pinned-key"
+        peer_public_key="aa1d0f2d30a37bca5b5f2078c5f766e83beeb6f5df4e5e6c108fe8571a2241a0"
