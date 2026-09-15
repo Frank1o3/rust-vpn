@@ -1,43 +1,37 @@
 # RVPN Server configuration
 
-bind = "0.0.0.0:9000"
+bind="0.0.0.0:9000"
 
-pre_shared_key = "3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
+pre_shared_key="3e0f85e0f68e241b1b52d2c5429bf41a6c85845b6f0aa7b8c8d905723f917cc6"
 
 [interface]
-address = "10.42.0.1/24"
-address_v6 = "fd42::1/64"
-mode = "tun"
-mtu = 1400
-name = "rvpn-server0"
+    address="10.42.0.1/24"
+    address_v6="fd42::1/64"
+    mode="tun"
+    mtu=1400
+    name="rvpn-server0"
 
 [forwarding]
-enabled = true
-backend = "iptables"
-external_interface = "enp0s31f6"
-tunnel_cidr = "10.42.0.0/24"
-tunnel_cidr_v6 = "fd42::/64"
+    backend="iptables"
+    enabled=true
+    external_interface="enp0s31f6"
+    tunnel_cidr="10.42.0.0/24"
+    tunnel_cidr_v6="fd42::/64"
 
 [[peers]]
-allowed_ips = [
-    "10.42.0.2/32",
-    "fd42::2/128",
-]
-name = "laptop"
+    allowed_ips=["10.42.0.2/32", "fd42::2/128"]
+    name="laptop"
 
-[peers.auth]
-local_identity_seed = "68d2217954ba6a0768753149952f065f2a1d8beeb9b1cdcd326020b27ea66332"
-mode = "pinned-key"
-peer_public_key = "3d39d8b8eb88805924e585026fcb9581e2781d13b43d9f0a909626c2d412a149"
+    [peers.auth]
+        local_identity_seed="68d2217954ba6a0768753149952f065f2a1d8beeb9b1cdcd326020b27ea66332"
+        mode="pinned-key"
+        peer_public_key="3d39d8b8eb88805924e585026fcb9581e2781d13b43d9f0a909626c2d412a149"
 
 [[peers]]
-allowed_ips = [
-    "10.42.0.3/32",
-    "fd42::3/128",
-]
-name = "phone"
+    allowed_ips=["10.42.0.3/32", "fd42::3/128"]
+    name="phone"
 
-[peers.auth]
-local_identity_seed = "0cc8dce187836f6cb84bd74cf0785b42c00d328a7d685296b0e3bd574465d37d"
-mode = "pinned-key"
-peer_public_key = "3ac3dbe967dc0425e6199cd0ea48b4550873d441619aa97011e9ea24f60ce9b6"
+    [peers.auth]
+        local_identity_seed="0cc8dce187836f6cb84bd74cf0785b42c00d328a7d685296b0e3bd574465d37d"
+        mode="pinned-key"
+        peer_public_key="3ac3dbe967dc0425e6199cd0ea48b4550873d441619aa97011e9ea24f60ce9b6"
