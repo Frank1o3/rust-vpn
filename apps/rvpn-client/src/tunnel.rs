@@ -3,7 +3,7 @@ use rvpn_config::ClientConfig;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
-use rvpn_transport::{SendOptions, UdpTransport};
+use rvpn_transport::{SendOptions, TransportError, UdpTransport};
 use std::net::SocketAddr;
 
 use crate::handshake::{establish, maybe_rekey};
@@ -13,6 +13,22 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
         Some(key) => key.wrap(&encoded)?,
         None => encoded,
     })
+}
+
+/// Send `wire` bytes to `peer`, reporting path failures to the adaptive MTU.
+async fn send_wire(
+    transport: &UdpTransport,
+    peer: SocketAddr,
+    wire: bytes::Bytes,
+) -> Result<usize, TransportError> {
+    match transport.send_to(peer, wire, SendOptions::default()).await {
+        Ok(n) => Ok(n),
+        Err(e @ TransportError::PathMtuExceeded { .. }) => {
+            transport.report_path_failure();
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub async fn run_data_plane(
@@ -26,6 +42,7 @@ pub async fn run_data_plane(
     tap: Option<&VirtualInterface>,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {
+    let keepalive = transport.keepalive();
     loop {
         tokio::select! {
             signal = &mut shutdown_signal => {
@@ -34,10 +51,7 @@ pub async fn run_data_plane(
                 let close = session.seal(PacketKind::Close, b"")?;
                 let wire = wrap(close.encode(), obfuscation)?;
 
-                match transport
-                    .send_to(server, wire, SendOptions::default())
-                    .await
-                {
+                match send_wire(transport, server, wire).await {
                     Ok(bytes) => {
                         tracing::info!(
                             bytes,
@@ -56,6 +70,27 @@ pub async fn run_data_plane(
 
                 return Ok(());
             }
+            // Keepalive: fire a sealed empty Data packet to keep NAT mappings
+            // alive. Uses the KeepaliveScheduler from the transport so any
+            // real send/receive automatically resets the deadline.
+            () = keepalive.wait_for_due() => {
+                match session.seal(PacketKind::Data, b"") {
+                    Ok(sealed) => {
+                        match wrap(sealed.encode(), obfuscation) {
+                            Ok(wire) => {
+                                if let Err(e) = send_wire(transport, server, wire).await {
+                                    tracing::debug!(%e, "keepalive send failed");
+                                } else {
+                                    keepalive.record_keepalive_sent();
+                                    tracing::debug!("sent keepalive to server");
+                                }
+                            }
+                            Err(e) => tracing::debug!(%e, "keepalive wrap failed"),
+                        }
+                    }
+                    Err(e) => tracing::debug!(%e, "keepalive seal failed; session may need rekey"),
+                }
+            }
             packet = async {
                 if let Some(dev) = tun {
                     dev.recv().await
@@ -67,7 +102,9 @@ pub async fn run_data_plane(
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
-                transport.send_to(server, wire, SendOptions::default()).await?;
+                if let Err(e) = send_wire(transport, server, wire).await {
+                    tracing::warn!(%e, "failed to send TUN packet to server");
+                }
             }
             frame = async {
                 if let Some(dev) = tap {
@@ -80,7 +117,9 @@ pub async fn run_data_plane(
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::DataTap, &frame)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
-                transport.send_to(server, wire, SendOptions::default()).await?;
+                if let Err(e) = send_wire(transport, server, wire).await {
+                    tracing::warn!(%e, "failed to send TAP frame to server");
+                }
             }
             datagram = transport.receive() => {
                 let datagram = datagram?;

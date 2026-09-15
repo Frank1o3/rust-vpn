@@ -6,7 +6,7 @@ use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
-use rvpn_transport::{SendOptions, TransportConfig, UdpTransport};
+use rvpn_transport::{SendOptions, TransportConfig, TransportError, UdpTransport};
 use std::{net::SocketAddr, os::fd::RawFd, sync::Arc, time::Instant};
 use tokio::{
     sync::watch,
@@ -25,6 +25,22 @@ pub struct AndroidTunnelConfig {
     pub socket_protector: Option<Arc<dyn Fn(RawFd) -> bool + Send + Sync + 'static>>,
     pub stats: Option<Arc<crate::stats::TunnelStats>>,
     pub on_connected: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+}
+
+/// Send `wire` to `peer`, logging and reporting path failures to the adaptive MTU.
+async fn send_wire(
+    transport: &UdpTransport,
+    peer: SocketAddr,
+    wire: bytes::Bytes,
+) -> Result<usize, TransportError> {
+    match transport.send_to(peer, wire, SendOptions::default()).await {
+        Ok(n) => Ok(n),
+        Err(e @ TransportError::PathMtuExceeded { .. }) => {
+            transport.report_path_failure();
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub async fn run_tunnel(
@@ -107,6 +123,8 @@ pub async fn run_tunnel(
         "RVPN Android tunnel data plane started"
     );
 
+    let keepalive = transport.keepalive();
+
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
@@ -118,9 +136,34 @@ pub async fn run_tunnel(
                             Some(key) => key.wrap(&encoded).unwrap_or(encoded),
                             None => encoded,
                         };
-                        let _ = transport.send_to(server, wire, SendOptions::default()).await;
+                        let _ = send_wire(&transport, server, wire).await;
                     }
                     return Ok(());
+                }
+            }
+            // Keepalive: keep NAT mappings alive with an empty sealed Data packet.
+            () = keepalive.wait_for_due() => {
+                match session.seal(PacketKind::Data, b"") {
+                    Ok(sealed) => {
+                        let encoded = sealed.encode();
+                        let wire = match &obfuscation {
+                            Some(key) => match key.wrap(&encoded) {
+                                Ok(w) => w,
+                                Err(e) => {
+                                    tracing::debug!(%e, "keepalive wrap failed");
+                                    continue;
+                                }
+                            },
+                            None => encoded,
+                        };
+                        if let Err(e) = send_wire(&transport, server, wire).await {
+                            tracing::debug!(%e, "Android keepalive send failed");
+                        } else {
+                            keepalive.record_keepalive_sent();
+                            tracing::debug!("sent Android keepalive to server");
+                        }
+                    }
+                    Err(e) => tracing::debug!(%e, "Android keepalive seal failed; session may need rekey"),
                 }
             }
             packet = tun.recv() => {
@@ -141,7 +184,9 @@ pub async fn run_tunnel(
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let encoded = sealed.encode();
                 let wire = match &obfuscation { Some(key) => key.wrap(&encoded)?, None => encoded };
-                transport.send_to(server, wire, SendOptions::default()).await?;
+                if let Err(e) = send_wire(&transport, server, wire).await {
+                    tracing::warn!(%e, "failed to send Android TUN packet to server");
+                }
             }
             datagram = transport.receive() => {
                 let datagram = datagram.context("receiving UDP datagram")?;
@@ -198,6 +243,10 @@ pub async fn run_tunnel(
 
                 match session.open(packet) {
                     Ok(plaintext) => {
+                        // Discard keepalive packets (empty sealed Data).
+                        if plaintext.is_empty() {
+                            continue;
+                        }
                         if peer != server {
                             tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
                             server = peer;

@@ -4,8 +4,9 @@ use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
-use rvpn_transport::{SendOptions, UdpTransport};
+use rvpn_transport::{SendOptions, TransportError, UdpTransport};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use tokio::time::{Instant, sleep};
 
 use crate::firewall::ForwardingGuard;
@@ -24,6 +25,23 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
         Some(key) => key.wrap(&encoded)?,
         None => encoded,
     })
+}
+
+/// Send `wire` bytes to `peer`, reporting oversized-datagram path failures to
+/// the adaptive MTU so the effective MTU is reduced appropriately.
+async fn send_wire(
+    transport: &UdpTransport,
+    peer: SocketAddr,
+    wire: bytes::Bytes,
+) -> Result<usize, TransportError> {
+    match transport.send_to(peer, wire, SendOptions::default()).await {
+        Ok(n) => Ok(n),
+        Err(e @ TransportError::PathMtuExceeded { .. }) => {
+            transport.report_path_failure();
+            Err(e)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub async fn run_server_loop(
@@ -47,6 +65,7 @@ pub async fn run_server_loop(
         config.handshake.retry_interval_ms,
         config.handshake.retry_jitter_ms,
     )));
+    let keepalive = transport.keepalive();
 
     loop {
         tokio::select! {
@@ -57,12 +76,32 @@ pub async fn run_server_loop(
                 return Ok(());
             }
             () = &mut retry_sleep => {
-            retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await?;
-            retry_sleep.as_mut().reset(Instant::now() + rvpn_config::jittered_retry_interval(
-                config.handshake.retry_interval_ms,
-                config.handshake.retry_jitter_ms,
-            ));
-        }
+                retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await?;
+                retry_sleep.as_mut().reset(Instant::now() + rvpn_config::jittered_retry_interval(
+                    config.handshake.retry_interval_ms,
+                    config.handshake.retry_jitter_ms,
+                ));
+            }
+            // Keepalive: send a sealed empty Data packet to every active peer to
+            // keep NAT mappings alive and let the client detect liveness.
+            () = keepalive.wait_for_due() => {
+                for peer in active.values_mut() {
+                    match peer.session.seal(PacketKind::Data, b"") {
+                        Ok(sealed) => {
+                            match wrap(sealed.encode(), obfuscation) {
+                                Ok(wire) => {
+                                    if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                                        tracing::debug!(peer = %peer.identity.name, %e, "keepalive send failed");
+                                    }
+                                }
+                                Err(e) => tracing::debug!(peer = %peer.identity.name, %e, "keepalive wrap failed"),
+                            }
+                        }
+                        Err(e) => tracing::debug!(peer = %peer.identity.name, %e, "keepalive seal failed"),
+                    }
+                }
+                keepalive.record_keepalive_sent();
+            }
             outbound_tun = async {
                 if let Some(t) = &tun {
                     t.recv().await
@@ -76,7 +115,9 @@ pub async fn run_server_loop(
                     maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                     let packet = peer.session.seal(PacketKind::Data, &outbound)?;
                     let wire = wrap(packet.encode(), obfuscation)?;
-                    transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
+                    if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                        tracing::warn!(peer = %peer.identity.name, %e, "failed to send TUN packet to peer");
+                    }
                 } else {
                     tracing::debug!(%destination, "no RVPN peer owns outbound TUN destination");
                 }
@@ -96,7 +137,9 @@ pub async fn run_server_loop(
                         maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                         if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
                             if let Ok(wire) = wrap(packet.encode(), obfuscation) {
-                                let _ = transport.send_to(peer.endpoint, wire, SendOptions::default()).await;
+                                if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                                    tracing::debug!(peer = %peer.identity.name, %e, "failed to broadcast TAP frame");
+                                }
                             }
                         }
                     }
@@ -105,7 +148,9 @@ pub async fn run_server_loop(
                         maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                         let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
                         let wire = wrap(packet.encode(), obfuscation)?;
-                        transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
+                        if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                            tracing::warn!(peer = %peer.identity.name, %e, "failed to send TAP frame to peer");
+                        }
                     }
                 } else {
                     let dest_ip = ethernet_payload_ip(&outbound, true);
@@ -115,15 +160,20 @@ pub async fn run_server_loop(
                             maybe_send_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await?;
                             let packet = peer.session.seal(PacketKind::DataTap, &outbound)?;
                             let wire = wrap(packet.encode(), obfuscation)?;
-                            transport.send_to(peer.endpoint, wire, SendOptions::default()).await?;
-                            sent = true;
+                            if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                                tracing::warn!(peer = %peer.identity.name, %e, "failed to send TAP frame to peer via IP lookup");
+                            } else {
+                                sent = true;
+                            }
                         }
                     }
                     if !sent {
                         for peer in active.values_mut() {
                             if let Ok(packet) = peer.session.seal(PacketKind::DataTap, &outbound) {
                                 if let Ok(wire) = wrap(packet.encode(), obfuscation) {
-                                    let _ = transport.send_to(peer.endpoint, wire, SendOptions::default()).await;
+                                    if let Err(e) = send_wire(&transport, peer.endpoint, wire).await {
+                                        tracing::debug!(peer = %peer.identity.name, %e, "failed to flood TAP frame");
+                                    }
                                 }
                             }
                         }
@@ -196,6 +246,10 @@ pub async fn run_server_loop(
                                 }
                             }
                             Ok(plaintext) if packet_kind == PacketKind::Data => {
+                                // Discard keepalive packets (empty payload sealed as Data).
+                                if plaintext.is_empty() {
+                                    continue;
+                                }
                                 if mode == DeviceMode::Tap && tap.is_some() && tun.is_none() {
                                     if let Some(t) = &tap {
                                         t.send(&plaintext).await?;

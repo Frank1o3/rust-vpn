@@ -51,6 +51,11 @@ impl UdpTransport {
         if let Some(peer) = config.remote_address {
             socket.connect(peer).await?;
         }
+        // Best-effort: enable DF-bit so the kernel emits EMSGSIZE when the
+        // path rejects a datagram rather than silently fragmenting it. This
+        // makes the adaptive MTU logic trigger reliably on IPv4. Failures are
+        // logged at debug level and do not prevent the socket from being used.
+        set_path_mtu_discovery(&socket);
         let target_mtu = config.max_datagram_size;
         let minimum_mtu = tuning.minimum_mtu.unwrap_or_else(|| target_mtu.min(576));
         let recv_capacity = target_mtu + 1;
@@ -286,4 +291,85 @@ fn is_message_too_long(error: &std::io::Error) -> bool {
 #[cfg(not(any(unix, windows)))]
 fn is_message_too_long(_error: &std::io::Error) -> bool {
     false
+}
+
+/// Enables the "Don't Fragment" bit on the socket so that the OS emits
+/// `EMSGSIZE` when a datagram exceeds the path MTU rather than silently
+/// fragmenting it. This is best-effort: failures are logged but do not abort
+/// the connection setup.
+///
+/// * **Linux** – sets `IP_MTU_DISCOVER = IP_PMTUDISC_DO` (IPv4) and
+///   `IPV6_DONTFRAG = 1` (IPv6) via `socket2`.
+/// * **macOS/BSDs** – sets `IP_DONTFRAG` (IPv4) via `socket2`.
+/// * **Windows / other** – no-op; EMSGSIZE is still raised by Winsock when
+///   the Winsock send buffer limit is hit, so the adaptive MTU still works,
+///   just less reliably on IPv4.
+fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = socket.as_raw_fd();
+        let local = match socket.local_addr() {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::debug!(%e, "could not read local address to set DF-bit; skipping");
+                return;
+            }
+        };
+        // IP_PMTUDISC_DO = 2 on Linux. For IPv6 we set IPV6_DONTFRAG = 1.
+        let (level, optname, val): (libc::c_int, libc::c_int, libc::c_int) = if local.is_ipv6() {
+            (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 1)
+        } else {
+            (libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, 2 /* IP_PMTUDISC_DO */)
+        };
+        let ret = unsafe {
+            libc::setsockopt(
+                fd,
+                level,
+                optname,
+                &val as *const libc::c_int as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if ret == 0 {
+            tracing::debug!("enabled DF-bit on UDP socket (IP_PMTUDISC_DO / IPV6_DONTFRAG)");
+        } else {
+            let e = std::io::Error::last_os_error();
+            tracing::debug!(%e, "failed to enable DF-bit; EMSGSIZE may be unreliable on IPv4");
+        }
+    }
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = socket.as_raw_fd();
+        let local = match socket.local_addr() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        if local.is_ipv4() {
+            // IP_DONTFRAG available on macOS/BSDs.
+            let val: libc::c_int = 1;
+            let ret = unsafe {
+                libc::setsockopt(
+                    fd,
+                    libc::IPPROTO_IP,
+                    libc::IP_DONTFRAG,
+                    &val as *const libc::c_int as *const libc::c_void,
+                    std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+                )
+            };
+            if ret == 0 {
+                tracing::debug!("enabled IP_DONTFRAG on UDP socket");
+            } else {
+                let e = std::io::Error::last_os_error();
+                tracing::debug!(%e, "failed to enable IP_DONTFRAG; EMSGSIZE may be unreliable");
+            }
+        }
+    }
+    // Windows/Winsock: WSAEMSGSIZE is raised based on the send-buffer limits;
+    // no portable socket option to force DF-bit without socket2 WSA extensions.
+    #[cfg(not(unix))]
+    {
+        let _ = socket;
+    }
 }
