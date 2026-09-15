@@ -1,0 +1,23 @@
+# RVPN Client configuration for 'Frank1o3' (generated)
+
+server="10.42.0.0/24:9000"
+obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263ae"
+
+[interface]
+    address="10.42.0.5/24"
+    addresses=["fd42::5/64"]
+    mode="tun"
+    mtu=1400
+    name="rvpn-client0"
+
+[routing]
+    default_route=true
+    default_route_v6=true
+    endpoint_gateway="10.42.0.0/24"
+    gateway="10.42.0.1"
+    gateway_v6="fd42::1"
+
+[auth]
+    mode="pinned-key"
+    local_identity_seed="66be4c2cb3724ed2a9692c9b031228accd680db68304df2ccbbcbf7740654f03"
+    peer_public_key="259a287a437a860b53cd5c8cf5c8002ff3d0289b1ee52ba18bc8c11948ca453f"

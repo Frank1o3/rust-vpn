@@ -1,13 +1,12 @@
 package org.rvpn.client
 
 import android.content.Context
-import java.security.SecureRandom
 
 /**
  * Android client configuration data model and SharedPreferences persistence.
  */
 data class RvpnConfig(
-    val server: String = "10.0.0.1:9000",
+    val server: String = "",
     /** "psk", "pinned-key", or "certificate". */
     val authMode: String = "psk",
     val preSharedKey: String = "",
@@ -37,7 +36,10 @@ data class RvpnConfig(
     /** Comma- or newline-separated CIDR prefixes, applied only when the
      *  matching default-route toggle above is off. */
     val splitTunnelRoutesV4: String = "",
-    val splitTunnelRoutesV6: String = ""
+    val splitTunnelRoutesV6: String = "",
+    /** Verbatim text last pasted into the Config screen, so it can be
+     *  re-displayed for editing without needing to re-derive it. */
+    val rawClientToml: String = ""
 ) {
     companion object {
         private const val PREFS_NAME = "rvpn_prefs"
@@ -63,11 +65,12 @@ data class RvpnConfig(
         private const val KEY_USE_DEFAULT_ROUTE_V6 = "use_default_route_v6"
         private const val KEY_SPLIT_ROUTES_V4 = "split_tunnel_routes_v4"
         private const val KEY_SPLIT_ROUTES_V6 = "split_tunnel_routes_v6"
+        private const val KEY_RAW_CLIENT_TOML = "raw_client_toml"
 
         fun load(context: Context): RvpnConfig {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             return RvpnConfig(
-                server = prefs.getString(KEY_SERVER, "10.0.0.1:9000") ?: "10.0.0.1:9000",
+                server = prefs.getString(KEY_SERVER, "") ?: "",
                 authMode = prefs.getString(KEY_AUTH_MODE, "psk") ?: "psk",
                 preSharedKey = prefs.getString(KEY_PSK, "") ?: "",
                 localIdentitySeed = prefs.getString(KEY_LOCAL_IDENTITY_SEED, "") ?: "",
@@ -88,7 +91,8 @@ data class RvpnConfig(
                 useDefaultRouteV4 = prefs.getBoolean(KEY_USE_DEFAULT_ROUTE_V4, true),
                 useDefaultRouteV6 = prefs.getBoolean(KEY_USE_DEFAULT_ROUTE_V6, true),
                 splitTunnelRoutesV4 = prefs.getString(KEY_SPLIT_ROUTES_V4, "") ?: "",
-                splitTunnelRoutesV6 = prefs.getString(KEY_SPLIT_ROUTES_V6, "") ?: ""
+                splitTunnelRoutesV6 = prefs.getString(KEY_SPLIT_ROUTES_V6, "") ?: "",
+                rawClientToml = prefs.getString(KEY_RAW_CLIENT_TOML, "") ?: ""
             )
         }
 
@@ -117,15 +121,8 @@ data class RvpnConfig(
                 .putBoolean(KEY_USE_DEFAULT_ROUTE_V6, config.useDefaultRouteV6)
                 .putString(KEY_SPLIT_ROUTES_V4, config.splitTunnelRoutesV4)
                 .putString(KEY_SPLIT_ROUTES_V6, config.splitTunnelRoutesV6)
+                .putString(KEY_RAW_CLIENT_TOML, config.rawClientToml)
                 .apply()
-        }
-
-        /** Generates a cryptographically secure 256-bit hex-encoded pre-shared key. */
-        fun generateRandomPsk(): String {
-            val random = SecureRandom()
-            val bytes = ByteArray(32)
-            random.nextBytes(bytes)
-            return bytes.joinToString("") { "%02x".format(it) }
         }
     }
 }

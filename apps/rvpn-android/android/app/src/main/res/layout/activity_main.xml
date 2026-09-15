@@ -15,18 +15,8 @@
             layout="@layout/section_main" />
 
         <include
-            android:id="@+id/sectionTunnel"
-            layout="@layout/section_tunnel"
-            android:visibility="gone" />
-
-        <include
-            android:id="@+id/sectionServer"
-            layout="@layout/section_server"
-            android:visibility="gone" />
-
-        <include
-            android:id="@+id/sectionAdvanced"
-            layout="@layout/section_advanced"
+            android:id="@+id/sectionConfig"
+            layout="@layout/section_config"
             android:visibility="gone" />
 
     </FrameLayout>
