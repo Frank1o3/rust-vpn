@@ -4,7 +4,7 @@ mod platform;
 mod tunnel;
 
 use anyhow::{Context, Result};
-use gui::{DashboardApp, GuiState};
+use gui::{GuiState, run_tray};
 use rvpn_config::{ClientConfig, DeviceMode};
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
@@ -23,22 +23,23 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let path = args
         .next()
-        .context("usage: rvpn-client <client.toml> [--gui]")?;
-    let gui = args.any(|arg| arg == "--gui");
+        .context("usage: rvpn-client <client.toml> [--headless]")?;
+
+    let headless = args.any(|arg| arg == "--headless");
     let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
 
-    if gui {
-        run_gui(config)
-    } else {
+    if headless {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("creating Tokio runtime")?
             .block_on(run_client(config, None, None))
+    } else {
+        run_tray_app(config)
     }
 }
 
-fn run_gui(config: ClientConfig) -> Result<()> {
+fn run_tray_app(config: ClientConfig) -> Result<()> {
     let state = GuiState::handle();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let thread_state = Arc::clone(&state);
@@ -58,32 +59,16 @@ fn run_gui(config: ClientConfig) -> Result<()> {
             };
 
             let os_shutdown = Box::pin(shutdown_signal());
-            let gui_shutdown = Box::pin(gui_shutdown(os_shutdown, shutdown_rx));
+            let tray_shutdown = Box::pin(combined_shutdown(os_shutdown, shutdown_rx));
             if let Err(error) =
-                runtime.block_on(run_client(config, Some(thread_state), Some(gui_shutdown)))
+                runtime.block_on(run_client(config, Some(thread_state), Some(tray_shutdown)))
             {
                 tracing::error!(%error, "RVPN client stopped with an error");
             }
-        })?;
+        })
+        .context("spawning RVPN client thread")?;
 
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("RVPN")
-            .with_inner_size([420.0, 640.0])
-            .with_min_inner_size([360.0, 480.0]),
-        ..Default::default()
-    };
-
-    let gui_result = eframe::run_native(
-        "RVPN",
-        options,
-        Box::new(move |_cc| Ok(Box::new(DashboardApp::new(state)))),
-    );
-
-    let _ = shutdown_tx.send(true);
-    let _ = client_thread.join();
-
-    gui_result.map_err(|error| anyhow::anyhow!(error.to_string()))
+    run_tray(state, shutdown_tx, client_thread)
 }
 
 async fn run_client(
@@ -226,14 +211,14 @@ async fn run_client(
     result
 }
 
-async fn gui_shutdown(
+async fn combined_shutdown(
     mut os_shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>,
-    mut gui_shutdown: watch::Receiver<bool>,
+    mut tray_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     tokio::select! {
         result = &mut os_shutdown => result,
-        changed = gui_shutdown.changed() => {
-            if changed.is_ok() && *gui_shutdown.borrow() {
+        changed = tray_shutdown.changed() => {
+            if changed.is_ok() && *tray_shutdown.borrow() {
                 Ok(())
             } else {
                 changed.map_err(|error| anyhow::anyhow!(error.to_string()))

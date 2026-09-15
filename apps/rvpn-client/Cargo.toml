@@ -7,7 +7,8 @@
 
 [dependencies]
     anyhow.workspace=true
-    eframe="0.36.2"
+    tao="0.37.0"
+    tray-icon="0.25.0"
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}

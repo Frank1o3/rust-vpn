@@ -165,3 +165,55 @@ impl GuiState {
         });
     }
 }
+
+pub fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+pub fn format_duration(duration: Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+impl GuiSnapshot {
+    pub fn tooltip_text(&self) -> String {
+        if !self.connected {
+            return if self.server.is_empty() {
+                "RVPN — Disconnected".to_string()
+            } else {
+                format!("RVPN — Disconnected\n{}", self.server)
+            };
+        }
+
+        format!(
+            "RVPN — Connected\n{server}\nUp {uptime} · phase {phase}\n↓ {rx}  ↑ {tx}\nMTU {mtu} ({state})",
+            server = self.server,
+            uptime = format_duration(self.uptime),
+            phase = self.key_phase,
+            rx = format_bytes(self.bytes_rx),
+            tx = format_bytes(self.bytes_tx),
+            mtu = self.effective_mtu,
+            state = self.mtu_state,
+        )
+    }
+}
