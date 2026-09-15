@@ -169,6 +169,7 @@ class RvpnService : VpnService() {
                 peerPublicKeyHex = config.peerPublicKey,
                 localCertificateHex = config.localCertificate,
                 caPublicKeyHex = config.caPublicKey,
+                obfuscationKeyHex = config.obfuscationKey,
                 tunFd = tunFd,
                 mtu = config.mtu,
                 rekeyPacketLimit = config.rekeyPacketLimit,

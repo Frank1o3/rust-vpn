@@ -1,3 +1,4 @@
+
 package org.rvpn.client
 
 import android.content.Context
@@ -10,6 +11,8 @@ data class RvpnConfig(
     /** "psk", "pinned-key", or "certificate". */
     val authMode: String = "psk",
     val preSharedKey: String = "",
+    /** Hex-encoded 32-byte obfuscation key shared with the server. */
+    val obfuscationKey: String = "",
     /** Used by pinned-key and certificate modes: this device's own Ed25519 seed. */
     val localIdentitySeed: String = "",
     /** Used by pinned-key mode: the server's exact Ed25519 public key. */
@@ -23,29 +26,26 @@ data class RvpnConfig(
     val ipv6Enabled: Boolean = false,
     val tunnelAddressV6: String = "",
     val tunnelPrefixLengthV6: Int = 64,
-    /** Comma- or newline-separated DNS servers, e.g. "1.1.1.1, 1.0.0.1". */
+    /** Comma- or newline-separated DNS servers. */
     val dnsServers: String = "1.1.1.1",
     val mtu: Int = 1400,
     val rekeyPacketLimit: Long = 1048576L,
     val retryIntervalMs: Long = 500L,
     val retryLimit: Int = 5,
     val excludedApps: Set<String> = emptySet(),
-    /** Independent per-protocol default-route toggles. */
     val useDefaultRouteV4: Boolean = true,
     val useDefaultRouteV6: Boolean = true,
-    /** Comma- or newline-separated CIDR prefixes, applied only when the
-     *  matching default-route toggle above is off. */
     val splitTunnelRoutesV4: String = "",
     val splitTunnelRoutesV6: String = "",
-    /** Verbatim text last pasted into the Config screen, so it can be
-     *  re-displayed for editing without needing to re-derive it. */
     val rawClientToml: String = ""
 ) {
     companion object {
         private const val PREFS_NAME = "rvpn_prefs"
+
         private const val KEY_SERVER = "server"
         private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_PSK = "psk"
+        private const val KEY_OBFUSCATION_KEY = "obfuscation_key"
         private const val KEY_LOCAL_IDENTITY_SEED = "local_identity_seed"
         private const val KEY_PEER_PUBLIC_KEY = "peer_public_key"
         private const val KEY_LOCAL_CERTIFICATE = "local_certificate"
@@ -69,10 +69,12 @@ data class RvpnConfig(
 
         fun load(context: Context): RvpnConfig {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
             return RvpnConfig(
                 server = prefs.getString(KEY_SERVER, "") ?: "",
                 authMode = prefs.getString(KEY_AUTH_MODE, "psk") ?: "psk",
                 preSharedKey = prefs.getString(KEY_PSK, "") ?: "",
+                obfuscationKey = prefs.getString(KEY_OBFUSCATION_KEY, "") ?: "",
                 localIdentitySeed = prefs.getString(KEY_LOCAL_IDENTITY_SEED, "") ?: "",
                 peerPublicKey = prefs.getString(KEY_PEER_PUBLIC_KEY, "") ?: "",
                 localCertificate = prefs.getString(KEY_LOCAL_CERTIFICATE, "") ?: "",
@@ -102,6 +104,7 @@ data class RvpnConfig(
                 .putString(KEY_SERVER, config.server)
                 .putString(KEY_AUTH_MODE, config.authMode)
                 .putString(KEY_PSK, config.preSharedKey)
+                .putString(KEY_OBFUSCATION_KEY, config.obfuscationKey)
                 .putString(KEY_LOCAL_IDENTITY_SEED, config.localIdentitySeed)
                 .putString(KEY_PEER_PUBLIC_KEY, config.peerPublicKey)
                 .putString(KEY_LOCAL_CERTIFICATE, config.localCertificate)

@@ -158,6 +158,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
     peer_public_key_str: JString<'local>,
     local_certificate_str: JString<'local>,
     ca_public_key_str: JString<'local>,
+    obfuscation_key_str: JString<'local>,
     tun_fd: jint,
     mtu: jint,
     rekey_limit: jlong,
@@ -230,6 +231,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             let peer_public_key_hex = read_str!(peer_public_key_str, "peer public key");
             let local_certificate_hex = read_str!(local_certificate_str, "local certificate");
             let ca_public_key_hex = read_str!(ca_public_key_str, "ca public key");
+            let obfuscation_key_hex = read_str!(obfuscation_key_str, "obfuscation key");
 
             let auth = match auth_mode.as_str() {
                 "psk" => {
@@ -298,11 +300,17 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
                 *stats_guard = Some((Arc::clone(&stats), Instant::now()));
             }
 
+            let obfuscation_key = if obfuscation_key_hex.trim().is_empty() {
+                None
+            } else {
+                Some(decode_hex!(obfuscation_key_hex, 32, "obfuscation key"))
+            };
+
             let config = AndroidTunnelConfig {
                 tun_fd,
                 server: server_rust,
                 auth,
-                obfuscation_key: None,
+                obfuscation_key,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },
                 rekey_packet_limit: if rekey_limit < 0 {
                     0

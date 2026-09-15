@@ -103,6 +103,7 @@ object RvpnNative {
         peerPublicKeyHex: String,
         localCertificateHex: String,
         caPublicKeyHex: String,
+        obfuscationKeyHex: String,
         tunFd: Int,
         mtu: Int,
         rekeyPacketLimit: Long,
