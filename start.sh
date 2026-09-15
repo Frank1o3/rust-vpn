@@ -2,5 +2,11 @@
 
 cd ~/rust-vpn || exit 1
 
-# Create the tmux session and start the RVPN server
-tmux new-session -s rvpn -c ~/rust-vpn "sudo ./target/release/rvpn-server server.toml"
+# Remove existing rvpn tmux session if it exists
+if tmux has-session -t rvpn 2>/dev/null; then
+    tmux kill-session -t rvpn
+fi
+
+# Start the VPN server in a fresh tmux session
+tmux new-session -d -s rvpn -c ~/rust-vpn \
+    "sudo ./target/release/rvpn-server server.toml"
