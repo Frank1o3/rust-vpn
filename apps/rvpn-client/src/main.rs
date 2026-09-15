@@ -10,15 +10,14 @@ use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport};
-use std::{env, fs, net::SocketAddr, sync::Arc, time::Duration};
+use std::{env, fs, net::SocketAddr, sync::Arc};
 use tokio::sync::watch;
 
 use handshake::establish;
 use platform::{configure_client_network, teardown_client_network};
 use tunnel::run_data_plane;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let mut args = env::args().skip(1);
@@ -27,10 +26,14 @@ async fn main() -> Result<()> {
     let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
 
     if gui {
-        return run_gui(config);
+        run_gui(config)
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("creating Tokio runtime")?
+            .block_on(run_client(config, None, None))
     }
-
-    run_client(config, None, None).await
 }
 
 fn run_gui(config: ClientConfig) -> Result<()> {
