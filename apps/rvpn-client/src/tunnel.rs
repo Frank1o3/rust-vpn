@@ -5,7 +5,9 @@ use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
 use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::net::SocketAddr;
+use std::time::Duration;
 
+use crate::gui::GuiStateHandle;
 use crate::handshake::{establish, maybe_rekey};
 
 fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {
@@ -41,14 +43,12 @@ pub async fn run_data_plane(
     tun: Option<&VirtualInterface>,
     tap: Option<&VirtualInterface>,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
+    gui_state: Option<GuiStateHandle>,
 ) -> Result<()> {
     let keepalive = transport.keepalive();
-    // Sealed TUN/TAP datagrams are handed to this bounded queue instead of
-    // being sent inline, so a momentarily slow or congested socket send
-    // never blocks this select! loop from servicing handshake retransmits,
-    // rekeys, or inbound decrypt in the same iteration. Sealing itself
-    // still happens synchronously below since it needs &mut session.
+    let started = std::time::Instant::now();
     let (outbound, mut outbound_rx) = OutboundQueue::new(256);
+    let mut telemetry = tokio::time::interval(Duration::from_millis(250));
 
     loop {
         tokio::select! {
@@ -75,11 +75,24 @@ pub async fn run_data_plane(
                     }
                 }
 
+                if let Some(state) = &gui_state {
+                    state.lock().unwrap_or_else(|e| e.into_inner()).disconnected();
+                }
                 return Ok(());
             }
-            // Keepalive: fire a sealed, empty Keepalive packet to keep NAT
-            // mappings alive. Uses the KeepaliveScheduler from the transport
-            // so any real send/receive automatically resets the deadline.
+            _ = telemetry.tick() => {
+                if let Some(state) = &gui_state {
+                    let metrics = transport.metrics_snapshot();
+                    let mtu = transport.mtu_snapshot();
+                    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.set_uptime(started.elapsed());
+                    if metrics.mtu_changes > state.mtu_changes {
+                        state.set_mtu_change_reason(rvpn_transport::MtuChangeReason::PathMtuExceeded);
+                    }
+                    state.update_transport(metrics, mtu);
+                    state.set_key_phase(session.key_phase());
+                }
+            }
             () = keepalive.wait_for_due() => {
                 match session.seal(PacketKind::Keepalive, b"") {
                     Ok(sealed) => {
@@ -98,7 +111,6 @@ pub async fn run_data_plane(
                     Err(e) => tracing::debug!(%e, "keepalive seal failed; session may need rekey"),
                 }
             }
-            // Drains sealed datagrams queued by the TUN/TAP read arms below.
             queued = outbound_rx.recv() => {
                 if let Some(datagram) = queued {
                     if let Err(e) = send_wire(transport, datagram.peer, datagram.payload).await {
@@ -114,6 +126,9 @@ pub async fn run_data_plane(
                 }
             } => {
                 let packet = packet?;
+                if let Some(state) = &gui_state {
+                    state.lock().unwrap_or_else(|e| e.into_inner()).record_tx(packet.len());
+                }
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
@@ -130,6 +145,9 @@ pub async fn run_data_plane(
                 }
             } => {
                 let frame = frame?;
+                if let Some(state) = &gui_state {
+                    state.lock().unwrap_or_else(|e| e.into_inner()).record_tx(frame.len());
+                }
                 maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::DataTap, &frame)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
@@ -154,14 +172,15 @@ pub async fn run_data_plane(
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data || packet.header.kind == PacketKind::DataTap => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Keepalive => {
-                        // Authenticates the sender and advances the replay
-                        // window; nothing more to do with an empty keepalive.
                         let _ = session.open(packet);
                         continue;
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
                         if session.open(packet).is_ok() {
                             tracing::info!("server closed the session");
+                            if let Some(state) = &gui_state {
+                                state.lock().unwrap_or_else(|e| e.into_inner()).disconnected();
+                            }
                             return Ok(());
                         }
                         continue;
@@ -170,6 +189,9 @@ pub async fn run_data_plane(
                         if session.open(packet).is_ok() {
                             session = establish(transport, server, auth, obfuscation, &config.handshake, Some(&session)).await?;
                             tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys at server request");
+                            if let Some(state) = &gui_state {
+                                state.lock().unwrap_or_else(|e| e.into_inner()).set_key_phase(session.key_phase());
+                            }
                         }
                         continue;
                     }
@@ -185,14 +207,24 @@ pub async fn run_data_plane(
                         if kind == PacketKind::DataTap {
                             if let Some(dev) = tap {
                                 dev.send(&plaintext).await?;
+                                if let Some(state) = &gui_state {
+                                    state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
+                                }
                             } else if let Some(dev) = tun {
                                 dev.send(&plaintext).await?;
+                                if let Some(state) = &gui_state {
+                                    state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
+                                }
                             }
-                        } else {
-                            if let Some(dev) = tun {
-                                dev.send(&plaintext).await?;
-                            } else if let Some(dev) = tap {
-                                dev.send(&plaintext).await?;
+                        } else if let Some(dev) = tun {
+                            dev.send(&plaintext).await?;
+                            if let Some(state) = &gui_state {
+                                state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
+                            }
+                        } else if let Some(dev) = tap {
+                            dev.send(&plaintext).await?;
+                            if let Some(state) = &gui_state {
+                                state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
                             }
                         }
                     }
