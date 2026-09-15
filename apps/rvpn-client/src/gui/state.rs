@@ -54,9 +54,9 @@ impl Default for GuiState {
 pub struct GuiSnapshot {
     pub connected: bool,
     pub server: String,
-    pub uptime: u64,
+    pub uptime: std::time::Duration,
     pub session_id: String,
-    pub key_phase: String,
+    pub key_phase: u32,
 
     pub bytes_tx: u64,
     pub bytes_rx: u64,
@@ -84,7 +84,7 @@ impl GuiState {
             server: self.server.clone(),
             uptime: self.uptime,
             session_id: self.session_id.clone(),
-            key_phase: self.key_phase.clone(),
+            key_phase: self.key_phase,
 
             bytes_tx: self.bytes_tx,
             bytes_rx: self.bytes_rx,

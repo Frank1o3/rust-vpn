@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use eframe::egui::{self, RichText};
+use eframe::egui::{self};
 
 use super::GuiStateHandle;
 
@@ -9,57 +9,41 @@ pub struct DashboardApp {
     started: Instant,
 }
 
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
+
+    let mut value = bytes as f64;
+    let mut unit = 0;
+
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+fn format_duration(duration: std::time::Duration) -> String {
+    let total_seconds = duration.as_secs();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 impl DashboardApp {
     pub fn new(state: GuiStateHandle) -> Self {
         Self {
             state,
             started: Instant::now(),
         }
-    }
-
-    fn snapshot(&self) -> super::state::GuiState {
-        match self.state.lock() {
-            Ok(state) => state.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
-    }
-
-    fn section_heading(ui: &mut egui::Ui, title: &str) {
-        ui.add_space(6.0);
-        ui.label(RichText::new(title).strong().size(16.0));
-        ui.add_space(2.0);
-    }
-
-    fn value(ui: &mut egui::Ui, label: &str, value: impl Into<String>) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(label).weak());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(value.into());
-            });
-        });
-    }
-
-    fn format_bytes(bytes: u64) -> String {
-        const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-        let mut value = bytes as f64;
-        let mut index = 0;
-        while value >= 1024.0 && index < UNITS.len() - 1 {
-            value /= 1024.0;
-            index += 1;
-        }
-        if index == 0 {
-            format!("{} {}", bytes, UNITS[index])
-        } else {
-            format!("{value:.2} {}", UNITS[index])
-        }
-    }
-
-    fn format_duration(duration: Duration) -> String {
-        let seconds = duration.as_secs();
-        let hours = seconds / 3600;
-        let minutes = (seconds % 3600) / 60;
-        let seconds = seconds % 60;
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
     }
 }
 
@@ -102,7 +86,7 @@ impl eframe::App for DashboardApp {
                 ui.end_row();
 
                 ui.label("Key phase");
-                ui.label(&state.key_phase);
+                ui.label(state.key_phase.to_string());
                 ui.end_row();
             });
 
