@@ -116,27 +116,25 @@ class RvpnService : VpnService() {
                 )
             }
 
-            for (
-            dns in config.dnsServers
-                .split(
-                    ",", "")
-                        .map { it.trim() }
-                        .filter { it.isNotEmpty() }
-                ) {
-                    try {
-                        builder.addDnsServer(dns)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Skipping invalid DNS server '$dns': ${e.message}")
-                    }
+            for (dns in config.dnsServers
+                .split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            ) {
+                try {
+                    builder.addDnsServer(dns)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping invalid DNS server '$dns': ${e.message}")
                 }
+            }
 
-                for (pkg in config.excludedApps) {
-                    try {
-                        builder.addDisallowedApplication(pkg)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Could not exclude app $pkg: ${e.message}")
-                    }
+            for (pkg in config.excludedApps) {
+                try {
+                    builder.addDisallowedApplication(pkg)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not exclude app $pkg: ${e.message}")
                 }
+            }
 
             val pfd = builder.establish()
 
