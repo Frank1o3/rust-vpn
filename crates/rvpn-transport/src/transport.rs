@@ -320,7 +320,11 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
         let (level, optname, val): (libc::c_int, libc::c_int, libc::c_int) = if local.is_ipv6() {
             (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 1)
         } else {
-            (libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, 2 /* IP_PMTUDISC_DO */)
+            (
+                libc::IPPROTO_IP,
+                libc::IP_MTU_DISCOVER,
+                2, /* IP_PMTUDISC_DO */
+            )
         };
         let ret = unsafe {
             libc::setsockopt(
@@ -338,7 +342,12 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
             tracing::debug!(%e, "failed to enable DF-bit; EMSGSIZE may be unreliable on IPv4");
         }
     }
-    #[cfg(all(unix, not(target_os = "linux")))]
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
     {
         use std::os::fd::AsRawFd;
         let fd = socket.as_raw_fd();
@@ -346,6 +355,7 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
             Ok(a) => a,
             Err(_) => return,
         };
+
         if local.is_ipv4() {
             // IP_DONTFRAG available on macOS/BSDs.
             let val: libc::c_int = 1;
@@ -358,13 +368,32 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
                     std::mem::size_of::<libc::c_int>() as libc::socklen_t,
                 )
             };
+
             if ret == 0 {
                 tracing::debug!("enabled IP_DONTFRAG on UDP socket");
             } else {
                 let e = std::io::Error::last_os_error();
-                tracing::debug!(%e, "failed to enable IP_DONTFRAG; EMSGSIZE may be unreliable");
+                tracing::debug!(
+                    %e,
+                    "failed to enable IP_DONTFRAG; EMSGSIZE may be unreliable"
+                );
             }
         }
+    }
+
+    // Android and other unsupported platforms do not use IP_DONTFRAG here.
+    #[cfg(any(
+        target_os = "android",
+        not(any(
+            target_os = "linux",
+            target_os = "macos",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))
+    ))]
+    {
+        let _ = socket;
     }
     // Windows/Winsock: WSAEMSGSIZE is raised based on the send-buffer limits;
     // no portable socket option to force DF-bit without socket2 WSA extensions.
