@@ -1,7 +1,7 @@
 # RVPN Client configuration for 'Frank1o3' (generated)
 
-server="10.42.0.0/24:9000"
-obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263ae"
+server="192.168.88.253:9000"
+obfuscation_key="51b586476fa4a83f7480c047c37edd4a020871975af1dbc16ac9773ce4f27e71"
 
 [interface]
     address="10.42.0.5/24"
@@ -13,11 +13,11 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 [routing]
     default_route=true
     default_route_v6=true
-    endpoint_gateway="10.42.0.0/24"
+    endpoint_gateway="192.168.88.253"
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
 
 [auth]
     mode="pinned-key"
-    local_identity_seed="66be4c2cb3724ed2a9692c9b031228accd680db68304df2ccbbcbf7740654f03"
-    peer_public_key="259a287a437a860b53cd5c8cf5c8002ff3d0289b1ee52ba18bc8c11948ca453f"
+    local_identity_seed="2ebc3c66c9f3edc3c8e6f99a09a7a44095c28a4d34873359c7d47727d39cbc2c"
+    peer_public_key="2b6b57877386af882fce34a120376bba5168b9c69ec7c092bdcf32aef30172e1"

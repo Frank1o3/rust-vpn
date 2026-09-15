@@ -1,7 +1,7 @@
 # RVPN Client configuration for 'ShowNex' (generated)
 
-server="10.42.0.0/24:9000"
-obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263ae"
+server="192.168.88.253:9000"
+obfuscation_key="51b586476fa4a83f7480c047c37edd4a020871975af1dbc16ac9773ce4f27e71"
 
 [interface]
     address="10.42.0.4/24"
@@ -13,11 +13,11 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 [routing]
     default_route=true
     default_route_v6=true
-    endpoint_gateway="10.42.0.0/24"
+    endpoint_gateway="192.168.88.253"
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
 
 [auth]
     mode="pinned-key"
-    local_identity_seed="347e8d6f64400752678ea1af9bf51117551c12b5a6dd71e04b725a2b0e530370"
-    peer_public_key="ae3824f4ac804b67af97f05bc1abc334152c108fa652d05b84fa8bd3f6cc6b13"
+    local_identity_seed="f0f6794d0e7699e1b2ecee21b944595ca1c31091df7aa527f3cf161db75fd103"
+    peer_public_key="23dce0479f072a1b6faee77990392632041f8901dccbe465f78673bad9e276a6"

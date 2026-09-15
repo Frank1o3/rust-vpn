@@ -1,7 +1,7 @@
 # RVPN Server configuration (generated)
 
 bind="0.0.0.0:9000"
-obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263ae"
+obfuscation_key="51b586476fa4a83f7480c047c37edd4a020871975af1dbc16ac9773ce4f27e71"
 
 [interface]
     address="10.42.0.1/24"
@@ -23,8 +23,8 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 
     [peers.auth]
         mode="pinned-key"
-        local_identity_seed="092b35a4d4fd177875d522b8fd5c06f18c452316b6a0b0bbcca80a1dc6bafbe7"
-        peer_public_key="33125ee9e84efe91e78aff18b9c3225b48c64219b43b65df306bdbe86e05857c"
+        local_identity_seed="624205ba67f8252c5063798e091cabea350ba51948f4268e31808af50a31a178"
+        peer_public_key="3c27626856368307ddb10ac00259d512dd02e1e9deb4526dc703a288424b5e6f"
 
 [[peers]]
     allowed_ips=["10.42.0.3/32", "fd42::3/128"]
@@ -32,8 +32,8 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 
     [peers.auth]
         mode="pinned-key"
-        local_identity_seed="faa451d695aac9dabfe5aaf3d0b3388fe8be7819b9bfcbc35547f72077bf8ef0"
-        peer_public_key="ff5928b09841c6afce30ae0a545367dfdba0709dd1e9a0cc21120a3806ff7ee2"
+        local_identity_seed="72f6cf532040cc4cbfacb54fdd753cca77f819be54a94c03586853aac5f75045"
+        peer_public_key="eb784c4effff80d65d68b26a34f7d9491b127ee5b86b0ff588825bfd6c54661d"
 
 [[peers]]
     allowed_ips=["10.42.0.4/32", "fd42::4/128"]
@@ -41,8 +41,8 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 
     [peers.auth]
         mode="pinned-key"
-        local_identity_seed="b0f180febfb6865313a5815d35fc532c9b688210186092915d2d41ebeaaedc61"
-        peer_public_key="23ebe67a5ee91e84cdddd546fc39ce0fb4e9a65372e08056fd565302afa7b0b4"
+        local_identity_seed="c0f6861de374425b8c733b67ae00311a4b897a142f20b609fac0caf32aedabfa"
+        peer_public_key="48b6140090d886a72c95926b022f627a79d54d89428cbf5ddc859cccec1283eb"
 
 [[peers]]
     allowed_ips=["10.42.0.5/32", "fd42::5/128"]
@@ -50,5 +50,5 @@ obfuscation_key="e06276a27aa3636157a94c312fd1e5a3f5290e27daff4aad626c53363ab263a
 
     [peers.auth]
         mode="pinned-key"
-        local_identity_seed="1e6fca04018538413ef548cf12a7d8320d6d25830757fb5a916b81b20ff9620d"
-        peer_public_key="788c112555004c4a41bdfdef58af0d2a405af7c5c6b3c32eae01299e62092cf3"
+        local_identity_seed="afd56b3299860f1e71895b6999a3f9f8b5447a324089d4a099acc65757bd6c9f"
+        peer_public_key="19c1a4a536e2492cbd9fd4877a6802e0a83e10787835eba53274f25c71aa54fd"
