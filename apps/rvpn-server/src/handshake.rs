@@ -59,12 +59,31 @@ async fn send_wire(
     obfuscation: Option<&ObfuscationKey>,
 ) -> Result<()> {
     let wire = match obfuscation {
-        Some(key) => key.wrap(&encoded)?,
+        Some(key) => match key.wrap(&encoded) {
+            Ok(wire) => wire,
+            Err(error) => {
+                tracing::warn!(%error, %endpoint, "failed to obfuscate outgoing RVPN packet; dropping it");
+                return Ok(());
+            }
+        },
         None => encoded,
     };
-    transport
+    if let Err(error) = transport
         .send_to(endpoint, wire, SendOptions::default())
-        .await?;
+        .await
+    {
+        if let rvpn_transport::TransportError::DatagramTooLarge { size, maximum } = error {
+            tracing::warn!(
+                size,
+                maximum,
+                %endpoint,
+                effective_mtu = transport.effective_mtu(),
+                "oversized RVPN packet dropped instead of crashing the server; adaptive MTU stepped down"
+            );
+        } else {
+            tracing::warn!(%error, %endpoint, "failed to send RVPN packet; continuing");
+        }
+    }
     Ok(())
 }
 

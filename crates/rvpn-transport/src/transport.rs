@@ -222,6 +222,17 @@ impl UdpTransport {
 
     fn validate_outbound(&self, payload: &[u8]) -> Result<(), TransportError> {
         if payload.len() > self.config.max_datagram_size {
+            self.metrics.record_dropped_oversized();
+            if self.mtu.record_oversized(payload.len()).is_some() {
+                self.metrics.record_mtu_change();
+                tracing::warn!(
+                    attempted = payload.len(),
+                    configured_maximum = self.config.max_datagram_size,
+                    target_mtu = self.mtu.target_mtu(),
+                    effective_mtu = self.mtu.effective_mtu(),
+                    "outbound datagram exceeds the configured maximum; reduced effective MTU instead of sending it"
+                );
+            }
             return Err(TransportError::DatagramTooLarge {
                 size: payload.len(),
                 maximum: self.config.max_datagram_size,
