@@ -8,7 +8,7 @@ server="192.168.88.253:9000"
     addresses=["fd42::2/64"]
     dns_servers="192.168.88.1"
     mode="tun"
-    mtu=576
+    mtu=1400
     name="rvpn-pc-laptop"
 
 [routing]
