@@ -1,7 +1,7 @@
 # RVPN Server configuration (generated)
 
 bind="0.0.0.0:9000"
-obfuscation_key="2bdd6f85d985dee8ab38025ffaf38d0f0e0061189847ddbedbebcf8887820e8f"
+obfuscation_key="d232560a8d5a6db44cb445b182b83fcfc0aaaf58da14e9e854654182469c5074"
 
 [interface]
     address="10.42.0.1/24"
@@ -11,44 +11,44 @@ obfuscation_key="2bdd6f85d985dee8ab38025ffaf38d0f0e0061189847ddbedbebcf8887820e8
     name="rvpn-server0"
 
 [forwarding]
-    enabled=true
     backend="iptables"
+    enabled=true
     external_interface="enp0s31f6"
     tunnel_cidr="10.42.0.0/24"
     tunnel_cidr_v6="fd42::/64"
 
 [[peers]]
     allowed_ips=["10.42.0.2/32", "fd42::2/128"]
-    name="Laptop"
+    name="Lapto"
 
     [peers.auth]
+        local_identity_seed="87087dca30f0e52950aecc57d1d3abeb6648c7b8af3b6a87f232e41756068145"
         mode="pinned-key"
-        local_identity_seed="227c15274804def3382998217e94e3c08a36bcacb0052280dd76109b4c38ee7c"
-        peer_public_key="855ae4c588ece86fcc239610408d7be07cb4c87a8388277b5ec5e454f9eb232b"
+        peer_public_key="6f017c45d5b09e5d705eb0cd0ea77e46585391aff701f338bc5c333657ea96d8"
 
 [[peers]]
     allowed_ips=["10.42.0.3/32", "fd42::3/128"]
     name="Panda"
 
     [peers.auth]
+        local_identity_seed="402eff3ca921709881a060f7ab585733ef7bb8e607295a0fc2ada96506e604f0"
         mode="pinned-key"
-        local_identity_seed="3931a0037eaf84d461484d8e1785ea9c890544e6a3593db4feba75d9bc909117"
-        peer_public_key="1a3185cd1429c906cd38486b8eeddddf6d6e86a2e6cdf95bb706973b0448b555"
+        peer_public_key="4368d32c31de620c67831d2c60e740216e9dd64ea35ca61b9c6271e502655a98"
 
 [[peers]]
     allowed_ips=["10.42.0.4/32", "fd42::4/128"]
     name="ShowNex"
 
     [peers.auth]
+        local_identity_seed="131a9f0bb18d0b0075107a52685a247c4c2070da024ea009cad06169da67530f"
         mode="pinned-key"
-        local_identity_seed="6274507da6da8f3494fbf09c39d730ffa02219a83e57789c7bfedfab5abcd8cf"
-        peer_public_key="189b13910f6c3361057740b5d042e4af1e847fc4df9433fab3d71e4f0f1a2b43"
+        peer_public_key="6f46a8deeb78adcbf8cb89a0e940abe34c30e981097c64fe5c90adad4659cb4d"
 
 [[peers]]
     allowed_ips=["10.42.0.5/32", "fd42::5/128"]
     name="Frank1o3"
 
     [peers.auth]
+        local_identity_seed="40fab10c5ac9b83b924fb85c5093673410af40024a83cd1b4ead7cf83776feee"
         mode="pinned-key"
-        local_identity_seed="0340ffe54a6d80702410dd215b97391c98bb66cb9f4dcb01ddf9ac84d0b3c4c5"
-        peer_public_key="7a20be7522e93d6965610b7e97b75283f4e7f2febcd71e4c7271ef6a99056e70"
+        peer_public_key="f4d46da91248123d9073ab1dc92b6c0cb694d610c9e06bbafe49abb7800181c4"

@@ -1,15 +1,15 @@
 # RVPN Client configuration for 'Panda' (generated)
 
+obfuscation_key="d232560a8d5a6db44cb445b182b83fcfc0aaaf58da14e9e854654182469c5074"
 server="192.168.88.253:9000"
-obfuscation_key="2bdd6f85d985dee8ab38025ffaf38d0f0e0061189847ddbedbebcf8887820e8f"
 
 [interface]
     address="10.42.0.3/24"
     addresses=["fd42::3/64"]
+    dns_servers="192.168.88.1"
     mode="tun"
     mtu=1400
     name="rvpn-android-panda"
-    dns_servers="192.168.88.1"
 
 [routing]
     default_route=true
@@ -19,9 +19,9 @@ obfuscation_key="2bdd6f85d985dee8ab38025ffaf38d0f0e0061189847ddbedbebcf8887820e8
     gateway_v6="fd42::1"
 
 [auth]
+    local_identity_seed="2c4fb96f1b31498a599c14312f532bccffc9360ddbd27ead2b8287eee31c94cb"
     mode="pinned-key"
-    local_identity_seed="2d8627da6268e331674ab2fa915e407bdf3019a2258b9671fbaa3692551ed7bb"
-    peer_public_key="1910d8664200a50cf70456c4c7ebef1edfcccf17b42d7382395f957ca70dd5cf"
+    peer_public_key="e1ec8025e983f744c2b9adb171e98b936adc8089d3c5c4e5a536169316f30f71"
 
 [handshake]
     retry_interval_ms=150
