@@ -8,7 +8,7 @@ server="192.168.88.253:9000"
     address="10.42.0.2/24"
     addresses=["fd42::2/64"]
     mode="tun"
-    mtu=500
+    mtu=576
     name="rvpn-client0"
 
 [routing]
