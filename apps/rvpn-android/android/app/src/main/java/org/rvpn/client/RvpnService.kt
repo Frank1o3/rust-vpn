@@ -271,7 +271,7 @@ class RvpnService : VpnService() {
      */
     private fun safeTunnelMtu(config: RvpnConfig): Int {
         val rvpnOverhead = 30 + 16 // protocol header + AEAD tag
-        val obfuscationOverhead = if (config.obfuscationKey.isBlank()) 0 else 12 + 1 + 255
+        val obfuscationOverhead = if (config.obfuscationKey.isBlank()) 0 else 12 + 1 + 96
         val ipv6SafeUdpPayload = 1452 // 1500 - 40 byte IPv6 header - 8 byte UDP header
         val safeMtu = (ipv6SafeUdpPayload - rvpnOverhead - obfuscationOverhead).coerceAtLeast(576)
         if (config.mtu > safeMtu) {

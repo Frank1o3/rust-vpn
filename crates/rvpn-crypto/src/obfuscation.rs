@@ -8,7 +8,10 @@ use rand::{TryRng, rngs::SysRng};
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
-const MAX_PADDING: usize = 255;
+// Keep the worst-case encrypted packet small enough that a 1280-byte IPv6
+// inner packet still fits inside a standard 1500-byte outer Ethernet path.
+// IPv6 cannot be configured on a link with an MTU below 1280.
+const MAX_PADDING: usize = 96;
 pub const OBFUSCATION_OVERHEAD: usize = NONCE_LEN + 1 + MAX_PADDING;
 
 pub struct ObfuscationKey([u8; KEY_LEN]);
