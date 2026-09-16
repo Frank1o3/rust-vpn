@@ -112,16 +112,40 @@ impl UdpTransport {
         self.metrics.record_dropped_backpressure();
     }
 
+    /// If `payload` exceeds the configured maximum, logs it, counts it, and
+    /// steps the adaptive MTU down accordingly, and returns `true` so the
+    /// caller can treat this as "nothing to send" rather than propagate a
+    /// fatal error. A packet that's merely too big for this datagram budget
+    /// is never, on its own, a reason to tear down the whole transport.
+    fn drop_if_oversized(&self, payload: &[u8]) -> bool {
+        if payload.len() <= self.config.max_datagram_size {
+            return false;
+        }
+        self.metrics.record_dropped_oversized();
+        if self.mtu.record_oversized(payload.len()).is_some() {
+            self.metrics.record_mtu_change();
+        }
+        tracing::warn!(
+            attempted = payload.len(),
+            configured_maximum = self.config.max_datagram_size,
+            effective_mtu = self.mtu.effective_mtu(),
+            "dropping outbound datagram that exceeds the configured maximum instead of sending it"
+        );
+        true
+    }
+
     /// Sends opaque bytes to the configured remote peer.
     pub async fn send(
         &self,
         payload: Bytes,
         options: SendOptions,
     ) -> Result<usize, TransportError> {
-        self.validate_outbound(&payload)?;
         self.ensure_supported(options)?;
         if self.config.remote_address.is_none() {
             return Err(TransportError::MissingRemoteAddress);
+        }
+        if self.drop_if_oversized(&payload) {
+            return Ok(0);
         }
         let attempted = payload.len();
         match self.socket.send(&payload).await {
@@ -140,8 +164,10 @@ impl UdpTransport {
         payload: Bytes,
         options: SendOptions,
     ) -> Result<usize, TransportError> {
-        self.validate_outbound(&payload)?;
         self.ensure_supported(options)?;
+        if self.drop_if_oversized(&payload) {
+            return Ok(0);
+        }
         let attempted = payload.len();
         match self.socket.send_to(&payload, peer).await {
             Ok(sent) => {
@@ -186,10 +212,29 @@ impl UdpTransport {
         error.into()
     }
 
+    /// Receives the next datagram, silently dropping (and logging) any
+    /// datagram larger than this transport's configured maximum instead of
+    /// failing the call — an oversized inbound datagram (garbage, a
+    /// misbehaving peer, or a peer whose own budget doesn't match ours) is
+    /// never on its own a reason to stop receiving.
     pub async fn receive(&self) -> Result<ReceivedDatagram, TransportError> {
-        let datagram = receive_from(&self.socket, &self.recv_pool, &self.metrics).await?;
-        self.keepalive.record_activity();
-        Ok(datagram)
+        loop {
+            match receive_from(&self.socket, &self.recv_pool, &self.metrics).await {
+                Ok(datagram) => {
+                    self.keepalive.record_activity();
+                    return Ok(datagram);
+                }
+                Err(TransportError::DatagramTooLarge { size, maximum }) => {
+                    tracing::warn!(
+                        size,
+                        maximum,
+                        "dropping oversized inbound datagram instead of failing the receive loop"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     pub async fn receive_into(&self, buf: &mut BytesMut) -> Result<RecvMeta, TransportError> {
@@ -198,47 +243,30 @@ impl UdpTransport {
         if buf.capacity() < capacity {
             buf.reserve(capacity - buf.capacity());
         }
-        buf.clear();
-
-        unsafe { buf.set_len(capacity) };
-        let (length, peer) = self.socket.recv_from(&mut buf[..capacity]).await?;
-        if length > maximum {
+        loop {
             buf.clear();
-            self.metrics.record_dropped_oversized();
-            return Err(TransportError::DatagramTooLarge {
-                size: length,
-                maximum,
-            });
-        }
-        buf.truncate(length);
-        self.metrics.record_received(length);
-        self.keepalive.record_activity();
-        Ok(RecvMeta {
-            peer,
-            len: length,
-            received_at: Instant::now(),
-        })
-    }
-
-    fn validate_outbound(&self, payload: &[u8]) -> Result<(), TransportError> {
-        if payload.len() > self.config.max_datagram_size {
-            self.metrics.record_dropped_oversized();
-            if self.mtu.record_oversized(payload.len()).is_some() {
-                self.metrics.record_mtu_change();
+            unsafe { buf.set_len(capacity) };
+            let (length, peer) = self.socket.recv_from(&mut buf[..capacity]).await?;
+            if length > maximum {
+                buf.clear();
+                self.metrics.record_dropped_oversized();
                 tracing::warn!(
-                    attempted = payload.len(),
-                    configured_maximum = self.config.max_datagram_size,
-                    target_mtu = self.mtu.target_mtu(),
-                    effective_mtu = self.mtu.effective_mtu(),
-                    "outbound datagram exceeds the configured maximum; reduced effective MTU instead of sending it"
+                    size = length,
+                    maximum,
+                    %peer,
+                    "dropping oversized inbound datagram instead of failing receive_into"
                 );
+                continue;
             }
-            return Err(TransportError::DatagramTooLarge {
-                size: payload.len(),
-                maximum: self.config.max_datagram_size,
+            buf.truncate(length);
+            self.metrics.record_received(length);
+            self.keepalive.record_activity();
+            return Ok(RecvMeta {
+                peer,
+                len: length,
+                received_at: Instant::now(),
             });
         }
-        Ok(())
     }
 
     fn ensure_supported(&self, options: SendOptions) -> Result<(), TransportError> {
