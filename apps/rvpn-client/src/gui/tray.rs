@@ -1,54 +1,71 @@
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use tao::event::{Event, StartCause};
+use anyhow::{Context, Result};
+use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tokio::sync::watch;
 use tray_icon::{
-    Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
-    menu::{Menu, MenuEvent, MenuId, MenuItem},
+    Icon, TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem},
 };
 
 use super::GuiStateHandle;
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(750);
 
+/// Forward tray-library events to Tao so menu clicks wake the application
+/// immediately instead of waiting for the next refresh tick.
+enum TrayEvent {
+    Icon,
+    Menu(MenuEvent),
+}
+
 pub fn run_tray(
     state: GuiStateHandle,
     shutdown_tx: watch::Sender<bool>,
     client_thread: JoinHandle<()>,
-) -> ! {
-    let event_loop = EventLoopBuilder::new().build();
+) -> Result<()> {
+    let event_loop = EventLoopBuilder::<TrayEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    TrayIconEvent::set_event_handler(Some(move |_| {
+        let _ = proxy.send_event(TrayEvent::Icon);
+    }));
+    let proxy = event_loop.create_proxy();
+    MenuEvent::set_event_handler(Some(move |event| {
+        let _ = proxy.send_event(TrayEvent::Menu(event));
+    }));
 
-    let mut tray: Option<TrayIcon> = None;
-    let mut quit_id: Option<MenuId> = None;
+    let menu = Menu::new();
+    let quit_item = MenuItem::new("Quit RVPN", true, None);
+    let quit_id = quit_item.id().clone();
+    let _ = menu.append(&quit_item);
+    // The native menu keeps only a weak reference to its items.
+    std::mem::forget(quit_item);
+
+    let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).snapshot();
+    let tray = match TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip(snapshot.tooltip_text())
+        .with_icon(status_icon(snapshot.connected))
+        .build()
+    {
+        Ok(tray) => tray,
+        Err(error) => {
+            let _ = shutdown_tx.send(true);
+            let _ = client_thread.join();
+            return Err(error).context("creating RVPN tray icon");
+        }
+    };
+
     let mut client_thread = Some(client_thread);
     let mut last_refresh = Instant::now();
 
     event_loop.run(move |event, _target, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + REFRESH_INTERVAL);
 
-        if let Event::NewEvents(StartCause::Init) = event {
-            let menu = Menu::new();
-            let quit_item = MenuItem::new("Quit RVPN", true, None);
-            quit_id = Some(quit_item.id().clone());
-            let _ = menu.append(&quit_item);
-
-            std::mem::forget(quit_item);
-
-            let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).snapshot();
-            tray = Some(
-                TrayIconBuilder::new()
-                    .with_menu(Box::new(menu))
-                    .with_tooltip(snapshot.tooltip_text())
-                    .with_icon(status_icon(snapshot.connected))
-                    .build()
-                    .expect("failed to create RVPN tray icon"),
-            );
-        }
-
-        if let Ok(menu_event) = MenuEvent::receiver().try_recv() {
-            if Some(&menu_event.id) == quit_id.as_ref() {
+        if let Event::UserEvent(TrayEvent::Menu(menu_event)) = event {
+            if menu_event.id == quit_id {
                 let _ = shutdown_tx.send(true);
                 if let Some(handle) = client_thread.take() {
                     let _ = handle.join();
@@ -58,15 +75,11 @@ pub fn run_tray(
             }
         }
 
-        let _ = TrayIconEvent::receiver().try_recv();
-
-        if let Some(tray) = &tray {
-            if last_refresh.elapsed() >= REFRESH_INTERVAL {
-                let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).snapshot();
-                let _ = tray.set_tooltip(Some(snapshot.tooltip_text()));
-                let _ = tray.set_icon(Some(status_icon(snapshot.connected)));
-                last_refresh = Instant::now();
-            }
+        if last_refresh.elapsed() >= REFRESH_INTERVAL {
+            let snapshot = state.lock().unwrap_or_else(|e| e.into_inner()).snapshot();
+            let _ = tray.set_tooltip(Some(snapshot.tooltip_text()));
+            let _ = tray.set_icon(Some(status_icon(snapshot.connected)));
+            last_refresh = Instant::now();
         }
     })
 }
