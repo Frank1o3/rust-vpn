@@ -17,11 +17,13 @@ fun workspaceVersion(): String {
     }
     val sectionEnd = text.indexOf('[', sectionStart + 1).let { if (it == -1) text.length else it }
     val section = text.substring(sectionStart, sectionEnd)
-    return Regex("""version\s*=\s*"([^"]+)"""")
+    return Regex("""(?m)^\s*version\s*=\s*"([^"]+)"""")
         .find(section)
         ?.groupValues
         ?.get(1)
-        ?: "0.0.0".also { logger.warn("Could not parse version= from [workspace.package]; defaulting to 0.0.0") }
+        ?: "0.0.0".also {
+            logger.warn("Could not parse version from [workspace.package]; defaulting to 0.0.0")
+        }
 }
 
 fun versionCodeFor(semver: String): Int {
