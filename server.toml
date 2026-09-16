@@ -19,7 +19,7 @@ obfuscation_key="d232560a8d5a6db44cb445b182b83fcfc0aaaf58da14e9e854654182469c507
 
 [[peers]]
     allowed_ips=["10.42.0.2/32", "fd42::2/128"]
-    name="Lapto"
+    name="Laptop"
 
     [peers.auth]
         local_identity_seed="87087dca30f0e52950aecc57d1d3abeb6648c7b8af3b6a87f232e41756068145"
