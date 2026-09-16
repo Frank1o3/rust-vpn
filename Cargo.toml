@@ -16,7 +16,7 @@
         authors=["Frank1o3"]
         edition="2024"
         license="BSD-3-Clause"
-        version="0.2.4"
+        version="0.2.5"
 
     [workspace.dependencies]
         anyhow="1.0.104"
