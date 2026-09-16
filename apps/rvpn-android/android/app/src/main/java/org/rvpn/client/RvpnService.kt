@@ -76,10 +76,11 @@ class RvpnService : VpnService() {
 
         try {
             Log.i(TAG, "Configuring Android VPN interface...")
+            val tunnelMtu = safeTunnelMtu(config)
 
             val builder = Builder()
                 .setSession("RVPN")
-                .setMtu(config.mtu)
+                .setMtu(tunnelMtu)
                 .addAddress(config.tunnelAddress, config.tunnelPrefixLength)
 
             if (config.ipv6Enabled && config.tunnelAddressV6.isNotEmpty()) {
@@ -171,7 +172,7 @@ class RvpnService : VpnService() {
                 caPublicKeyHex = config.caPublicKey,
                 obfuscationKeyHex = config.obfuscationKey,
                 tunFd = tunFd,
-                mtu = config.mtu,
+                mtu = tunnelMtu,
                 rekeyPacketLimit = config.rekeyPacketLimit,
                 retryIntervalMs = config.retryIntervalMs,
                 retryLimit = config.retryLimit
@@ -262,6 +263,21 @@ class RvpnService : VpnService() {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
+    }
+
+    /**
+     * Keeps a full inner IP packet plus RVPN's worst-case wire overhead below
+     * the IPv6-safe UDP payload size for a standard 1500-byte path.
+     */
+    private fun safeTunnelMtu(config: RvpnConfig): Int {
+        val rvpnOverhead = 30 + 16 // protocol header + AEAD tag
+        val obfuscationOverhead = if (config.obfuscationKey.isBlank()) 0 else 12 + 1 + 255
+        val ipv6SafeUdpPayload = 1452 // 1500 - 40 byte IPv6 header - 8 byte UDP header
+        val safeMtu = (ipv6SafeUdpPayload - rvpnOverhead - obfuscationOverhead).coerceAtLeast(576)
+        if (config.mtu > safeMtu) {
+            Log.w(TAG, "Reducing configured MTU ${config.mtu} to $safeMtu to avoid UDP fragmentation")
+        }
+        return minOf(config.mtu, safeMtu)
     }
 
     private fun addSplitRoutes(builder: Builder, routes: String) {

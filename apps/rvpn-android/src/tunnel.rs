@@ -74,14 +74,18 @@ pub async fn run_tunnel(
     };
 
     let obfuscation = config.obfuscation_key.map(ObfuscationKey::from_bytes);
+    let wire_overhead = HEADER_LEN
+        + AEAD_TAG_LEN
+        + if obfuscation.is_some() {
+            rvpn_crypto::OBFUSCATION_OVERHEAD
+        } else {
+            0
+        };
 
     let transport = UdpTransport::open(TransportConfig {
         local_address: local_bind,
         remote_address: None,
-        max_datagram_size: usize::from(config.mtu)
-            + HEADER_LEN
-            + AEAD_TAG_LEN
-            + rvpn_crypto::OBFUSCATION_OVERHEAD,
+        max_datagram_size: usize::from(config.mtu) + wire_overhead,
     })
     .await
     .context("opening UDP transport")?;

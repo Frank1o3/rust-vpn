@@ -9,7 +9,7 @@ use rvpn_config::{DeviceMode, ServerConfig};
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
-use rvpn_transport::{TransportConfig, UdpTransport};
+use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
 use std::{env, fs};
 
 use firewall::ForwardingGuard;
@@ -31,19 +31,32 @@ async fn main() -> Result<()> {
     let cookie_key =
         rvpn_crypto::CookieKey::generate().context("generating anti-amplification cookie key")?;
     let mode = config.interface.mode();
-    let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
+    let requested_mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
     let frame_overhead = match mode {
         DeviceMode::Tun => 0,
         DeviceMode::Tap | DeviceMode::Both => 18,
     };
+    let wire_overhead = frame_overhead
+        + HEADER_LEN
+        + AEAD_TAG_LEN
+        + if obfuscation.is_some() {
+            rvpn_crypto::OBFUSCATION_OVERHEAD
+        } else {
+            0
+        };
+    let mtu = effective_tunnel_mtu(requested_mtu, wire_overhead, config.bind.is_ipv6());
+    if mtu < requested_mtu {
+        tracing::warn!(
+            requested_mtu,
+            effective_mtu = mtu,
+            wire_overhead,
+            "reduced tunnel MTU so encrypted UDP packets fit a standard path"
+        );
+    }
     let transport = UdpTransport::open(TransportConfig {
         local_address: config.bind,
         remote_address: None,
-        max_datagram_size: usize::from(mtu)
-            + frame_overhead
-            + HEADER_LEN
-            + AEAD_TAG_LEN
-            + rvpn_crypto::OBFUSCATION_OVERHEAD,
+        max_datagram_size: usize::from(mtu) + wire_overhead,
     })
     .await?;
 
@@ -120,6 +133,11 @@ async fn main() -> Result<()> {
         shutdown,
     )
     .await
+}
+
+fn effective_tunnel_mtu(requested: u16, wire_overhead: usize, outer_is_ipv6: bool) -> u16 {
+    let safe_inner = default_udp_payload_mtu(outer_is_ipv6).saturating_sub(wire_overhead);
+    requested.min(safe_inner.try_into().unwrap_or(u16::MAX))
 }
 
 async fn shutdown_signal() -> Result<()> {

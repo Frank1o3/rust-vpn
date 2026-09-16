@@ -9,7 +9,7 @@ use rvpn_config::{ClientConfig, DeviceMode};
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
-use rvpn_transport::{TransportConfig, UdpTransport};
+use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
 use std::{env, fs, net::SocketAddr, sync::Arc};
 use tokio::sync::watch;
 
@@ -89,11 +89,31 @@ async fn run_client(
     }
 
     let mode = config.interface.mode();
-    let mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
+    let requested_mtu = config.interface.mtu.unwrap_or(DEFAULT_MTU);
     let frame_overhead = match mode {
         DeviceMode::Tun => 0,
         DeviceMode::Tap | DeviceMode::Both => 18,
     };
+    let obfuscation = config
+        .obfuscation_key_bytes()?
+        .map(rvpn_crypto::ObfuscationKey::from_bytes);
+    let wire_overhead = frame_overhead
+        + HEADER_LEN
+        + AEAD_TAG_LEN
+        + if obfuscation.is_some() {
+            rvpn_crypto::OBFUSCATION_OVERHEAD
+        } else {
+            0
+        };
+    let mtu = effective_tunnel_mtu(requested_mtu, wire_overhead, server.is_ipv6());
+    if mtu < requested_mtu {
+        tracing::warn!(
+            requested_mtu,
+            effective_mtu = mtu,
+            wire_overhead,
+            "reduced tunnel MTU so encrypted UDP packets fit a standard path"
+        );
+    }
     let local_bind: SocketAddr = if server.is_ipv6() {
         "[::]:0".parse().unwrap()
     } else {
@@ -102,19 +122,11 @@ async fn run_client(
     let transport = UdpTransport::open(TransportConfig {
         local_address: local_bind,
         remote_address: None,
-        max_datagram_size: usize::from(mtu)
-            + frame_overhead
-            + HEADER_LEN
-            + AEAD_TAG_LEN
-            + rvpn_crypto::OBFUSCATION_OVERHEAD,
+        max_datagram_size: usize::from(mtu) + wire_overhead,
     })
     .await?;
 
     let auth = config.auth_config()?;
-    let obfuscation = config
-        .obfuscation_key_bytes()?
-        .map(rvpn_crypto::ObfuscationKey::from_bytes);
-
     let session = establish(
         &transport,
         server,
@@ -209,6 +221,11 @@ async fn run_client(
     teardown_client_network(primary_dev, &config, server).await;
 
     result
+}
+
+fn effective_tunnel_mtu(requested: u16, wire_overhead: usize, outer_is_ipv6: bool) -> u16 {
+    let safe_inner = default_udp_payload_mtu(outer_is_ipv6).saturating_sub(wire_overhead);
+    requested.min(safe_inner.try_into().unwrap_or(u16::MAX))
 }
 
 async fn combined_shutdown(

@@ -18,7 +18,7 @@ pub use error::TransportError;
 pub use events::{EventTransport, TransportEvent, TransportEvents};
 pub use keepalive::KeepaliveScheduler;
 pub use metrics::{MetricsSnapshot, TransportMetrics};
-pub use mtu::{AdaptiveMtu, MtuChangeReason, MtuSnapshot};
+pub use mtu::{AdaptiveMtu, MtuChangeReason, MtuSnapshot, default_udp_payload_mtu};
 pub use packet::{PacketId, ReceivedDatagram, RecvMeta, TransportPacket};
 pub use transport::{TransportTuning, UdpTransport};
 

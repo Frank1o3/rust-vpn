@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::ClientConfig;
 use rvpn_interface::VirtualInterface;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use tokio::process::Command;
 
 pub async fn configure_client_network(
@@ -21,7 +21,7 @@ pub async fn configure_client_network(
         run("ip", ["link", "set", "dev", dev.name(), "up"]).await?;
     }
     for route in &config.routing.routes {
-        route_replace(route, None, dev.name()).await?;
+        route_replace(route, None, dev.name(), None).await?;
     }
     if config.routing.default_route {
         let gateway = config
@@ -30,10 +30,13 @@ pub async fn configure_client_network(
             .as_deref()
             .expect("validated gateway");
 
-        preserve_server_route(server).await?;
+        if server.is_ipv4() {
+            preserve_server_route(server).await?;
+        }
+        let source = tunnel_source(config, false)?;
 
-        route_replace("0.0.0.0/1", Some(gateway), dev.name()).await?;
-        route_replace("128.0.0.0/1", Some(gateway), dev.name()).await?;
+        route_replace("0.0.0.0/1", Some(gateway), dev.name(), Some(&source)).await?;
+        route_replace("128.0.0.0/1", Some(gateway), dev.name(), Some(&source)).await?;
     }
 
     if config.routing.default_route_v6 {
@@ -43,10 +46,13 @@ pub async fn configure_client_network(
             .as_deref()
             .expect("validated gateway");
 
-        preserve_server_route(server).await?;
+        if server.is_ipv6() {
+            preserve_server_route(server).await?;
+        }
+        let source = tunnel_source(config, true)?;
 
-        route_replace("::/1", Some(gateway), dev.name()).await?;
-        route_replace("8000::/1", Some(gateway), dev.name()).await?;
+        route_replace("::/1", Some(gateway), dev.name(), Some(&source)).await?;
+        route_replace("8000::/1", Some(gateway), dev.name(), Some(&source)).await?;
     }
     Ok(())
 }
@@ -94,9 +100,9 @@ async fn preserve_server_route(server: SocketAddr) -> Result<()> {
     };
 
     if let Some(gateway) = gateway {
-        route_replace(&destination, Some(gateway), device).await?;
+        route_replace(&destination, Some(gateway), device, None).await?;
     } else {
-        route_replace(&destination, None, device).await?;
+        route_replace(&destination, None, device, None).await?;
     }
 
     tracing::info!(
@@ -134,7 +140,34 @@ pub async fn teardown_client_network(
     }
 }
 
-async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -> Result<()> {
+fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<String> {
+    config
+        .interface
+        .address
+        .iter()
+        .chain(&config.interface.addresses)
+        .filter_map(|cidr| cidr.split('/').next())
+        .find_map(|address| {
+            address
+                .parse::<IpAddr>()
+                .ok()
+                .filter(|address| address.is_ipv6() == ipv6)
+        })
+        .map(|address| address.to_string())
+        .with_context(|| {
+            format!(
+                "default {} routing requires an address of the same family on the tunnel interface",
+                if ipv6 { "IPv6" } else { "IPv4" }
+            )
+        })
+}
+
+async fn route_replace(
+    destination: &str,
+    gateway: Option<&str>,
+    device: &str,
+    source: Option<&str>,
+) -> Result<()> {
     let ipv6 = destination.contains(':') || gateway.is_some_and(|value| value.contains(':'));
     let mut args = if ipv6 {
         vec!["-6", "route", "replace", destination]
@@ -146,6 +179,9 @@ async fn route_replace(destination: &str, gateway: Option<&str>, device: &str) -
     }
     if !device.is_empty() {
         args.extend(["dev", device]);
+    }
+    if let Some(source) = source {
+        args.extend(["src", source]);
     }
     run("ip", args).await
 }

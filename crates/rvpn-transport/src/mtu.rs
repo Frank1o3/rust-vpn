@@ -2,6 +2,25 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+/// The common Ethernet L3 MTU. VPN callers use this conservative default
+/// when sizing an inner packet for an otherwise unknown Internet path.
+pub const DEFAULT_PATH_MTU: usize = 1500;
+
+/// Largest UDP payload that fits in [`DEFAULT_PATH_MTU`] without outer IP
+/// fragmentation.
+pub const fn default_udp_payload_mtu(outer_is_ipv6: bool) -> usize {
+    const UDP_HEADER: usize = 8;
+    const IPV4_HEADER: usize = 20;
+    const IPV6_HEADER: usize = 40;
+    DEFAULT_PATH_MTU
+        - UDP_HEADER
+        - if outer_is_ipv6 {
+            IPV6_HEADER
+        } else {
+            IPV4_HEADER
+        }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MtuChangeReason {
     PathMtuExceeded,
@@ -192,6 +211,12 @@ mod tests {
     fn expire_cooldown(mtu: &AdaptiveMtu) {
         let mut state = mtu.state.lock().unwrap();
         state.last_change = Instant::now() - AdaptiveMtu::MIN_CHANGE_INTERVAL;
+    }
+
+    #[test]
+    fn default_udp_payload_reserves_outer_headers() {
+        assert_eq!(default_udp_payload_mtu(false), 1472);
+        assert_eq!(default_udp_payload_mtu(true), 1452);
     }
 
     #[test]
