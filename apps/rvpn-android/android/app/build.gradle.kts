@@ -6,14 +6,14 @@ plugins {
 fun workspaceVersion(): String {
     val cargoToml = rootProject.file("../../../Cargo.toml")
     if (!cargoToml.exists()) {
-        logger.warn("Could not find workspace Cargo.toml at ${cargoToml.path}; defaulting to 0.0.0")
-        return "0.0.0"
+        logger.warn("Could not find workspace Cargo.toml at ${cargoToml.path}; defaulting to 0.0.1")
+        return "0.0.1"
     }
     val text = cargoToml.readText()
     val sectionStart = text.indexOf("[workspace.package]")
     if (sectionStart == -1) {
-        logger.warn("Cargo.toml has no [workspace.package] section; defaulting to 0.0.0")
-        return "0.0.0"
+        logger.warn("Cargo.toml has no [workspace.package] section; defaulting to 0.0.1")
+        return "0.0.1"
     }
     val sectionEnd = text.indexOf('[', sectionStart + 1).let { if (it == -1) text.length else it }
     val section = text.substring(sectionStart, sectionEnd)
@@ -21,8 +21,8 @@ fun workspaceVersion(): String {
         .find(section)
         ?.groupValues
         ?.get(1)
-        ?: "0.0.0".also {
-            logger.warn("Could not parse version from [workspace.package]; defaulting to 0.0.0")
+        ?: "0.0.1".also {
+            logger.warn("Could not parse version from [workspace.package]; defaulting to 0.0.1")
         }
 }
 
