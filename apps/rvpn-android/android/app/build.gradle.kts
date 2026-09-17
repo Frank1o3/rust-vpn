@@ -10,13 +10,18 @@ fun workspaceVersion(): String {
         return "0.0.1"
     }
     val text = cargoToml.readText()
-    val sectionStart = text.indexOf("[workspace.package]")
-    if (sectionStart == -1) {
+
+    val headerMatch = Regex("""(?m)^\s*\[workspace\.package]\s*$""").find(text)
+    if (headerMatch == null) {
         logger.warn("Cargo.toml has no [workspace.package] section; defaulting to 0.0.1")
         return "0.0.1"
     }
-    val sectionEnd = text.indexOf('[', sectionStart + 1).let { if (it == -1) text.length else it }
+
+    val sectionStart = headerMatch.range.last + 1
+    val nextHeader = Regex("""(?m)^\s*\[""").find(text, sectionStart)
+    val sectionEnd = nextHeader?.range?.first ?: text.length
     val section = text.substring(sectionStart, sectionEnd)
+
     return Regex("""(?m)^\s*version\s*=\s*"([^"]+)"""")
         .find(section)
         ?.groupValues
