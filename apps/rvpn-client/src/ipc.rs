@@ -8,8 +8,8 @@ use tokio::{
     task::JoinHandle,
 };
 
-use rvpn_core::{GuiState, GuiStateHandle};
 use crate::run_client;
+use rvpn_core::{GuiState, GuiStateHandle};
 
 struct Session {
     shutdown_tx: watch::Sender<bool>,

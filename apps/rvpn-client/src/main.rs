@@ -6,11 +6,11 @@ mod tunnel;
 use anyhow::{Context, Result};
 use ipc::{Daemon, run_ipc_server};
 use rvpn_config::{ClientConfig, DeviceMode};
+use rvpn_core::GuiStateHandle;
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use rvpn_core::GuiStateHandle;
 use std::{env, fs, net::SocketAddr, sync::Arc};
 
 use handshake::establish;
