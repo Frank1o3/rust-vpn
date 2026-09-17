@@ -2,9 +2,11 @@
     authors.workspace=true
     edition.workspace=true
     license.workspace=true
-    name="rvpn-core"
+    name="rvpn-ipc"
     version.workspace=true
 
 [dependencies]
-    rvpn-transport={path="../../crates/rvpn-transport"}
+    interprocess.workspace=true
+    libc.workspace=true
     thiserror.workspace=true
+    tokio.workspace=true

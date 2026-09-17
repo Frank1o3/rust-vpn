@@ -636,6 +636,34 @@ pub enum ConfigError {
     NoResolvedAddress(String),
 }
 
+/// Base directory for RVPN's own config files: `$XDG_CONFIG_HOME/rvpn`,
+/// falling back to `$HOME/.config/rvpn` on Linux/macOS, or
+/// `%APPDATA%\rvpn` on Windows — so the same path resolves whether RVPN is
+/// started by systemd (as that user) or run by hand.
+pub fn default_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("rvpn");
+        }
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("rvpn");
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".config").join("rvpn");
+    }
+    PathBuf::from("rvpn")
+}
+
+pub fn default_client_config_path() -> PathBuf {
+    default_config_dir().join("client.toml")
+}
+
+pub fn default_server_config_path() -> PathBuf {
+    default_config_dir().join("server.toml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

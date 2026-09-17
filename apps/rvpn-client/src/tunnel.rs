@@ -7,7 +7,7 @@ use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::gui::GuiStateHandle;
+use rvpn_core::GuiStateHandle;
 use crate::handshake::{establish, maybe_rekey};
 
 fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {

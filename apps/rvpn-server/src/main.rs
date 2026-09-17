@@ -21,8 +21,14 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let path = env::args()
         .nth(1)
-        .context("usage: rvpn-server <server.toml>")?;
-    let config = ServerConfig::from_toml(&fs::read_to_string(path)?)?;
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(rvpn_config::default_server_config_path);
+    let config = ServerConfig::from_toml(&fs::read_to_string(&path).with_context(|| {
+        format!(
+            "reading {} (pass a path as the first argument to override)",
+            path.display()
+        )
+    })?)?;
     let identities = config.peer_identities()?;
     let certificate_authority = config.certificate_authority.clone();
     let obfuscation = config

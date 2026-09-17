@@ -1,17 +1,17 @@
-mod gui;
 mod handshake;
+mod ipc;
 mod platform;
 mod tunnel;
 
 use anyhow::{Context, Result};
-use gui::{GuiState, run_tray};
+use ipc::{Daemon, run_ipc_server};
 use rvpn_config::{ClientConfig, DeviceMode};
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
+use rvpn_core::GuiStateHandle;
 use std::{env, fs, net::SocketAddr, sync::Arc};
-use tokio::sync::watch;
 
 use handshake::establish;
 use platform::{configure_client_network, teardown_client_network};
@@ -21,60 +21,39 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     raise_ambient_capabilities();
 
-    let mut args = env::args().skip(1);
-    let path = args
-        .next()
-        .context("usage: rvpn-client <client.toml> [--tray]")?;
+    let arg = env::args().nth(1);
 
-    let tray = args.any(|arg| arg == "--tray");
-    let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
-
-    if tray {
-        run_tray_app(config)
-    } else {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .context("creating Tokio runtime")?
-            .block_on(run_client(config, None, None))
-    }
-}
-
-fn run_tray_app(config: ClientConfig) -> Result<()> {
-    let state = GuiState::handle();
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let thread_state = Arc::clone(&state);
-
-    let client_thread = std::thread::Builder::new()
-        .name("rvpn-client".into())
-        .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    tracing::error!(%error, "failed to create RVPN client runtime");
-                    return;
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("creating Tokio runtime")?
+        .block_on(async move {
+            match arg {
+                Some(path) if path != "--daemon" => {
+                    let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
+                    run_client(config, None, None).await
                 }
-            };
-
-            let os_shutdown = Box::pin(shutdown_signal());
-            let tray_shutdown = Box::pin(combined_shutdown(os_shutdown, shutdown_rx));
-            if let Err(error) =
-                runtime.block_on(run_client(config, Some(thread_state), Some(tray_shutdown)))
-            {
-                tracing::error!(%error, "RVPN client stopped with an error");
+                _ => {
+                    let daemon = Daemon::new();
+                    tokio::select! {
+                        result = run_ipc_server(Arc::clone(&daemon)) => result,
+                        result = shutdown_signal() => {
+                            let _ = daemon_disconnect_on_exit(&daemon).await;
+                            result
+                        }
+                    }
+                }
             }
         })
-        .context("spawning RVPN client thread")?;
-
-    run_tray(state, shutdown_tx, client_thread)
 }
 
-async fn run_client(
+async fn daemon_disconnect_on_exit(_daemon: &Arc<Daemon>) -> Result<()> {
+    Ok(())
+}
+
+pub(crate) async fn run_client(
     config: ClientConfig,
-    gui_state: Option<gui::GuiStateHandle>,
+    gui_state: Option<GuiStateHandle>,
     shutdown: Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>>,
 ) -> Result<()> {
     tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
@@ -227,22 +206,6 @@ async fn run_client(
 fn effective_tunnel_mtu(requested: u16, wire_overhead: usize, outer_is_ipv6: bool) -> u16 {
     let safe_inner = default_udp_payload_mtu(outer_is_ipv6).saturating_sub(wire_overhead);
     requested.min(safe_inner.try_into().unwrap_or(u16::MAX))
-}
-
-async fn combined_shutdown(
-    mut os_shutdown: std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>,
-    mut tray_shutdown: watch::Receiver<bool>,
-) -> Result<()> {
-    tokio::select! {
-        result = &mut os_shutdown => result,
-        changed = tray_shutdown.changed() => {
-            if changed.is_ok() && *tray_shutdown.borrow() {
-                Ok(())
-            } else {
-                changed.map_err(|error| anyhow::anyhow!(error.to_string()))
-            }
-        }
-    }
 }
 
 async fn shutdown_signal() -> Result<()> {

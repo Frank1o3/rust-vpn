@@ -1,0 +1,16 @@
+[Unit]
+Description=RVPN client daemon (control socket for rvpn-tray)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User-unit ambient capabilities are unreliable across systemd/kernel
+# versions, so grant them to the binary at install time instead:
+#   sudo setcap cap_net_admin,cap_net_raw+eip /usr/local/bin/rvpn-client
+ExecStart=/usr/local/bin/rvpn-client --daemon
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
