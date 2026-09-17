@@ -8,6 +8,7 @@
 [dependencies]
     anyhow.workspace=true
     bytes.workspace=true
+    libc.workspace=true
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}
@@ -18,6 +19,4 @@
     tokio.workspace=true
     tracing.workspace=true
     tracing-subscriber.workspace=true
-    # StatusNotifierItem is D-Bus based and works with modern Linux panels without
-    # depending on GTK/AppIndicator.
     tray-icon={version="0.25.0", default-features=false, features=["ksni"]}
