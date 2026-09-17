@@ -1,27 +1,27 @@
 # RVPN Client configuration for 'ShowNex' (generated)
 
-obfuscation_key="d232560a8d5a6db44cb445b182b83fcfc0aaaf58da14e9e854654182469c5074"
-server="192.168.88.253:9000"
+server="192.168.88.254:9000"
+obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae914"
 
 [interface]
     address="10.42.0.4/24"
     addresses=["fd42::4/64"]
-    dns_servers="192.168.88.1"
     mode="tun"
     mtu=1400
     name="rvpn-android-shownex"
+    dns_servers="192.168.88.1"
 
 [routing]
     default_route=true
     default_route_v6=true
-    endpoint_gateway="192.168.88.253:9000"
+    endpoint_gateway="192.168.88.254:9000"
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
 
 [auth]
-    local_identity_seed="90f2b13d36adb7db245e6ae1a24eaae0325c23910db6b16bbc41d1167cf89f20"
     mode="pinned-key"
-    peer_public_key="70c52fc6a389e3123a2aec5f106f7fc29669185ca22da46b7ba90f969250e9fa"
+    local_identity_seed="3775368fcd6141ad0dddd085a5d30910fe45f0cfb989aecca04e88016c3a039d"
+    peer_public_key="070bec56ad3302f92b9f52b9ca36e186c525a12a244ecb20b67a85cd3f64066c"
 
 [handshake]
     retry_interval_ms=150

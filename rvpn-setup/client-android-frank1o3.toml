@@ -1,27 +1,27 @@
 # RVPN Client configuration for 'Frank1o3' (generated)
 
-obfuscation_key="d232560a8d5a6db44cb445b182b83fcfc0aaaf58da14e9e854654182469c5074"
-server="192.168.88.253:9000"
+server="192.168.88.254:9000"
+obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae914"
 
 [interface]
     address="10.42.0.5/24"
     addresses=["fd42::5/64"]
-    dns_servers="192.168.88.1"
     mode="tun"
     mtu=1400
     name="rvpn-android-frank1o3"
+    dns_servers="192.168.88.1"
 
 [routing]
     default_route=true
     default_route_v6=true
-    endpoint_gateway="192.168.88.253:9000"
+    endpoint_gateway="192.168.88.254:9000"
     gateway="10.42.0.1"
     gateway_v6="fd42::1"
 
 [auth]
-    local_identity_seed="7204e698907d5848720818e7d0850317dcb81cce8b33d08095b3e24edbfb7449"
     mode="pinned-key"
-    peer_public_key="967b5d2c82453a8fec712efbc7254cf3dd41f955b9992d26c6a1113fb5e213a0"
+    local_identity_seed="461e28f6b91f6235f8f4b58373d00b629e59e4efaedc608d58713184b3f06df8"
+    peer_public_key="2bc36439562d68f2101ca94dd91ca2338940e5215a74d6f4f27efb3f05e3011d"
 
 [handshake]
     retry_interval_ms=150
