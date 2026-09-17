@@ -280,11 +280,11 @@ fn raise_ambient_capabilities() {
         };
         if result != 0 {
             let error = std::io::Error::last_os_error();
-            tracing::debug!(
+            tracing::warn!(
                 %error,
                 capability,
                 "failed to raise ambient capability; `ip` commands spawned as child \
-                 processes may fail with 'Operation not permitted' unless run as root"
+                 processes will fail with 'Operation not permitted'"
             );
         }
     }
