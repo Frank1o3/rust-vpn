@@ -8,6 +8,7 @@
 [dependencies]
     anyhow.workspace=true
     bytes.workspace=true
+    caps="0.5.6"
     libc.workspace=true
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}

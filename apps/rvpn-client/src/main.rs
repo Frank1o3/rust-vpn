@@ -267,24 +267,19 @@ async fn shutdown_signal() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 fn raise_ambient_capabilities() {
-    use libc::c_ulong;
+    use caps::{CapSet, Capability};
 
-    const PR_CAP_AMBIENT: libc::c_int = 47;
-    const PR_CAP_AMBIENT_RAISE: c_ulong = 2;
-    const CAP_NET_ADMIN: c_ulong = 12;
-    const CAP_NET_RAW: c_ulong = 13;
-
-    for capability in [CAP_NET_ADMIN, CAP_NET_RAW] {
-        let result = unsafe {
-            libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, capability, 0 as c_ulong, 0 as c_ulong)
-        };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
+    for capability in [Capability::CAP_NET_ADMIN, Capability::CAP_NET_RAW] {
+        if let Err(error) = caps::raise(None, CapSet::Inheritable, capability) {
+            tracing::warn!(%error, ?capability, "failed to add capability to inheritable set");
+            continue;
+        }
+        if let Err(error) = caps::raise(None, CapSet::Ambient, capability) {
             tracing::warn!(
                 %error,
-                capability,
-                "failed to raise ambient capability; `ip` commands spawned as child \
-                 processes will fail with 'Operation not permitted'"
+                ?capability,
+                "failed to raise capability into ambient set; `ip` commands spawned as \
+                 child processes will fail with 'Operation not permitted'"
             );
         }
     }
