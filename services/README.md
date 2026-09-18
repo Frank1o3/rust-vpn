@@ -1,38 +1,71 @@
 # RVPN systemd services
 
-- `rvpn-server.service` — system unit, runs under a dedicated `rvpn` system
-  user with `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW` (needed for TUN
-  creation and the `ip`/`nft`/`iptables` commands it shells out to). Reads
-  `~/.config/rvpn/server.toml` for that user unless a path is given on the
-  `ExecStart` line.
-- `rvpn-client.service` — **user** unit. Runs `rvpn-client --daemon`, which
-  idles until it gets a `Connect` command over `$XDG_RUNTIME_DIR/rvpn/control.sock`.
-  Grant it networking capabilities at install time instead of relying on
-  ambient caps on a user unit:
+- `rvpn-server.service` — system unit running under the dedicated `rvpn`
+  system user. It receives `CAP_NET_ADMIN` and `CAP_NET_RAW` through
+  systemd ambient capabilities so it can create the VPN interface and manage
+  the host network.
+- `rvpn-client@.service` — system unit template. The instance name is the
+  Linux username, for example `rvpn-client@alice.service`. The service runs
+  `rvpn-client --daemon` as that user, so its control socket lives in that
+  user's `$XDG_RUNTIME_DIR` and can be accessed by the matching tray process.
+  The installer also grants the client binary
+  `CAP_NET_ADMIN` and `CAP_NET_RAW` with file capabilities.
+- `rvpn-tray.service` — user systemd service installed under
+  `~/.config/systemd/user/`. It runs as the logged-in user and talks to the
+  client daemon over the same per-user control socket. It does not need
+  networking capabilities or root privileges.
+
+## Installation
+
+Use the repository's `build.sh` instead of editing the service files for a
+particular username.
+
+For the client, the installer determines the current user automatically and
+enables an instance such as:
 
 ```sh
-  sudo setcap cap_net_admin,cap_net_raw+eip /usr/local/bin/rvpn-client
+sudo systemctl enable --now rvpn-client@alice.service
 ```
 
-- `rvpn-tray` has no service file — it's a normal desktop app you run
-  yourself (add it to your session autostart if you want it running on
-  login). It talks to `rvpn-client.service` over the same control socket
-  and has no networking code of its own.
+For the tray, the installer uses the current user's systemd manager:
+
+```sh
+systemctl --user enable --now rvpn-tray.service
+```
 
 ## Config locations
 
-Both `rvpn-server` and `rvpn-client` default to
-`$XDG_CONFIG_HOME/rvpn/{server,client}.toml` (normally `~/.config/rvpn/...`),
-so you can edit them without root. Pass a path as the first CLI argument to
-override this for the server, or as part of the `Connect` command for the
-client daemon (which `rvpn-tray` does automatically).
+`rvpn-server` defaults to
+`$XDG_CONFIG_HOME/rvpn/server.toml) (normally
+`~/.config/rvpn/server.toml` for the `rvpn` service user).
 
-## Packaging (Rivet)
+The client daemon starts without a config file and waits for IPC requests.
+The tray sends a config path with its `Connect` request, so the client reads
+the selected user's configuration without requiring root-owned config files.
+
+## Uninstallation
+
+Use:
+
+```sh
+./uninstall.sh server
+./uninstall.sh client
+./uninstall.sh tray
+./uninstall.sh all
+```
+
+Client removal stops and disables all `rvpn-client@<user>.service` instances
+before removing the template and binary.
+
+## Packaging
 
 A package should install:
-- the `rvpn-server`, `rvpn-client`, `rvpn-tray` binaries onto `PATH`
-- these `.service` files under the distro's systemd unit search path
-  (system units for `rvpn-server.service`, user units for
-  `rvpn-client.service`)
-- nothing under `~/.config/rvpn/` — leave that for the user, or a first-run
-  step driven by `scripts/generate_rvpn_setup.py`
+
+- `rvpn-server` and `rvpn-client` into a system-wide binary directory.
+- `rvpn-tray` into the user's `~/.local/bin` when installed for a user.
+- `rvpn-server.service` and `rvpn-client@.service` into the systemd system
+  unit directory.
+- `rvpn-tray.service` into the user's systemd unit directory.
+
+Do not modify the service files to insert a hard-coded username. The client
+template is instantiated with the target user's account name.
