@@ -8,9 +8,6 @@ Type=simple
 User=rvpn
 Group=rvpn
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-# Reads %h/.config/rvpn/server.toml (the `rvpn` user's home) by default;
-# pass a path here to override, e.g.:
-#   ExecStart=/usr/local/bin/rvpn-server /etc/rvpn/server.toml
 ExecStart=/usr/local/bin/rvpn-server
 Restart=on-failure
 RestartSec=2

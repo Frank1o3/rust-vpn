@@ -5,9 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# User-unit ambient capabilities are unreliable across systemd/kernel
-# versions, so grant them to the binary at install time instead:
-#   sudo setcap cap_net_admin,cap_net_raw+eip /usr/local/bin/rvpn-client
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 ExecStart=/usr/local/bin/rvpn-client --daemon
 Restart=on-failure
 RestartSec=2
