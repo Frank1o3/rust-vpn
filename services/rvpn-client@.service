@@ -5,11 +5,6 @@ Documentation=https://github.com/Frank1o3/rust-vpn
 Wants=network-online.target
 After=network-online.target
 
-# The client uses the per-user XDG runtime directory for its
-# control socket. Ensure that runtime directory exists first.
-Requires=user-runtime-dir@%U.service
-After=user-runtime-dir@%U.service
-
 [Service]
 Type=simple
 
@@ -17,13 +12,10 @@ Type=simple
 # The instance name is the Linux username.
 User=%i
 
-# Match the runtime environment used by the user's tray service.
-# %U is the numeric UID of User=%i.
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-
-# The daemon owns the per-user IPC socket. The tray runs in the
-# same user context and can therefore connect to it.
-ExecStart=/usr/local/bin/rvpn-client --daemon
+# A system service does not inherit the logged-in user's
+# XDG_RUNTIME_DIR. Resolve the UID after User= has been applied,
+# then point the client at that user's runtime directory.
+ExecStart=/bin/sh -c 'export XDG_RUNTIME_DIR=/run/user/$$(id -u); exec /usr/local/bin/rvpn-client --daemon'
 
 Restart=on-failure
 RestartSec=3s
