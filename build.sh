@@ -38,7 +38,7 @@ CLIENT_BIN="rvpn-client"
 TRAY_BIN="rvpn-tray"
 
 SERVER_SERVICE="rvpn-server.service"
-CLIENT_SERVICE="rvpn-client.service"
+CLIENT_SERVICE="rvpn-client@.service"
 
 # Common places where a repository might keep service files.
 SERVICE_DIRS=(

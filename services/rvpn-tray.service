@@ -1,0 +1,13 @@
+[Unit]
+Description=RVPN Tray
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/rvpn-tray
+
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target

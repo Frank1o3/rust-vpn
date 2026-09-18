@@ -1,0 +1,27 @@
+[Unit]
+Description=RVPN Client (%i)
+Documentation=https://github.com/Frank1o3/rust-vpn
+
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+
+# The instance name is the Linux username.
+User=%i
+
+ExecStart=/usr/local/bin/rvpn-client /etc/rvpn/client.toml
+
+Restart=on-failure
+RestartSec=3s
+
+# Give the non-root process only the networking capabilities RVPN needs.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Prevent the process from gaining additional privileges.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
