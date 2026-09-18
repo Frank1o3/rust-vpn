@@ -6,10 +6,9 @@
   the host network.
 - `rvpn-client@.service` — system unit template. The instance name is the
   Linux username, for example `rvpn-client@alice.service`. The service runs
-  `rvpn-client --daemon` as that user, so its control socket lives in that
-  user's `$XDG_RUNTIME_DIR` and can be accessed by the matching tray process.
-  The installer also grants the client binary
-  `CAP_NET_ADMIN` and `CAP_NET_RAW` with file capabilities.
+  `rvpn-client --daemon` as that user and receives
+  `CAP_NET_ADMIN`/\`CAP_NET_RAW` only from systemd. The client executable
+  itself is not installed with file capabilities.
 - `rvpn-tray.service` — user systemd service installed under
   `~/.config/systemd/user/`. It runs as the logged-in user and talks to the
   client daemon over the same per-user control socket. It does not need
@@ -33,10 +32,28 @@ For the tray, the installer uses the current user's systemd manager:
 systemctl --user enable --now rvpn-tray.service
 ```
 
+## Privileges
+
+The client needs `CAP_NET_ADMIN` and `CAP_NET_RAW` to create/configure the
+VPN interface and perform raw network operations.
+
+Those capabilities are granted only by `rvpn-client@.service` through:
+
+```ini
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+```
+
+The client binary is deliberately not given `setcap` file capabilities,
+and the client no longer raises capabilities itself. This keeps a manually
+executed `rvpn-client` unprivileged; the required capabilities exist only
+when the binary is started by its systemd service.
+
 ## Config locations
 
 `rvpn-server` defaults to
-`$XDG_CONFIG_HOME/rvpn/server.toml) (normally
+`$XDG_CONFIG_HOME/rvpn/server.toml` (normally
 `~/.config/rvpn/server.toml` for the `rvpn` service user).
 
 The client daemon starts without a config file and waits for IPC requests.
