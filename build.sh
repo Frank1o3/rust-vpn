@@ -253,11 +253,15 @@ ensure_server_user() {
 
     info "Creating dedicated rvpn system user..."
 
+    local nologin_shell
+    nologin_shell="$(command -v nologin || true)"
+    [[ -n "$nologin_shell" ]] || die "Could not find the nologin shell executable."
+
     sudo useradd \
         --system \
         --create-home \
         --home-dir /var/lib/rvpn \
-        --shell /usr/sbin/nologin \
+        --shell "$nologin_shell" \
         rvpn
 
     success "Created rvpn system user"
