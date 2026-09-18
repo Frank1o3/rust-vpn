@@ -8,19 +8,24 @@ After=network-online.target
 [Service]
 Type=simple
 
+# Run the daemon as the target user's normal account.
 # The instance name is the Linux username.
 User=%i
 
-ExecStart=/usr/local/bin/rvpn-client /etc/rvpn/client.toml
+# The daemon owns the per-user IPC socket. The tray runs in the
+# same user context and can therefore connect to it.
+ExecStart=/usr/local/bin/rvpn-client --daemon
 
 Restart=on-failure
 RestartSec=3s
 
-# Give the non-root process only the networking capabilities RVPN needs.
+# Allow the non-root daemon to create/configure the VPN interface
+# and perform raw network operations.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
-# Prevent the process from gaining additional privileges.
+# Do not allow privilege escalation beyond the capabilities
+# explicitly granted above.
 NoNewPrivileges=true
 
 [Install]
