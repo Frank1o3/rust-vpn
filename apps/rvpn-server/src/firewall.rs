@@ -1,51 +1,54 @@
 use anyhow::{Context, Result};
 use rvpn_config::{FirewallBackend, ForwardingConfig};
-use std::fs;
+use std::{fs, process::Command as StdCommand};
 use tokio::process::Command;
 
 use crate::network::run;
 
-pub enum FirewallMethod {
-    Nftables,
-    Iptables {
-        rules: Vec<(&'static str, Vec<String>)>,
-    },
+const IPV4_FORWARD: &str = "/proc/sys/net/ipv4/ip_forward";
+const IPV6_FORWARD: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
+
+struct CleanupCommand {
+    program: &'static str,
+    args: Vec<String>,
+}
+
+impl CleanupCommand {
+    fn new(program: &'static str, args: &[&str]) -> Self {
+        Self {
+            program,
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+        }
+    }
 }
 
 pub struct ForwardingGuard {
-    previous_ipv4_forward: Option<String>,
-    previous_ipv6_forward: Option<String>,
-    method: Option<FirewallMethod>,
+    sysctls: Vec<(&'static str, String)>,
+    cleanup: Vec<CleanupCommand>,
 }
 
 impl ForwardingGuard {
     pub async fn install(config: &ForwardingConfig, tunnel: &str) -> Result<Self> {
+        let mut guard = Self {
+            sysctls: Vec::new(),
+            cleanup: Vec::new(),
+        };
         if !config.enabled {
-            return Ok(Self {
-                previous_ipv4_forward: None,
-                previous_ipv6_forward: None,
-                method: None,
-            });
+            return Ok(guard);
         }
-        let previous_ipv4_forward = if config.tunnel_cidr.is_some() {
-            let previous = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
-                .context("reading IPv4 forwarding state")?;
-            fs::write("/proc/sys/net/ipv4/ip_forward", "1\n")
-                .context("enabling IPv4 forwarding")?;
-            Some(previous)
-        } else {
-            None
-        };
-        let previous_ipv6_forward = if config.tunnel_cidr_v6.is_some() {
-            let previous = fs::read_to_string("/proc/sys/net/ipv6/conf/all/forwarding")
-                .context("reading IPv6 forwarding state")?;
-            fs::write("/proc/sys/net/ipv6/conf/all/forwarding", "1\n")
-                .context("enabling IPv6 forwarding")?;
-            Some(previous)
-        } else {
-            None
-        };
-        let external = config.external_interface.as_deref().expect("validated");
+
+        if config.tunnel_cidr.is_some() {
+            guard.enable_sysctl(IPV4_FORWARD, "IPv4 forwarding")?;
+        }
+        if config.tunnel_cidr_v6.is_some() {
+            guard.enable_sysctl(IPV6_FORWARD, "IPv6 forwarding")?;
+        }
+
+        let external = config
+            .external_interface
+            .as_deref()
+            .context("forwarding.external_interface is required when forwarding is enabled")?;
+
         let use_nft = match config.backend {
             FirewallBackend::Nftables => true,
             FirewallBackend::Iptables => false,
@@ -53,328 +56,222 @@ impl ForwardingGuard {
                 .arg("--version")
                 .output()
                 .await
-                .map(|o| o.status.success())
+                .map(|output| output.status.success())
                 .unwrap_or(false),
         };
 
         if use_nft {
-            run("nft", ["add", "table", "inet", "rvpn"]).await?;
-            run(
-                "nft",
-                [
-                    "add", "chain", "inet", "rvpn", "forward", "{", "type", "filter", "hook",
-                    "forward", "priority", "filter;", "policy", "drop;", "}",
-                ],
-            )
-            .await?;
-            run(
-                "nft",
-                [
-                    "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "oifname",
-                    external, "accept",
-                ],
-            )
-            .await?;
-            run(
-                "nft",
-                [
-                    "add",
-                    "rule",
-                    "inet",
-                    "rvpn",
-                    "forward",
-                    "iifname",
-                    external,
-                    "oifname",
-                    tunnel,
-                    "ct",
-                    "state",
-                    "established,related",
-                    "accept",
-                ],
-            )
-            .await?;
-            run(
-                "nft",
-                [
-                    "add",
-                    "chain",
-                    "inet",
-                    "rvpn",
-                    "postrouting",
-                    "{",
-                    "type",
-                    "nat",
-                    "hook",
-                    "postrouting",
-                    "priority",
-                    "srcnat;",
-                    "}",
-                ],
-            )
-            .await?;
-            if let Some(cidr) = &config.tunnel_cidr {
-                run(
-                    "nft",
-                    [
-                        "add",
-                        "rule",
-                        "inet",
-                        "rvpn",
-                        "postrouting",
-                        "ip",
-                        "saddr",
-                        cidr,
-                        "oifname",
-                        external,
-                        "masquerade",
-                    ],
-                )
-                .await?;
-            }
-            if let Some(cidr) = &config.tunnel_cidr_v6 {
-                run(
-                    "nft",
-                    [
-                        "add",
-                        "rule",
-                        "inet",
-                        "rvpn",
-                        "postrouting",
-                        "ip6",
-                        "saddr",
-                        cidr,
-                        "oifname",
-                        external,
-                        "masquerade",
-                    ],
-                )
-                .await?;
-            }
+            guard.install_nftables(config, tunnel, external).await?;
             tracing::info!(backend = "nftables", "installed RVPN firewall rules");
-            Ok(Self {
-                previous_ipv4_forward,
-                previous_ipv6_forward,
-                method: Some(FirewallMethod::Nftables),
-            })
         } else {
-            let mut cleanup_rules = Vec::new();
-            if config.tunnel_cidr.is_some() {
-                run(
-                    "iptables",
-                    [
-                        "-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT",
-                    ],
-                )
-                .await?;
-                cleanup_rules.push((
-                    "iptables",
-                    vec![
-                        "-D".into(),
-                        "FORWARD".into(),
-                        "-i".into(),
-                        tunnel.into(),
-                        "-o".into(),
-                        external.into(),
-                        "-j".into(),
-                        "ACCEPT".into(),
-                    ],
-                ));
-
-                run(
-                    "iptables",
-                    [
-                        "-I",
-                        "FORWARD",
-                        "1",
-                        "-i",
-                        external,
-                        "-o",
-                        tunnel,
-                        "-m",
-                        "conntrack",
-                        "--ctstate",
-                        "ESTABLISHED,RELATED",
-                        "-j",
-                        "ACCEPT",
-                    ],
-                )
-                .await?;
-                cleanup_rules.push((
-                    "iptables",
-                    vec![
-                        "-D".into(),
-                        "FORWARD".into(),
-                        "-i".into(),
-                        external.into(),
-                        "-o".into(),
-                        tunnel.into(),
-                        "-m".into(),
-                        "conntrack".into(),
-                        "--ctstate".into(),
-                        "ESTABLISHED,RELATED".into(),
-                        "-j".into(),
-                        "ACCEPT".into(),
-                    ],
-                ));
-
-                if let Some(cidr) = &config.tunnel_cidr {
-                    run(
-                        "iptables",
-                        [
-                            "-t",
-                            "nat",
-                            "-I",
-                            "POSTROUTING",
-                            "1",
-                            "-s",
-                            cidr,
-                            "-o",
-                            external,
-                            "-j",
-                            "MASQUERADE",
-                        ],
-                    )
-                    .await?;
-                    cleanup_rules.push((
-                        "iptables",
-                        vec![
-                            "-t".into(),
-                            "nat".into(),
-                            "-D".into(),
-                            "POSTROUTING".into(),
-                            "-s".into(),
-                            cidr.clone(),
-                            "-o".into(),
-                            external.into(),
-                            "-j".into(),
-                            "MASQUERADE".into(),
-                        ],
-                    ));
-                }
-            }
-            if config.tunnel_cidr_v6.is_some() {
-                run(
-                    "ip6tables",
-                    [
-                        "-I", "FORWARD", "1", "-i", tunnel, "-o", external, "-j", "ACCEPT",
-                    ],
-                )
-                .await?;
-                cleanup_rules.push((
-                    "ip6tables",
-                    vec![
-                        "-D".into(),
-                        "FORWARD".into(),
-                        "-i".into(),
-                        tunnel.into(),
-                        "-o".into(),
-                        external.into(),
-                        "-j".into(),
-                        "ACCEPT".into(),
-                    ],
-                ));
-
-                run(
-                    "ip6tables",
-                    [
-                        "-I",
-                        "FORWARD",
-                        "1",
-                        "-i",
-                        external,
-                        "-o",
-                        tunnel,
-                        "-m",
-                        "conntrack",
-                        "--ctstate",
-                        "ESTABLISHED,RELATED",
-                        "-j",
-                        "ACCEPT",
-                    ],
-                )
-                .await?;
-                cleanup_rules.push((
-                    "ip6tables",
-                    vec![
-                        "-D".into(),
-                        "FORWARD".into(),
-                        "-i".into(),
-                        external.into(),
-                        "-o".into(),
-                        tunnel.into(),
-                        "-m".into(),
-                        "conntrack".into(),
-                        "--ctstate".into(),
-                        "ESTABLISHED,RELATED".into(),
-                        "-j".into(),
-                        "ACCEPT".into(),
-                    ],
-                ));
-
-                if let Some(cidr) = &config.tunnel_cidr_v6 {
-                    run(
-                        "ip6tables",
-                        [
-                            "-t",
-                            "nat",
-                            "-I",
-                            "POSTROUTING",
-                            "1",
-                            "-s",
-                            cidr,
-                            "-o",
-                            external,
-                            "-j",
-                            "MASQUERADE",
-                        ],
-                    )
-                    .await?;
-                    cleanup_rules.push((
-                        "ip6tables",
-                        vec![
-                            "-t".into(),
-                            "nat".into(),
-                            "-D".into(),
-                            "POSTROUTING".into(),
-                            "-s".into(),
-                            cidr.clone(),
-                            "-o".into(),
-                            external.into(),
-                            "-j".into(),
-                            "MASQUERADE".into(),
-                        ],
-                    ));
-                }
-            }
+            guard.install_iptables(config, tunnel, external).await?;
             tracing::info!(backend = "iptables", "installed RVPN firewall rules");
-            Ok(Self {
-                previous_ipv4_forward,
-                previous_ipv6_forward,
-                method: Some(FirewallMethod::Iptables {
-                    rules: cleanup_rules,
-                }),
-            })
         }
+        Ok(guard)
     }
 
-    pub async fn cleanup(&self) {
-        match &self.method {
-            Some(FirewallMethod::Nftables) => {
-                let _ = run("nft", ["delete", "table", "inet", "rvpn"]).await;
+    fn enable_sysctl(&mut self, path: &'static str, label: &str) -> Result<()> {
+        let previous =
+            fs::read_to_string(path).with_context(|| format!("reading {label} state"))?;
+        if previous.trim() == "1" {
+            return Ok(());
+        }
+        fs::write(path, "1\n").with_context(|| {
+            format!(
+                "enabling {label} failed; when RVPN runs as an unprivileged user, enable it \
+                 persistently in /etc/sysctl.d instead"
+            )
+        })?;
+        self.sysctls.push((path, previous));
+        Ok(())
+    }
+
+    async fn install_nftables(
+        &mut self,
+        config: &ForwardingConfig,
+        tunnel: &str,
+        external: &str,
+    ) -> Result<()> {
+        let _ = run("nft", ["delete", "table", "inet", "rvpn"]).await;
+        run("nft", ["add", "table", "inet", "rvpn"]).await?;
+        self.cleanup.push(CleanupCommand::new(
+            "nft",
+            &["delete", "table", "inet", "rvpn"],
+        ));
+
+        let mut rules: Vec<Vec<&str>> = vec![
+            vec![
+                "add", "chain", "inet", "rvpn", "forward", "{", "type", "filter", "hook",
+                "forward", "priority", "filter;", "policy", "accept;", "}",
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "oifname", external,
+                "accept",
+            ],
+            vec![
+                "add",
+                "rule",
+                "inet",
+                "rvpn",
+                "forward",
+                "iifname",
+                external,
+                "oifname",
+                tunnel,
+                "ct",
+                "state",
+                "established,related",
+                "accept",
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "drop",
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward", "oifname", tunnel, "drop",
+            ],
+            vec![
+                "add",
+                "chain",
+                "inet",
+                "rvpn",
+                "postrouting",
+                "{",
+                "type",
+                "nat",
+                "hook",
+                "postrouting",
+                "priority",
+                "srcnat;",
+                "}",
+            ],
+        ];
+        if let Some(cidr) = &config.tunnel_cidr {
+            rules.push(vec![
+                "add",
+                "rule",
+                "inet",
+                "rvpn",
+                "postrouting",
+                "ip",
+                "saddr",
+                cidr.as_str(),
+                "oifname",
+                external,
+                "masquerade",
+            ]);
+        }
+        if let Some(cidr) = &config.tunnel_cidr_v6 {
+            rules.push(vec![
+                "add",
+                "rule",
+                "inet",
+                "rvpn",
+                "postrouting",
+                "ip6",
+                "saddr",
+                cidr.as_str(),
+                "oifname",
+                external,
+                "masquerade",
+            ]);
+        }
+        for rule in rules {
+            run("nft", rule).await?;
+        }
+        Ok(())
+    }
+
+    async fn install_iptables(
+        &mut self,
+        config: &ForwardingConfig,
+        tunnel: &str,
+        external: &str,
+    ) -> Result<()> {
+        if let Some(cidr) = &config.tunnel_cidr {
+            self.install_iptables_family("iptables", tunnel, external, cidr)
+                .await?;
+        }
+        if let Some(cidr) = &config.tunnel_cidr_v6 {
+            self.install_iptables_family("ip6tables", tunnel, external, cidr)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn install_iptables_family(
+        &mut self,
+        binary: &'static str,
+        tunnel: &str,
+        external: &str,
+        cidr: &str,
+    ) -> Result<()> {
+        let rules: [(Option<&str>, &str, Vec<&str>); 3] = [
+            (
+                None,
+                "FORWARD",
+                vec!["-i", tunnel, "-o", external, "-j", "ACCEPT"],
+            ),
+            (
+                None,
+                "FORWARD",
+                vec![
+                    "-i",
+                    external,
+                    "-o",
+                    tunnel,
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "ESTABLISHED,RELATED",
+                    "-j",
+                    "ACCEPT",
+                ],
+            ),
+            (
+                Some("nat"),
+                "POSTROUTING",
+                vec!["-s", cidr, "-o", external, "-j", "MASQUERADE"],
+            ),
+        ];
+
+        for (table, chain, spec) in rules {
+            let table_args: Vec<&str> = match table {
+                Some(table) => vec!["-t", table],
+                None => Vec::new(),
+            };
+
+            let mut check = table_args.clone();
+            check.extend(["-C", chain]);
+            check.extend(spec.iter().copied());
+            if run(binary, check).await.is_err() {
+                let mut insert = table_args.clone();
+                insert.extend(["-I", chain, "1"]);
+                insert.extend(spec.iter().copied());
+                run(binary, insert).await?;
             }
-            Some(FirewallMethod::Iptables { rules }) => {
-                for (cmd, args) in rules {
-                    let _ = run(cmd, args.iter().map(String::as_str)).await;
-                }
-            }
-            None => {}
+
+            let mut delete = table_args;
+            delete.extend(["-D", chain]);
+            delete.extend(spec.iter().copied());
+            self.cleanup.push(CleanupCommand::new(binary, &delete));
         }
-        if let Some(previous) = &self.previous_ipv4_forward {
-            let _ = fs::write("/proc/sys/net/ipv4/ip_forward", previous);
+        Ok(())
+    }
+
+    pub fn cleanup(&mut self) {
+        for command in self.cleanup.drain(..).rev() {
+            let _ = StdCommand::new(command.program)
+                .args(&command.args)
+                .output();
         }
-        if let Some(previous) = &self.previous_ipv6_forward {
-            let _ = fs::write("/proc/sys/net/ipv6/conf/all/forwarding", previous);
+        for (path, previous) in self.sysctls.drain(..) {
+            let _ = fs::write(path, previous);
         }
+    }
+}
+
+impl Drop for ForwardingGuard {
+    fn drop(&mut self) {
+        self.cleanup();
     }
 }

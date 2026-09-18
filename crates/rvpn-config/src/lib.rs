@@ -1,7 +1,12 @@
 use ipnet::IpNet;
 pub use rvpn_interface::DeviceMode;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    time::Duration,
+};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -81,6 +86,8 @@ pub struct ClientConfig {
     pub rekey: RekeyConfig,
     #[serde(default)]
     pub routing: ClientRoutingConfig,
+    #[serde(default)]
+    pub liveness: LivenessConfig,
     pub obfuscation_key: Option<String>,
 }
 
@@ -98,27 +105,15 @@ impl ClientConfig {
             .validate()
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
-            .and_then(|_| self.routing.validate())?;
+            .and_then(|_| self.routing.validate())
+            .and_then(|_| self.liveness.validate())?;
         Ok(())
     }
 
-    pub fn validate_resolved(&self, resolved: SocketAddr) -> Result<(), ConfigError> {
-        if self.routing.default_route
-            && resolved.is_ipv4()
-            && self.routing.endpoint_gateway.is_none()
-        {
-            return Err(ConfigError::Invalid(
-                "routing.endpoint_gateway is required for default_route when the resolved server endpoint is IPv4",
-            ));
-        }
-        if self.routing.default_route_v6
-            && resolved.is_ipv6()
-            && self.routing.endpoint_gateway_v6.is_none()
-        {
-            return Err(ConfigError::Invalid(
-                "routing.endpoint_gateway_v6 is required for default_route_v6 when the resolved server endpoint is IPv6",
-            ));
-        }
+    /// Kept for API compatibility. The server's physical route is discovered
+    /// from the OS routing table at connect time, so `routing.endpoint_gateway`
+    /// is no longer required (it is still accepted and ignored).
+    pub fn validate_resolved(&self, _resolved: SocketAddr) -> Result<(), ConfigError> {
         Ok(())
     }
 
@@ -180,6 +175,8 @@ pub struct ServerConfig {
     pub rekey: RekeyConfig,
     #[serde(default)]
     pub forwarding: ForwardingConfig,
+    #[serde(default)]
+    pub liveness: LivenessConfig,
     pub obfuscation_key: Option<String>,
 }
 
@@ -210,6 +207,7 @@ impl ServerConfig {
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
             .and_then(|_| self.forwarding.validate())
+            .and_then(|_| self.liveness.validate())
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
@@ -377,6 +375,9 @@ pub struct InterfaceConfig {
     pub address: Option<String>,
     #[serde(default)]
     pub addresses: Vec<String>,
+    /// Client-side DNS servers: one IP address or a comma/space separated
+    /// list, e.g. `"1.1.1.1, 2606:4700:4700::1111"`.
+    pub dns_servers: Option<String>,
 }
 
 impl Default for InterfaceConfig {
@@ -388,6 +389,7 @@ impl Default for InterfaceConfig {
             mode: None,
             address: None,
             addresses: Vec::new(),
+            dns_servers: None,
         }
     }
 }
@@ -395,6 +397,23 @@ impl Default for InterfaceConfig {
 impl InterfaceConfig {
     pub fn mode(&self) -> DeviceMode {
         self.mode.unwrap_or_default()
+    }
+
+    /// Parsed `dns_servers`, empty when unset.
+    pub fn dns_server_list(&self) -> Result<Vec<IpAddr>, ConfigError> {
+        let Some(raw) = self.dns_servers.as_deref() else {
+            return Ok(Vec::new());
+        };
+        raw.split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                part.parse::<IpAddr>().map_err(|_| {
+                    ConfigError::Invalid(
+                        "interface.dns_servers must be a comma-separated list of IP addresses",
+                    )
+                })
+            })
+            .collect()
     }
 }
 
@@ -479,15 +498,55 @@ impl RekeyConfig {
     }
 }
 
+/// Dead-peer detection. Keepalives are sent roughly every 25 seconds, so the
+/// timeout must leave room for several missed ones.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct LivenessConfig {
+    /// Seconds without any authenticated packet before the peer is considered
+    /// gone: the server drops the session, the client reconnects. `0` disables.
+    #[serde(default = "default_liveness_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+const fn default_liveness_timeout_secs() -> u64 {
+    90
+}
+
+impl Default for LivenessConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: default_liveness_timeout_secs(),
+        }
+    }
+}
+
+impl LivenessConfig {
+    pub fn timeout(&self) -> Option<Duration> {
+        (self.timeout_secs != 0).then(|| Duration::from_secs(self.timeout_secs))
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.timeout_secs != 0 && self.timeout_secs < 60 {
+            return Err(ConfigError::Invalid(
+                "liveness.timeout_secs must be 0 (disabled) or at least 60",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ClientRoutingConfig {
     #[serde(default)]
     pub default_route: bool,
     pub gateway: Option<String>,
+    /// Accepted for backward compatibility and ignored: the route to the
+    /// server is taken from the OS routing table when connecting.
     pub endpoint_gateway: Option<String>,
     #[serde(default)]
     pub default_route_v6: bool,
     pub gateway_v6: Option<String>,
+    /// Accepted for backward compatibility and ignored.
     pub endpoint_gateway_v6: Option<String>,
     #[serde(default)]
     pub routes: Vec<String>,
@@ -581,6 +640,7 @@ impl InterfaceConfig {
                 ConfigError::Invalid("interface addresses must be valid CIDR prefixes")
             })?;
         }
+        self.dns_server_list()?;
         Ok(())
     }
 }
@@ -668,6 +728,10 @@ pub fn default_server_config_path() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn psk() -> String {
+        "a".repeat(64)
+    }
+
     #[test]
     fn parses_toml() {
         let config = Config::from_toml("endpoint = '127.0.0.1:9000'").unwrap();
@@ -676,9 +740,11 @@ mod tests {
 
     #[test]
     fn validates_client_psk_without_exposing_it() {
-        let config = ClientConfig::from_toml(
-            "server = '127.0.0.1:9000'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
-        ).unwrap();
+        let config = ClientConfig::from_toml(&format!(
+            "server = '127.0.0.1:9000'\npre_shared_key = '{}'",
+            psk()
+        ))
+        .unwrap();
         assert!(matches!(
             config.auth_config().unwrap(),
             rvpn_crypto::AuthConfig::Psk(bytes) if bytes == [0xaa; 32]
@@ -690,13 +756,19 @@ mod tests {
 
     #[test]
     fn accepts_hostname_shaped_server_syntax() {
-        let config = ClientConfig::from_toml(
-            "server = 'main-pc.lan:9000'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
-        ).unwrap();
+        let config = ClientConfig::from_toml(&format!(
+            "server = 'main-pc.lan:9000'\npre_shared_key = '{}'",
+            psk()
+        ))
+        .unwrap();
         assert_eq!(config.server, "main-pc.lan:9000");
-        assert!(ClientConfig::from_toml(
-            "server = 'main-pc.lan'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
-        ).is_err());
+        assert!(
+            ClientConfig::from_toml(&format!(
+                "server = 'main-pc.lan'\npre_shared_key = '{}'",
+                psk()
+            ))
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -708,9 +780,11 @@ mod tests {
 
     #[test]
     fn parses_provisioned_server_peers() {
-        let config = ServerConfig::from_toml(
-            "bind = '127.0.0.1:9000'\n[[peers]]\nname = 'laptop'\npre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\nallowed_ips = ['10.42.0.2/32']",
-        ).unwrap();
+        let config = ServerConfig::from_toml(&format!(
+            "bind = '127.0.0.1:9000'\n[[peers]]\nname = 'laptop'\npre_shared_key = '{}'\nallowed_ips = ['10.42.0.2/32']",
+            psk()
+        ))
+        .unwrap();
         let peers = config.peer_identities().unwrap();
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].name, "laptop");
@@ -718,17 +792,21 @@ mod tests {
 
     #[test]
     fn parses_per_peer_pinned_key_auth() {
-        let toml = r#"
+        let toml = format!(
+            r#"
 bind = '0.0.0.0:9000'
 [[peers]]
 name = 'phone'
 allowed_ips = ['10.42.0.3/32']
 [peers.auth]
 mode = 'pinned-key'
-local_identity_seed = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-peer_public_key = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-"#;
-        let config = ServerConfig::from_toml(toml).unwrap();
+local_identity_seed = '{}'
+peer_public_key = '{}'
+"#,
+            psk(),
+            "b".repeat(64)
+        );
+        let config = ServerConfig::from_toml(&toml).unwrap();
         let peers = config.peer_identities().unwrap();
         assert_eq!(peers.len(), 1);
         assert!(matches!(
@@ -739,9 +817,10 @@ peer_public_key = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
     #[test]
     fn parses_tap_and_both_mode_and_firewall() {
-        let server_toml = r#"
+        let server_toml = format!(
+            r#"
 bind = '0.0.0.0:9000'
-pre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+pre_shared_key = '{}'
 
 [interface]
 name = 'rvpn-srv'
@@ -754,14 +833,17 @@ backend = 'iptables'
 external_interface = 'eth0'
 tunnel_cidr = '10.42.0.0/24'
 tunnel_cidr_v6 = 'fd42::/64'
-"#;
-        let config = ServerConfig::from_toml(server_toml).unwrap();
+"#,
+            psk()
+        );
+        let config = ServerConfig::from_toml(&server_toml).unwrap();
         assert_eq!(config.interface.mode(), DeviceMode::Both);
         assert_eq!(config.forwarding.backend, FirewallBackend::Iptables);
 
-        let client_toml = r#"
+        let client_toml = format!(
+            r#"
 server = '10.0.0.91:9000'
-pre_shared_key = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+pre_shared_key = '{}'
 
 [interface]
 mode = 'tap'
@@ -772,9 +854,52 @@ gateway = '10.42.0.1'
 endpoint_gateway = '192.168.88.1'
 default_route_v6 = true
 gateway_v6 = 'fd42::1'
-"#;
-        let client_cfg = ClientConfig::from_toml(client_toml).unwrap();
+"#,
+            psk()
+        );
+        let client_cfg = ClientConfig::from_toml(&client_toml).unwrap();
         assert_eq!(client_cfg.interface.mode(), DeviceMode::Tap);
         assert!(client_cfg.routing.default_route_v6);
+    }
+
+    #[test]
+    fn parses_dns_server_lists_and_rejects_garbage() {
+        let good = format!(
+            "server = '127.0.0.1:9000'\npre_shared_key = '{}'\n[interface]\ndns_servers = '1.1.1.1, 2606:4700:4700::1111'",
+            psk()
+        );
+        let config = ClientConfig::from_toml(&good).unwrap();
+        assert_eq!(config.interface.dns_server_list().unwrap().len(), 2);
+
+        let bad = format!(
+            "server = '127.0.0.1:9000'\npre_shared_key = '{}'\n[interface]\ndns_servers = 'not-an-ip'",
+            psk()
+        );
+        assert!(ClientConfig::from_toml(&bad).is_err());
+    }
+
+    #[test]
+    fn liveness_defaults_and_bounds() {
+        let base = format!("server = '127.0.0.1:9000'\npre_shared_key = '{}'\n", psk());
+        let default = ClientConfig::from_toml(&base).unwrap();
+        assert_eq!(default.liveness.timeout(), Some(Duration::from_secs(90)));
+
+        let disabled =
+            ClientConfig::from_toml(&format!("{base}[liveness]\ntimeout_secs = 0")).unwrap();
+        assert_eq!(disabled.liveness.timeout(), None);
+
+        assert!(ClientConfig::from_toml(&format!("{base}[liveness]\ntimeout_secs = 10")).is_err());
+    }
+
+    #[test]
+    fn default_route_no_longer_requires_endpoint_gateway() {
+        let toml = format!(
+            "server = '127.0.0.1:9000'\npre_shared_key = '{}'\n[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
+            psk()
+        );
+        let config = ClientConfig::from_toml(&toml).unwrap();
+        config
+            .validate_resolved("127.0.0.1:9000".parse().unwrap())
+            .unwrap();
     }
 }

@@ -1,14 +1,17 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rvpn_config::{CertificateAuthorityConfig, HandshakeConfig, PeerIdentity};
 use rvpn_core::SessionId;
-use rvpn_crypto::{CookieKey, ObfuscationKey};
-use std::time::{SystemTime, UNIX_EPOCH};
+use rvpn_crypto::{AuthConfig, CookieKey, ObfuscationKey};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rvpn_protocol::{HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
 use std::{collections::HashMap, net::SocketAddr};
 
-use crate::state::{ActivePeer, PendingHandshake, PendingSource};
+use crate::state::{ActivePeer, PendingHandshake, PendingSource, same_peer};
+
+const MAX_PENDING_HANDSHAKES: usize = 4096;
+const REKEY_REQUEST_INTERVAL: Duration = Duration::from_secs(5);
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -87,6 +90,44 @@ async fn send_wire(
     Ok(())
 }
 
+async fn respond_initial(
+    transport: &UdpTransport,
+    obfuscation: Option<&ObfuscationKey>,
+    pending: &mut HashMap<SessionId, PendingHandshake>,
+    endpoint: SocketAddr,
+    initiation: HandshakeMessage,
+    source: PendingSource,
+    auth: &AuthConfig,
+) -> Result<()> {
+    let (handshake, response) =
+        ResponderHandshake::accept(auth.identity(), auth.verifier(), initiation)?;
+    let HandshakeMessage::Response { session_id, .. } = response else {
+        bail!("responder produced a message that is not a handshake response");
+    };
+    let packet = Packet {
+        header: Header {
+            kind: PacketKind::Handshake,
+            key_phase: 0,
+            sequence: 0,
+            session_id,
+        },
+        payload: response.encode(),
+    };
+    send_wire(transport, endpoint, packet.encode(), obfuscation).await?;
+    pending.insert(
+        session_id,
+        PendingHandshake {
+            source,
+            handshake,
+            endpoint,
+            packet,
+            kind: PacketKind::Handshake,
+            attempts: 1,
+        },
+    );
+    Ok(())
+}
+
 pub async fn begin_initial(
     transport: &UdpTransport,
     identities: &[PeerIdentity],
@@ -96,68 +137,48 @@ pub async fn begin_initial(
     endpoint: SocketAddr,
     initiation: HandshakeMessage,
 ) -> Result<()> {
+    if pending.len() >= MAX_PENDING_HANDSHAKES {
+        tracing::warn!(%endpoint, "too many pending handshakes; ignoring initiation");
+        return Ok(());
+    }
+
     for identity in identities {
-        let (handshake, response) = ResponderHandshake::accept(
-            identity.auth.identity(),
-            identity.auth.verifier(),
+        if let Err(error) = respond_initial(
+            transport,
+            obfuscation,
+            pending,
+            endpoint,
             initiation,
-        )?;
-        let session_id = match response {
-            HandshakeMessage::Response { session_id, .. } => session_id,
-            _ => unreachable!(),
-        };
-        let packet = Packet {
-            header: Header {
-                kind: PacketKind::Handshake,
-                key_phase: 0,
-                sequence: 0,
-                session_id,
-            },
-            payload: response.encode(),
-        };
-        send_wire(transport, endpoint, packet.encode(), obfuscation).await?;
-        pending.insert(
-            session_id,
-            PendingHandshake {
-                source: PendingSource::Known(identity.clone()),
-                handshake,
-                endpoint,
-                packet,
-                kind: PacketKind::Handshake,
-                attempts: 1,
-            },
-        );
+            PendingSource::Known(identity.clone()),
+            &identity.auth,
+        )
+        .await
+        {
+            tracing::warn!(peer = %identity.name, %endpoint, %error, "could not answer handshake initiation");
+        }
     }
 
     if let Some(ca) = certificate_authority {
-        let auth = ca.to_auth_config()?;
-        let (handshake, response) =
-            ResponderHandshake::accept(auth.identity(), auth.verifier(), initiation)?;
-        let session_id = match response {
-            HandshakeMessage::Response { session_id, .. } => session_id,
-            _ => unreachable!(),
-        };
-        let packet = Packet {
-            header: Header {
-                kind: PacketKind::Handshake,
-                key_phase: 0,
-                sequence: 0,
-                session_id,
-            },
-            payload: response.encode(),
-        };
-        send_wire(transport, endpoint, packet.encode(), obfuscation).await?;
-        pending.insert(
-            session_id,
-            PendingHandshake {
-                source: PendingSource::CertificateAuthority(ca.clone()),
-                handshake,
-                endpoint,
-                packet,
-                kind: PacketKind::Handshake,
-                attempts: 1,
-            },
-        );
+        match ca.to_auth_config() {
+            Ok(auth) => {
+                if let Err(error) = respond_initial(
+                    transport,
+                    obfuscation,
+                    pending,
+                    endpoint,
+                    initiation,
+                    PendingSource::CertificateAuthority(ca.clone()),
+                    &auth,
+                )
+                .await
+                {
+                    tracing::warn!(%endpoint, %error, "could not answer certificate handshake initiation");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "certificate authority configuration is unusable");
+            }
+        }
     }
     Ok(())
 }
@@ -216,11 +237,18 @@ pub async fn maybe_send_rekey(
     peer: &mut ActivePeer,
     packet_limit: u64,
 ) -> Result<()> {
-    if packet_limit != 0 && peer.session.should_rekey(packet_limit) {
-        let request = peer.session.seal(PacketKind::Rekey, b"")?;
-        send_wire(transport, peer.endpoint, request.encode(), obfuscation).await?;
+    if packet_limit == 0 || !peer.session.should_rekey(packet_limit) {
+        return Ok(());
     }
-    Ok(())
+    if peer
+        .last_rekey_request
+        .is_some_and(|sent| sent.elapsed() < REKEY_REQUEST_INTERVAL)
+    {
+        return Ok(());
+    }
+    let request = peer.session.seal(PacketKind::Rekey, b"")?;
+    peer.last_rekey_request = Some(Instant::now());
+    send_wire(transport, peer.endpoint, request.encode(), obfuscation).await
 }
 
 pub fn finish_pending(
@@ -228,58 +256,97 @@ pub fn finish_pending(
     active: &mut HashMap<SessionId, ActivePeer>,
     endpoint: SocketAddr,
     packet: Packet,
-) -> Result<()> {
-    let Some(pending_handshake) = pending.remove(&packet.header.session_id) else {
-        tracing::debug!(session_id = ?packet.header.session_id, %endpoint, "received finish for unknown or expired pending handshake");
-        return Ok(());
+) -> Vec<SessionId> {
+    let session_id = packet.header.session_id;
+
+    let Some(expected) = pending.get(&session_id) else {
+        tracing::debug!(?session_id, %endpoint, "received finish for unknown or expired pending handshake");
+        return Vec::new();
     };
-    if pending_handshake.endpoint != endpoint || pending_handshake.kind != packet.header.kind {
+    if expected.endpoint != endpoint || expected.kind != packet.header.kind {
         tracing::warn!(
-            session_id = ?packet.header.session_id,
-            expected_endpoint = %pending_handshake.endpoint,
+            ?session_id,
+            expected_endpoint = %expected.endpoint,
             actual_endpoint = %endpoint,
-            expected_kind = ?pending_handshake.kind,
+            expected_kind = ?expected.kind,
             actual_kind = ?packet.header.kind,
             "discarding finish packet with mismatched endpoint or packet kind"
         );
-        return Ok(());
+        return Vec::new();
     }
-    let finish = HandshakeMessage::decode(packet.payload)?;
-    let (session, remote_identity) = pending_handshake.handshake.finish(finish)?;
+    let Some(state) = pending.remove(&session_id) else {
+        return Vec::new();
+    };
+
+    let finish = match HandshakeMessage::decode(packet.payload) {
+        Ok(finish) => finish,
+        Err(error) => {
+            tracing::warn!(?session_id, %endpoint, %error, "discarding malformed handshake finish");
+            return Vec::new();
+        }
+    };
+    let (session, remote_identity) = match state.handshake.finish(finish) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(?session_id, %endpoint, %error, "rejecting handshake finish");
+            return Vec::new();
+        }
+    };
     let id = session.session_id();
 
-    let identity = match pending_handshake.source {
+    let identity = match state.source {
         PendingSource::Known(identity) => identity,
         PendingSource::CertificateAuthority(ca) => {
             let Some(subject) = remote_identity else {
                 tracing::warn!(session_id = ?id, "certificate handshake finished without a verified subject key");
-                return Ok(());
+                return Vec::new();
             };
             let subject_hex = hex::encode(subject.to_bytes());
             if ca.is_revoked(&subject_hex) {
                 tracing::warn!(subject = %subject_hex, session_id = ?id, "rejecting handshake from revoked certificate subject");
-                return Ok(());
+                return Vec::new();
             }
-            let allowed_ips = ca.resolve_allowed_ips(&subject_hex)?;
-            rvpn_config::PeerIdentity {
+            let allowed_ips = match ca.resolve_allowed_ips(&subject_hex) {
+                Ok(allowed_ips) => allowed_ips,
+                Err(error) => {
+                    tracing::warn!(subject = %subject_hex, %error, "certificate subject has unusable allowed_ips");
+                    return Vec::new();
+                }
+            };
+            let auth = match ca.to_auth_config() {
+                Ok(auth) => auth,
+                Err(error) => {
+                    tracing::warn!(%error, "certificate authority configuration is unusable");
+                    return Vec::new();
+                }
+            };
+            PeerIdentity {
                 name: format!("cert:{}", &subject_hex[..subject_hex.len().min(16)]),
                 allowed_ips,
-                auth: ca.to_auth_config()?,
+                auth,
             }
         }
     };
 
+    let mut evicted = Vec::new();
+    active.retain(|existing_id, existing| {
+        let stale = *existing_id != id && same_peer(&existing.identity, &identity);
+        if stale {
+            tracing::info!(
+                peer = %existing.identity.name,
+                old_session = ?existing_id,
+                new_session = ?id,
+                "replacing stale session of reconnecting peer"
+            );
+            evicted.push(*existing_id);
+        }
+        !stale
+    });
+
     let name = identity.name.clone();
-    active.insert(
-        id,
-        ActivePeer {
-            identity,
-            session,
-            endpoint,
-        },
-    );
+    active.insert(id, ActivePeer::new(identity, session, endpoint));
     tracing::info!(%name, session_id = ?id, %endpoint, "authenticated RVPN peer established");
-    Ok(())
+    evicted
 }
 
 pub async fn retransmit_pending(
