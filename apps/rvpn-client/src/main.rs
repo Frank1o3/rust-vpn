@@ -19,7 +19,6 @@ use tunnel::run_data_plane;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    raise_ambient_capabilities();
 
     let arg = env::args().nth(1);
 
@@ -228,25 +227,3 @@ async fn shutdown_signal() -> Result<()> {
     }
 }
 
-#[cfg(target_os = "linux")]
-fn raise_ambient_capabilities() {
-    use caps::{CapSet, Capability};
-
-    for capability in [Capability::CAP_NET_ADMIN, Capability::CAP_NET_RAW] {
-        if let Err(error) = caps::raise(None, CapSet::Inheritable, capability) {
-            tracing::warn!(%error, ?capability, "failed to add capability to inheritable set");
-            continue;
-        }
-        if let Err(error) = caps::raise(None, CapSet::Ambient, capability) {
-            tracing::warn!(
-                %error,
-                ?capability,
-                "failed to raise capability into ambient set; `ip` commands spawned as \
-                 child processes will fail with 'Operation not permitted'"
-            );
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn raise_ambient_capabilities() {}
