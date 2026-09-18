@@ -138,9 +138,7 @@ check_dependencies() {
     require_command cargo
     require_command install
     require_command rm
-    require_command sudo
     require_command systemctl
-    require_command setcap
     require_command id
 }
 
@@ -210,6 +208,8 @@ install_user_binary() {
 # ------------------------------------------------------------
 
 grant_client_capabilities() {
+    require_command setcap
+
     local binary="${SYSTEM_BIN}/${CLIENT_BIN}"
 
     info "Granting CAP_NET_ADMIN and CAP_NET_RAW to ${binary}..."
@@ -246,7 +246,25 @@ install_system_service() {
 # Server service
 # ------------------------------------------------------------
 
+ensure_server_user() {
+    if id rvpn >/dev/null 2>&1; then
+        return
+    fi
+
+    info "Creating dedicated rvpn system user..."
+
+    sudo useradd \
+        --system \
+        --create-home \
+        --home-dir /var/lib/rvpn \
+        --shell /usr/sbin/nologin \
+        rvpn
+
+    success "Created rvpn system user"
+}
+
 install_server_service() {
+    ensure_server_user
     install_system_service "$SERVER_SERVICE"
 
     echo
