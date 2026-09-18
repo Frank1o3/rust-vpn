@@ -204,26 +204,6 @@ install_user_binary() {
 }
 
 # ------------------------------------------------------------
-# Client capabilities
-# ------------------------------------------------------------
-
-grant_client_capabilities() {
-    require_command setcap
-
-    local binary="${SYSTEM_BIN}/${CLIENT_BIN}"
-
-    info "Granting CAP_NET_ADMIN and CAP_NET_RAW to ${binary}..."
-
-    sudo setcap 'cap_net_admin,cap_net_raw=+eip' "$binary"
-
-    success "Client capabilities installed"
-
-    if command_exists getcap; then
-        getcap "$binary" || true
-    fi
-}
-
-# ------------------------------------------------------------
 # System service installation
 # ------------------------------------------------------------
 
@@ -413,7 +393,6 @@ build_client() {
 
     build_binary "$CLIENT_BIN"
     install_system_binary "$CLIENT_BIN"
-    grant_client_capabilities
 
     echo
 
