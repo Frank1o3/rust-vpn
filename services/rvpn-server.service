@@ -9,7 +9,7 @@ User=rvpn
 Group=rvpn
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-ExecStart=/usr/local/bin/rvpn-server
+ExecStart=/usr/local/bin/rvpn-server ~/.config/rvpn/server.toml
 Restart=on-failure
 RestartSec=2
 

@@ -11,9 +11,9 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="rvpn-server0"
 
 [forwarding]
+    backend="iptables"
     enabled=true
-    backend="auto"
-    external_interface="eno1"
+    external_interface="enp0s31f6"
     tunnel_cidr="10.42.0.0/24"
     tunnel_cidr_v6="fd42::/64"
 
@@ -22,8 +22,8 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="Laptop"
 
     [peers.auth]
-        mode="pinned-key"
         local_identity_seed="0e7f1564f6e621fab6560b82b309ba982abd2d465e5b6854a91a0096e45a923a"
+        mode="pinned-key"
         peer_public_key="46b028ce15cf5ad733facb19dd0f48b6dc924f009e948257678c3c194ec7bd7a"
 
 [[peers]]
@@ -31,8 +31,8 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="Panda"
 
     [peers.auth]
-        mode="pinned-key"
         local_identity_seed="9c777fa49b1b4c40c1f89144b72d06b04a594d451c45dd45d7071040b20f5e15"
+        mode="pinned-key"
         peer_public_key="b430562ae2a8b8344d9f2b5a73fd98c2777abd7544ba46a55f3820b22acd771e"
 
 [[peers]]
@@ -40,8 +40,8 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="ShowNex"
 
     [peers.auth]
-        mode="pinned-key"
         local_identity_seed="e20e514a7f5c59ce59e8555277c916096f2a5084d7309428d15c97431b1ebf7b"
+        mode="pinned-key"
         peer_public_key="3ae0e03e8ef35967e7398c86f37ad161e5e30610715c94e38a5f95c0ae999fa5"
 
 [[peers]]
@@ -49,6 +49,6 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="Frank1o3"
 
     [peers.auth]
-        mode="pinned-key"
         local_identity_seed="a8a81c80a32d0043b0955be2d4879004bcad3685b664d68d7b0fd5664ca315dc"
+        mode="pinned-key"
         peer_public_key="78c3742910eace1d0edb3ee696ab6f90eab41024a08074e58fdaf6118a49620d"
