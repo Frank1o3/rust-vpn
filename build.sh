@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-#!/usr/bin/env bash
 
 set -Eeuo pipefail
 
@@ -12,41 +11,50 @@ set -Eeuo pipefail
 #   ./build.sh tray
 #   ./build.sh all
 #
-# Server/client:
-#   cargo build --release --bin ...
-#   install binary
-#   optionally install + enable systemd service
+# Server:
+#   Build rvpn-server, install it system-wide, and optionally
+#   install/enable rvpn-server.service.
+#
+# Client:
+#   Build rvpn-client, install it system-wide, install its
+#   capabilities, and optionally install/enable the per-user
+#   rvpn-client@<user>.service instance.
 #
 # Tray:
-#   cargo build --release --bin rvpn-tray
-#   install to ~/.local/bin
-#   no system service
+#   Build rvpn-tray, install it to ~/.local/bin, and optionally
+#   install/enable the per-user rvpn-tray.service.
 # ============================================================
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+if [[ "$EUID" -eq 0 ]]; then
+    echo "Do not run build.sh as root."
+    echo "Run it as your normal user; it will use sudo when needed."
+    exit 1
+fi
 
 # ------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------
 
 USER_BIN="${HOME}/.local/bin"
+USER_SERVICE_DIR="${HOME}/.config/systemd/user"
 SYSTEM_BIN="/usr/local/bin"
+SYSTEM_SERVICE_DIR="/etc/systemd/system"
 
 SERVER_BIN="rvpn-server"
 CLIENT_BIN="rvpn-client"
 TRAY_BIN="rvpn-tray"
 
 SERVER_SERVICE="rvpn-server.service"
-CLIENT_SERVICE="rvpn-client@.service"
+CLIENT_TEMPLATE="rvpn-client@.service"
+TRAY_SERVICE="rvpn-tray.service"
 
-# Common places where a repository might keep service files.
-SERVICE_DIRS=(
-    "${SCRIPT_DIR}/systemd"
-    "${SCRIPT_DIR}/services"
-    "${SCRIPT_DIR}/service"
-    "${SCRIPT_DIR}"
-)
+# The account whose user context should own the client service.
+# When build.sh is run normally this is simply $USER. If it is
+# ever invoked through sudo, preserve the original user.
+INSTALL_USER="${SUDO_USER:-${USER}}"
 
 # ------------------------------------------------------------
 # Colors
@@ -118,20 +126,6 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-find_service_file() {
-    local service_name="$1"
-    local directory
-
-    for directory in "${SERVICE_DIRS[@]}"; do
-        if [[ -f "${directory}/${service_name}" ]]; then
-            printf '%s\n' "${directory}/${service_name}"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
 require_command() {
     command_exists "$1" || die "Required command not found: $1"
 }
@@ -143,8 +137,24 @@ require_command() {
 check_dependencies() {
     require_command cargo
     require_command install
+    require_command rm
     require_command sudo
     require_command systemctl
+    require_command setcap
+    require_command id
+}
+
+# ------------------------------------------------------------
+# Service file lookup
+# ------------------------------------------------------------
+
+find_service_file() {
+    local service_name="$1"
+    local path="${SCRIPT_DIR}/services/${service_name}"
+
+    [[ -f "$path" ]] || die "Service file not found: $path"
+
+    printf '%s\n' "$path"
 }
 
 # ------------------------------------------------------------
@@ -156,102 +166,194 @@ build_binary() {
 
     info "Building ${binary}..."
 
-    cargo build \
-        --release \
-        --bin "$binary"
+    cargo build         --release         --bin "$binary"
 
     local artifact="${SCRIPT_DIR}/target/release/${binary}"
 
-    [[ -f "$artifact" ]] || die \
-        "Cargo reported success, but ${artifact} was not found."
+    [[ -f "$artifact" ]] || die         "Cargo reported success, but ${artifact} was not found."
 
     success "Built ${artifact}"
 }
 
 # ------------------------------------------------------------
-# Install binary
+# Binary installation
 # ------------------------------------------------------------
-
-install_user_binary() {
-    local binary="$1"
-
-    local source="${SCRIPT_DIR}/target/release/${binary}"
-    local destination="${USER_BIN}/${binary}"
-
-    mkdir -p "$USER_BIN"
-
-    info "Installing ${binary} to ${USER_BIN}..."
-
-    install -Dm755 "$source" "$destination"
-
-    success "Installed ${destination}"
-}
 
 install_system_binary() {
     local binary="$1"
-
     local source="${SCRIPT_DIR}/target/release/${binary}"
     local destination="${SYSTEM_BIN}/${binary}"
 
-    info "Installing ${binary} to ${SYSTEM_BIN}..."
+    info "Installing ${binary} to ${destination}..."
 
     sudo install -Dm755 "$source" "$destination"
 
     success "Installed ${destination}"
 }
 
+install_user_binary() {
+    local binary="$1"
+    local source="${SCRIPT_DIR}/target/release/${binary}"
+    local destination="${USER_BIN}/${binary}"
+
+    mkdir -p "$USER_BIN"
+
+    info "Installing ${binary} to ${destination}..."
+
+    install -Dm755 "$source" "$destination"
+
+    success "Installed ${destination}"
+}
+
 # ------------------------------------------------------------
-# Service installation
+# Client capabilities
+# ------------------------------------------------------------
+
+grant_client_capabilities() {
+    local binary="${SYSTEM_BIN}/${CLIENT_BIN}"
+
+    info "Granting CAP_NET_ADMIN and CAP_NET_RAW to ${binary}..."
+
+    sudo setcap 'cap_net_admin,cap_net_raw=+eip' "$binary"
+
+    success "Client capabilities installed"
+
+    if command_exists getcap; then
+        getcap "$binary" || true
+    fi
+}
+
+# ------------------------------------------------------------
+# System service installation
 # ------------------------------------------------------------
 
 install_system_service() {
     local service_name="$1"
-    local binary_name="$2"
 
     local source
-
-    if ! source="$(find_service_file "$service_name")"; then
-        warn "Could not find ${service_name} in the repository."
-        warn "Checked:"
-        for directory in "${SERVICE_DIRS[@]}"; do
-            printf '  %s\n' "${directory}/${service_name}"
-        done
-
-        return 1
-    fi
-
-    info "Found service file:"
-    printf '  %s\n' "$source"
+    source="$(find_service_file "$service_name")"
 
     info "Installing ${service_name}..."
 
-    sudo install -Dm644 \
-        "$source" \
-        "/etc/systemd/system/${service_name}"
+    sudo install -Dm644         "$source"         "${SYSTEM_SERVICE_DIR}/${service_name}"
 
     sudo systemctl daemon-reload
 
-    success "Installed /etc/systemd/system/${service_name}"
+    success "Installed ${SYSTEM_SERVICE_DIR}/${service_name}"
+}
 
-    if ask_yes_no "Enable ${service_name} at boot?"; then
-        sudo systemctl enable "$service_name"
-        success "${service_name} enabled"
-    else
-        info "${service_name} was not enabled"
-    fi
+# ------------------------------------------------------------
+# Server service
+# ------------------------------------------------------------
 
-    if ask_yes_no "Start ${service_name} now?"; then
-        sudo systemctl start "$service_name"
-        success "${service_name} started"
+install_server_service() {
+    install_system_service "$SERVER_SERVICE"
+
+    echo
+
+    if ask_yes_no "Enable ${SERVER_SERVICE} at boot?"; then
+        sudo systemctl enable "$SERVER_SERVICE"
+        success "${SERVER_SERVICE} enabled"
     else
-        info "${service_name} was not started"
+        info "${SERVER_SERVICE} was not enabled"
     fi
 
     echo
-    info "Current status:"
-    sudo systemctl --no-pager --full status "$service_name" || true
 
-    return 0
+    if ask_yes_no "Start ${SERVER_SERVICE} now?"; then
+        sudo systemctl start "$SERVER_SERVICE"
+        success "${SERVER_SERVICE} started"
+    else
+        info "${SERVER_SERVICE} was not started"
+    fi
+}
+
+# ------------------------------------------------------------
+# Client service
+# ------------------------------------------------------------
+
+install_client_service() {
+    local instance="rvpn-client@${INSTALL_USER}.service"
+
+    if ! id "$INSTALL_USER" >/dev/null 2>&1; then
+        die "Unable to resolve install user: ${INSTALL_USER}"
+    fi
+
+    install_system_service "$CLIENT_TEMPLATE"
+
+    #
+    # Remove the old non-templated service if an older RVPN
+    # installation left one behind.
+    #
+    if sudo systemctl list-unit-files --all |         grep -q '^rvpn-client\.service'; then
+
+        warn "Found legacy rvpn-client.service; disabling it."
+
+        sudo systemctl disable --now rvpn-client.service 2>/dev/null || true
+    fi
+
+    sudo rm -f "${SYSTEM_SERVICE_DIR}/rvpn-client.service"
+    sudo systemctl daemon-reload
+
+    echo
+    info "Client service instance: ${instance}"
+
+    if ask_yes_no "Enable ${instance} at boot?"; then
+        sudo systemctl enable "${instance}"
+        success "${instance} enabled"
+    else
+        info "${instance} was not enabled"
+    fi
+
+    echo
+
+    if ask_yes_no "Start ${instance} now?"; then
+        sudo systemctl start "${instance}"
+        success "${instance} started"
+    else
+        info "${instance} was not started"
+    fi
+
+    echo
+    info "Client service status:"
+    sudo systemctl --no-pager --full status "${instance}" || true
+}
+
+# ------------------------------------------------------------
+# Tray service
+# ------------------------------------------------------------
+
+install_tray_service() {
+    local source
+    source="$(find_service_file "$TRAY_SERVICE")"
+
+    mkdir -p "$USER_SERVICE_DIR"
+
+    info "Installing ${TRAY_SERVICE} to ${USER_SERVICE_DIR}..."
+
+    install -Dm644         "$source"         "${USER_SERVICE_DIR}/${TRAY_SERVICE}"
+
+    systemctl --user daemon-reload
+
+    success "Installed ${USER_SERVICE_DIR}/${TRAY_SERVICE}"
+
+    echo
+
+    if ask_yes_no "Enable ${TRAY_SERVICE} for your user session?"; then
+        systemctl --user enable "$TRAY_SERVICE"
+        success "${TRAY_SERVICE} enabled"
+    else
+        info "${TRAY_SERVICE} was not enabled"
+    fi
+
+    echo
+
+    if ask_yes_no "Start ${TRAY_SERVICE} now?"; then
+        systemctl --user start "$TRAY_SERVICE"
+        success "${TRAY_SERVICE} started"
+    else
+        info "${TRAY_SERVICE} was not started"
+    fi
 }
 
 # ------------------------------------------------------------
@@ -264,23 +366,12 @@ build_server() {
     echo
 
     build_binary "$SERVER_BIN"
-
-    #
-    # System daemons belong in /usr/local/bin rather than
-    # ~/.local/bin. This makes them accessible to systemd
-    # regardless of the user's home-directory permissions.
-    #
     install_system_binary "$SERVER_BIN"
 
     echo
 
     if ask_yes_no "Install the RVPN server systemd service?"; then
-        if ! install_system_service \
-            "$SERVER_SERVICE" \
-            "$SERVER_BIN"
-        then
-            warn "Server binary was installed, but the service was not installed."
-        fi
+        install_server_service
     else
         info "Skipping server service installation."
     fi
@@ -299,41 +390,15 @@ build_client() {
     echo
 
     build_binary "$CLIENT_BIN"
-
-    #
-    # The client daemon can require NET_ADMIN / NET_RAW and
-    # therefore belongs in the system installation path.
-    #
     install_system_binary "$CLIENT_BIN"
+    grant_client_capabilities
 
     echo
 
-    local service_installed=0
-
     if ask_yes_no "Install the RVPN client systemd service?"; then
-        if install_system_service \
-            "$CLIENT_SERVICE" \
-            "$CLIENT_BIN"
-        then
-            service_installed=1
-        else
-            warn "Client binary was installed, but the service was not installed."
-        fi
+        install_client_service
     else
         info "Skipping client service installation."
-    fi
-
-    #
-    # Build the tray when the client setup was accepted.
-    #
-    if [[ "$service_installed" -eq 1 ]]; then
-        echo
-
-        if ask_yes_no "Build and install RVPN Tray too?"; then
-            build_tray
-        else
-            info "Skipping tray build."
-        fi
     fi
 
     echo
@@ -350,23 +415,18 @@ build_tray() {
     echo
 
     build_binary "$TRAY_BIN"
-
     install_user_binary "$TRAY_BIN"
 
     echo
-    success "Tray installed to:"
-    printf '  %s\n' "${USER_BIN}/${TRAY_BIN}"
+
+    if ask_yes_no "Install the RVPN tray user service?"; then
+        install_tray_service
+    else
+        info "Skipping tray service installation."
+    fi
 
     echo
-    info "The tray does not need a root/systemd service."
-    info "You can start it manually with:"
-    printf '  %s\n' "$TRAY_BIN"
-
-    echo
-    info "For Hyprland autostart, add:"
-    printf '  exec-once = %s\n' "${USER_BIN}/${TRAY_BIN}"
-
-    echo
+    success "Tray build complete."
 }
 
 # ------------------------------------------------------------
@@ -376,14 +436,7 @@ build_tray() {
 build_all() {
     build_server
     build_client
-
-    echo
-
-    if [[ ! -x "${USER_BIN}/${TRAY_BIN}" ]]; then
-        if ask_yes_no "Build and install RVPN Tray?"; then
-            build_tray
-        fi
-    fi
+    build_tray
 
     echo
     success "RVPN build/install process complete."
@@ -404,10 +457,18 @@ Usage:
     ./build.sh all
 
 Commands:
-    server    Build rvpn-server and optionally install/enable its service.
-    client    Build rvpn-client and optionally install/enable its service.
-    tray      Build rvpn-tray and install it to ~/.local/bin.
-    all       Build server, client, and optionally tray.
+    server    Build rvpn-server and optionally install/enable
+              rvpn-server.service.
+
+    client    Build rvpn-client, grant CAP_NET_ADMIN and
+              CAP_NET_RAW, and optionally install/enable
+              rvpn-client@<user>.service.
+
+    tray      Build rvpn-tray, install it to ~/.local/bin,
+              and optionally install/enable rvpn-tray.service
+              as a user service.
+
+    all       Build and install server, client, and tray.
 EOF
 }
 
