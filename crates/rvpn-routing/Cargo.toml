@@ -1,0 +1,10 @@
+[package]
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-routing"
+    version.workspace=true
+
+[dependencies]
+    ipnet="2.12.2"
+    rvpn-core={path="../rvpn-core"}

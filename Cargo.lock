@@ -2367,6 +2367,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvpn-routing"
+version = "0.2.8"
+dependencies = [
+ "ipnet",
+ "rvpn-core",
+]
+
+[[package]]
 name = "rvpn-server"
 version = "0.2.8"
 dependencies = [

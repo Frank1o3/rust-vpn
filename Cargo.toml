@@ -22,6 +22,7 @@
         "crates/rvpn-interface",
         "crates/rvpn-ipc",
         "crates/rvpn-protocol",
+        "crates/rvpn-routing",
         "crates/rvpn-transport",
     ]
     resolver="3"

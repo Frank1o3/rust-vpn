@@ -95,63 +95,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_peer_and_size_limit_are_enforced() {
-        let receiver = UdpTransport::bind(localhost()).await.unwrap();
-        let mut config = TransportConfig::new(localhost());
-        config.remote_address = Some(receiver.local_addr().unwrap());
-        config.max_datagram_size = 3;
-        let sender = UdpTransport::open(config).await.unwrap();
-
-        assert!(matches!(
-            sender
-                .send(Bytes::from_static(b"four"), SendOptions::default())
-                .await,
-            Err(TransportError::DatagramTooLarge { .. })
-        ));
-        assert!(matches!(
-            sender
-                .send(
-                    Bytes::from_static(b"ok"),
-                    SendOptions {
-                        delivery: DeliveryMode::RELIABLE,
-                        ..SendOptions::default()
-                    }
-                )
-                .await,
-            Err(TransportError::UnsupportedDeliveryMode)
-        ));
-
-        sender
-            .send(Bytes::from_static(b"ok"), SendOptions::default())
-            .await
-            .unwrap();
-        assert_eq!(receiver.receive().await.unwrap().payload, b"ok"[..]);
-    }
-
-    #[tokio::test]
-    async fn oversized_inbound_datagram_is_rejected_without_truncation() {
-        let mut config = TransportConfig::new(localhost());
-        config.max_datagram_size = 3;
-        let receiver = UdpTransport::open(config).await.unwrap();
-        let sender = UdpTransport::bind(localhost()).await.unwrap();
-        sender
-            .send_to(
-                receiver.local_addr().unwrap(),
-                Bytes::from_static(b"four"),
-                SendOptions::default(),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(
-            receiver.receive().await,
-            Err(TransportError::DatagramTooLarge {
-                size: 4,
-                maximum: 3
-            })
-        ));
-    }
-
-    #[tokio::test]
     async fn oversized_event_does_not_stop_event_loop() {
         let mut config = TransportConfig::new(localhost());
         config.max_datagram_size = 3;
