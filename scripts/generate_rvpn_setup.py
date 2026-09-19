@@ -155,20 +155,18 @@ def issue_certificate(ca_seed_hex: str, subject_public_key_hex: str, days: int) 
 
 def derive_dns_from_endpoint_external(endpoint_external: str) -> str:
     """
-    Derive the LAN gateway/DNS address from an IPv4 endpoint address.
-
-    Example:
-        192.168.88.253 -> 192.168.88.1
+    Derive the DNS address from an IPv4 endpoint address.
+    If the endpoint is on a private LAN (e.g. 192.168.x.x), use the LAN gateway (x.x.x.1).
+    For public IP addresses or non-IPv4, default to 1.1.1.1.
     """
-    address = ipaddress.ip_address(endpoint_external)
-
-    if not isinstance(address, ipaddress.IPv4Address):
-        raise ValueError(
-            "Automatic DNS derivation currently requires an IPv4 endpoint_external address."
-        )
-
-    octets = endpoint_external.split(".")
-    return ".".join(octets[:3] + ["1"])
+    try:
+        address = ipaddress.ip_address(endpoint_external)
+        if isinstance(address, ipaddress.IPv4Address) and address.is_private:
+            octets = endpoint_external.split(".")
+            return ".".join(octets[:3] + ["1"])
+    except ValueError:
+        pass
+    return "1.1.1.1"
 
 def detect_external_interface() -> Optional[str]:
     """Best-effort detection of the interface carrying the default route.
@@ -293,15 +291,8 @@ def gather_setup() -> SetupConfig:
 
     client_server_address = f"{endpoint_external}:{bind_port}"
 
-    dns_servers = ""
-    try:
-        dns_servers = derive_dns_from_endpoint_external(endpoint_external)
-        print(f"  -> derived client DNS server: {dns_servers}")
-    except ValueError:
-        print(
-            "  -> DNS could not be derived automatically because the endpoint "
-            "is not an IPv4 address."
-        )
+    derived_dns = derive_dns_from_endpoint_external(endpoint_external)
+    dns_servers = prompt("Client DNS server(s)", default=derived_dns)
 
     interface_name = prompt("Server interface name", default="rvpn-server0")
     mode = prompt_choice("Interface mode", ["tun", "tap", "both"], default="tun")
@@ -347,12 +338,8 @@ def gather_setup() -> SetupConfig:
         ca = generate_keypair()
         ca_cert_days = prompt_int("Certificate validity (days)", default=3650)
 
+    # Server physical routes are discovered dynamically via OS routing tables.
     endpoint_gateway = ""
-    if prompt_bool(
-        "Are clients on the same LAN as the server (set endpoint_gateway to the server's LAN IP)?",
-        default=True,
-    ):
-        endpoint_gateway = client_server_address
 
     return SetupConfig(
         bind_address=bind_address,

@@ -74,6 +74,7 @@ impl AuthMode {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     pub server: String,
     pub pre_shared_key: Option<String>,
@@ -161,6 +162,7 @@ pub fn validate_endpoint_syntax(value: &str) -> Result<(), ConfigError> {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
     pub pre_shared_key: Option<String>,
@@ -233,6 +235,7 @@ impl ServerConfig {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerPeerConfig {
     pub name: String,
     pub pre_shared_key: Option<String>,
@@ -283,6 +286,7 @@ impl ServerPeerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CertificateAuthorityConfig {
     pub name: String,
     pub ca_public_key: String,
@@ -367,6 +371,7 @@ impl core::fmt::Debug for PeerIdentity {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InterfaceConfig {
     pub name: Option<String>,
     pub tap_name: Option<String>,
@@ -418,6 +423,7 @@ impl InterfaceConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HandshakeConfig {
     #[serde(default = "default_retry_interval_ms")]
     pub retry_interval_ms: u64,
@@ -475,19 +481,27 @@ impl HandshakeConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RekeyConfig {
     #[serde(default = "default_rekey_packet_limit")]
     pub packet_limit: u64,
+    #[serde(default = "default_rekey_time_limit_secs")]
+    pub time_limit_secs: u64,
 }
 
 const fn default_rekey_packet_limit() -> u64 {
     1 << 20
 }
 
+const fn default_rekey_time_limit_secs() -> u64 {
+    120
+}
+
 impl Default for RekeyConfig {
     fn default() -> Self {
         Self {
             packet_limit: default_rekey_packet_limit(),
+            time_limit_secs: default_rekey_time_limit_secs(),
         }
     }
 }
@@ -496,11 +510,20 @@ impl RekeyConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         Ok(())
     }
+
+    pub fn time_limit(&self) -> Option<Duration> {
+        if self.time_limit_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(self.time_limit_secs))
+        }
+    }
 }
 
 /// Dead-peer detection. Keepalives are sent roughly every 25 seconds, so the
 /// timeout must leave room for several missed ones.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LivenessConfig {
     /// Seconds without any authenticated packet before the peer is considered
     /// gone: the server drops the session, the client reconnects. `0` disables.
@@ -536,6 +559,7 @@ impl LivenessConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientRoutingConfig {
     #[serde(default)]
     pub default_route: bool,
@@ -583,6 +607,7 @@ pub enum FirewallBackend {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ForwardingConfig {
     #[serde(default)]
     pub enabled: bool,

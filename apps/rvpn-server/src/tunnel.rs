@@ -304,6 +304,15 @@ pub async fn run_server_loop(
                         }
                         PacketKind::Rekey => {
                             if let Some(current) = active.get(&packet.header.session_id) {
+                                if datagram.peer != current.endpoint {
+                                    tracing::warn!(
+                                        peer = %current.identity.name,
+                                        current_endpoint = %current.endpoint,
+                                        unauthenticated_endpoint = %datagram.peer,
+                                        "ignoring rekey initiation from unauthenticated endpoint"
+                                    );
+                                    continue;
+                                }
                                 if current.session.key_phase() == packet.header.key_phase {
                                     if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload.clone()) {
                                         if let Err(error) = begin_rekey(&transport, obfuscation, &mut pending, datagram.peer, current, initiation).await {

@@ -54,6 +54,22 @@ pub async fn configure_client_network(
         route_replace("::/1", Some(gateway), dev.name(), Some(&source)).await?;
         route_replace("8000::/1", Some(gateway), dev.name(), Some(&source)).await?;
     }
+
+    if let Ok(dns_list) = config.interface.dns_server_list() {
+        if !dns_list.is_empty() {
+            let dns_strs: Vec<String> = dns_list.iter().map(|ip| ip.to_string()).collect();
+            let mut args = vec!["dns", dev.name()];
+            let dns_refs: Vec<&str> = dns_strs.iter().map(|s| s.as_str()).collect();
+            args.extend(dns_refs);
+            if let Err(e) = run("resolvectl", args).await {
+                tracing::warn!(%e, "failed to configure DNS via resolvectl");
+            } else {
+                let _ = run("resolvectl", ["domain", dev.name(), "~."]).await;
+                tracing::info!(interface = dev.name(), dns = ?dns_strs, "configured DNS servers via resolvectl");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -137,6 +153,9 @@ pub async fn teardown_client_network(
             let endpoint = format!("{}/128", server.ip());
             let _ = run("ip", ["-6", "route", "del", &endpoint]).await;
         }
+    }
+    if config.interface.dns_servers.is_some() {
+        let _ = run("resolvectl", ["revert", dev.name()]).await;
     }
 }
 

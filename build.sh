@@ -164,11 +164,11 @@ build_binary() {
 
     info "Building ${binary}..."
 
-    cargo build         --release         --bin "$binary"
+    cargo build --release --bin "$binary"
 
     local artifact="${SCRIPT_DIR}/target/release/${binary}"
 
-    [[ -f "$artifact" ]] || die         "Cargo reported success, but ${artifact} was not found."
+    [[ -f "$artifact" ]] || die "Cargo reported success, but ${artifact} was not found."
 
     success "Built ${artifact}"
 }

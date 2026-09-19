@@ -55,6 +55,37 @@ impl core::fmt::Debug for AuthConfig {
     }
 }
 
+impl zeroize::Zeroize for AuthConfig {
+    fn zeroize(&mut self) {
+        match self {
+            Self::Psk(bytes) => bytes.zeroize(),
+            Self::PinnedKey {
+                local_seed,
+                peer_public_key,
+            } => {
+                local_seed.zeroize();
+                peer_public_key.zeroize();
+            }
+            Self::Certificate {
+                local_seed,
+                local_certificate,
+                ca_public_key,
+            } => {
+                local_seed.zeroize();
+                local_certificate.zeroize();
+                ca_public_key.zeroize();
+            }
+        }
+    }
+}
+
+impl Drop for AuthConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.zeroize();
+    }
+}
+
 pub enum AuthIdentity {
     Psk(HandshakePsk),
     PinnedKey(IdentityKeyPair),

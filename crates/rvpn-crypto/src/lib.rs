@@ -57,6 +57,12 @@ pub fn transcript_hash(transcript: &[u8]) -> [u8; KEY_LEN] {
     Sha256::digest(transcript).into()
 }
 
+impl<const N: usize> Clone for Secret<N> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+
 impl<const N: usize> Drop for Secret<N> {
     fn drop(&mut self) {
         self.0.zeroize();
@@ -157,6 +163,7 @@ pub enum SessionRole {
     Responder,
 }
 
+#[derive(Clone)]
 pub struct SessionKeys {
     send: Secret<KEY_LEN>,
     receive: Secret<KEY_LEN>,

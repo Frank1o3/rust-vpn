@@ -3,12 +3,23 @@ use bytes::Bytes;
 use rvpn_core::SessionId;
 use rvpn_crypto::{CryptoError, PacketNonce, SessionKeys};
 use thiserror::Error;
+use std::time::{Duration, Instant};
+
+struct PreviousPhase {
+    key_phase: u32,
+    keys: SessionKeys,
+    replay: ReplayWindow,
+    expires_at: Instant,
+}
+
 pub struct ProtectedSession {
     session_id: SessionId,
     key_phase: u32,
     next_send_sequence: u64,
     receive_replay: ReplayWindow,
     keys: SessionKeys,
+    created_at: Instant,
+    previous: Option<PreviousPhase>,
 }
 
 impl ProtectedSession {
@@ -19,6 +30,19 @@ impl ProtectedSession {
             next_send_sequence: 0,
             receive_replay: ReplayWindow::default(),
             keys,
+            created_at: Instant::now(),
+            previous: None,
+        }
+    }
+
+    pub fn inherit_previous(&mut self, previous: &ProtectedSession) {
+        if previous.session_id == self.session_id && previous.key_phase < self.key_phase {
+            self.previous = Some(PreviousPhase {
+                key_phase: previous.key_phase,
+                keys: previous.keys.clone(),
+                replay: previous.receive_replay.clone(),
+                expires_at: Instant::now() + Duration::from_secs(15),
+            });
         }
     }
 
@@ -30,8 +54,18 @@ impl ProtectedSession {
         self.key_phase
     }
 
-    pub const fn should_rekey(&self, packet_limit: u64) -> bool {
-        self.next_send_sequence >= packet_limit
+    pub fn should_rekey(&self, packet_limit: u64) -> bool {
+        (packet_limit > 0 && self.next_send_sequence >= packet_limit)
+            || self.created_at.elapsed() >= Duration::from_secs(120)
+    }
+
+    pub fn should_rekey_with_policy(
+        &self,
+        packet_limit: u64,
+        time_limit: Option<Duration>,
+    ) -> bool {
+        (packet_limit > 0 && self.next_send_sequence >= packet_limit)
+            || time_limit.is_some_and(|limit| self.created_at.elapsed() >= limit)
     }
 
     pub fn seal(&mut self, kind: PacketKind, plaintext: &[u8]) -> Result<Packet, SessionError> {
@@ -64,6 +98,17 @@ impl ProtectedSession {
             return Err(SessionError::UnexpectedSession);
         }
         if packet.header.key_phase != self.key_phase {
+            if let Some(prev) = &mut self.previous {
+                if prev.key_phase == packet.header.key_phase && Instant::now() <= prev.expires_at {
+                    let plaintext = prev.keys.open(
+                        PacketNonce::from_sequence(packet.header.key_phase, packet.header.sequence),
+                        &packet.header.encode(),
+                        &packet.payload,
+                    )?;
+                    prev.replay.check_and_record(packet.header.sequence)?;
+                    return Ok(plaintext);
+                }
+            }
             return Err(SessionError::UnexpectedKeyPhase(packet.header.key_phase));
         }
         let plaintext = self.keys.open(

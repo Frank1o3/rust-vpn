@@ -343,6 +343,11 @@ pub fn finish_pending(
         !stale
     });
 
+    let mut session = session;
+    if let Some(existing) = active.get(&id) {
+        session.inherit_previous(&existing.session);
+    }
+
     let name = identity.name.clone();
     active.insert(id, ActivePeer::new(identity, session, endpoint));
     tracing::info!(%name, session_id = ?id, %endpoint, "authenticated RVPN peer established");

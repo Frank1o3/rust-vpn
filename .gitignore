@@ -1,2 +1,6 @@
 target/
 .gradle/
+local.properties
+*.keystore
+*.jks
+**/jniLibs/

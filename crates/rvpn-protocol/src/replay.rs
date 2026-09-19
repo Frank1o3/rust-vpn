@@ -3,7 +3,7 @@ use thiserror::Error;
 const WORDS: usize = 32;
 const WINDOW: u64 = (WORDS as u64) * 64;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ReplayWindow {
     highest: Option<u64>,
     seen: [u64; WORDS],
