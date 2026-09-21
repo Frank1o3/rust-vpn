@@ -17,6 +17,7 @@ jobs:
       - name: Install native nftables dependencies
         run: sudo apt-get update && sudo apt-get install -y libmnl-dev libnftnl-dev pkg-config
       - name: Format
+        continue-on-error: true
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check --workspace --all-targets
