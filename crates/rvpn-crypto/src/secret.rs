@@ -29,3 +29,15 @@ pub fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
 }
 
 
+
+impl<const N: usize> Drop for Secret<N> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl<const N: usize> core::fmt::Debug for Secret<N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Secret([REDACTED])")
+    }
+}
