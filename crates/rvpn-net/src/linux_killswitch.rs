@@ -64,8 +64,8 @@ fn add_interface_accept(
 }
 
 fn add_endpoint_accept(
-    batch: &mut Batch<'_>,
-    chain: &Chain<'_>,
+    batch: &mut Batch,
+    chain: &Chain,
     uid: u32,
     endpoint: SocketAddr,
 ) -> Result<(), NetError> {
@@ -97,7 +97,7 @@ fn add_endpoint_accept(
     Ok(())
 }
 
-fn add_uid_drop(batch: &mut Batch<'_>, chain: &Chain<'_>, uid: u32) {
+fn add_uid_drop(batch: &mut Batch, chain: &Chain, uid: u32) {
     let mut rule = Rule::new(chain);
     rule.add_expr(&nft_expr!(meta skuid));
     rule.add_expr(&nft_expr!(cmp == uid));
@@ -129,7 +129,7 @@ fn delete_table(uid: u32) -> Result<(), NetError> {
     }
 }
 
-fn send_batch(batch: &Batch<'_>) -> Result<(), NetError> {
+fn send_batch(batch: &Batch) -> Result<(), NetError> {
     let finalized = batch.finalize();
     let socket = mnl::Socket::new(mnl::Bus::Netfilter)
         .map_err(|e| NetError::Operation(e.to_string()))?;
