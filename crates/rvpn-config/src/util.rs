@@ -102,7 +102,8 @@ pub fn default_server_config_path() -> PathBuf {
 }
 
 
-pub fn read_config_file(path: &std::path::Path) -> Result<String, ConfigError> {
+pub fn read_config_file(path: impl AsRef<std::path::Path>) -> Result<String, ConfigError> {
+    let path = path.as_ref();
     let metadata = std::fs::metadata(path).map_err(ConfigError::Io)?;
 
     #[cfg(unix)]
