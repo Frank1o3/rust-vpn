@@ -1,7 +1,7 @@
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{CryptoError, Secret};
-use crate::KEY_LEN;
+use crate::constants::KEY_LEN;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicKeyBytes([u8; KEY_LEN]);
