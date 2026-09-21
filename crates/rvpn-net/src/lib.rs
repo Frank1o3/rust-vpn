@@ -2,6 +2,7 @@ use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 
+#[cfg(not(target_os = "linux"))]
 mod unsupported;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -53,6 +54,7 @@ pub struct KillSwitchSpec {
     pub uid: u32,
 }
 
+#[allow(async_fn_in_trait)]
 pub trait NetConfigurator: Send + Sync {
     async fn interface_index(&self, name: &str) -> Result<u32, NetError>;
     async fn set_link_up(&self, name: &str) -> Result<(), NetError>;
