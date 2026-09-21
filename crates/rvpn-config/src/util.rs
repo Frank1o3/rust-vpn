@@ -100,3 +100,18 @@ pub fn default_client_config_path() -> PathBuf {
 pub fn default_server_config_path() -> PathBuf {
     default_config_dir().join("server.toml")
 }
+
+
+pub fn read_config_file(path: &std::path::Path) -> Result<String, ConfigError> {
+    let metadata = std::fs::metadata(path).map_err(ConfigError::Io)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(ConfigError::InsecurePermissions(path.to_path_buf()));
+        }
+    }
+
+    std::fs::read_to_string(path).map_err(ConfigError::Io)
+}
