@@ -283,7 +283,13 @@ pub(crate) async fn run_client(
                 )
                 .await
                 {
-                    Ok(Some(new_session)) => {
+                    Ok(Some((new_session, new_server))) => {
+                        if new_server != server {
+                            refresh_client_endpoint(primary_dev, &config, server, new_server)
+                                .await
+                                .context("refreshing client network endpoint after reconnect")?;
+                            server = new_server;
+                        }
                         if let Some(state) = &gui_state {
                             let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                             state.connected(
