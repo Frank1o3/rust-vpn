@@ -41,7 +41,7 @@ fn main() -> Result<()> {
         .block_on(async move {
             match arg {
                 Some(path) if path != "--daemon" => {
-                    let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
+                    let config = ClientConfig::from_toml(&rvpn_config::read_config_file(&path)?)?;
                     run_client(config, None, None).await
                 }
                 _ => {
