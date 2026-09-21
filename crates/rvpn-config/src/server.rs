@@ -5,7 +5,8 @@ use std::{
     net::SocketAddr,
 };
 
-use crate::{decode_certificate, decode_psk, validate_endpoint, validate_psk, ConfigError};
+use crate::util::{decode_certificate, decode_psk, validate_endpoint, validate_psk};
+use crate::ConfigError;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
