@@ -45,7 +45,7 @@ impl EphemeralKeyPair {
     }
 }
 
-pub struct SharedSecret(Secret<KEY_LEN>);
+pub struct SharedSecret(pub(crate) Secret<KEY_LEN>);
 
 impl core::fmt::Debug for SharedSecret {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
