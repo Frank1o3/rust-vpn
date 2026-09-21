@@ -11,9 +11,9 @@ obfuscation_key="cc8a4e6e1af2fbe6d77330c68a4fe6edcb08da4585fd549058b8230f59aae91
     name="rvpn-server0"
 
 [forwarding]
-    backend="iptables"
+    backend="auto"
     enabled=true
-    external_interface="enp0s31f6"
+    external_interface="eno1"
     tunnel_cidr="10.42.0.0/24"
     tunnel_cidr_v6="fd42::/64"
 

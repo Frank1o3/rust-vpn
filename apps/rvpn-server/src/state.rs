@@ -1,14 +1,9 @@
-use ipnet::IpNet;
 use rvpn_config::{CertificateAuthorityConfig, PeerIdentity};
 use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    time::Instant,
-};
+use std::{collections::HashMap, net::SocketAddr, time::Instant};
 
 pub struct ActivePeer {
     pub identity: PeerIdentity,
@@ -65,10 +60,6 @@ pub async fn close_all(
                 .await;
         }
     }
-}
-
-pub fn ip_in_prefixes(prefixes: &[IpNet], address: IpAddr) -> bool {
-    prefixes.is_empty() || prefixes.iter().any(|prefix| prefix.contains(&address))
 }
 
 #[cfg(test)]

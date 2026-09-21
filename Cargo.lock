@@ -2387,6 +2387,7 @@ dependencies = [
  "rvpn-crypto",
  "rvpn-interface",
  "rvpn-protocol",
+ "rvpn-routing",
  "rvpn-transport",
  "tokio",
  "tracing",

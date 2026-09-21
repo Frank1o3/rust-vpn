@@ -1,9 +1,13 @@
 use anyhow::Result;
-use rvpn_config::{CertificateAuthorityConfig, DeviceMode, PeerIdentity, ServerConfig};
+use rvpn_config::{CertificateAuthorityConfig, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_interface::{InterfaceError, VirtualInterface};
 use rvpn_protocol::{HandshakeMessage, Packet, PacketKind};
+use rvpn_routing::{
+    DropReason, Links, Router, Verdict,
+    packet::{ethernet_payload_ip, packet_destination, packet_source, prepare_forward},
+};
 use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -15,11 +19,7 @@ use crate::handshake::{
     begin_initial, begin_rekey, challenge_or_admit, finish_pending, maybe_send_rekey,
     retransmit_pending,
 };
-use crate::network::{
-    ethernet_payload_ip, ethernet_src_mac, is_broadcast_or_multicast_mac, packet_destination,
-    packet_source,
-};
-use crate::state::{ActivePeer, PendingHandshake, close_all, ip_in_prefixes};
+use crate::state::{ActivePeer, PendingHandshake, close_all};
 
 const MAX_CONSECUTIVE_RECV_ERRORS: u32 = 50;
 
@@ -97,13 +97,159 @@ async fn inject(device: &VirtualInterface, frame: &[u8], peer: &str) {
     }
 }
 
+/// Registers every active session the router does not know about yet.
+///
+/// Rekeys reuse the session id, so an already-registered session is left
+/// alone; re-registering would throw away the MAC addresses it has learned.
+fn register_new_peers(router: &mut Router, active: &HashMap<SessionId, ActivePeer>) {
+    for (id, peer) in active {
+        if !router.contains(*id) {
+            router.register(
+                *id,
+                peer.identity.name.clone(),
+                peer.identity.allowed_ips.clone(),
+            );
+            tracing::debug!(peer = %peer.identity.name, session_id = ?id, "registered peer with router");
+        }
+    }
+}
+
+/// A peer with no `allowed_ips` (the legacy single-PSK setup) owns no prefix
+/// in the router, so it receives every packet the router cannot place.
+fn catch_all_peer(active: &HashMap<SessionId, ActivePeer>) -> Option<SessionId> {
+    active
+        .iter()
+        .find(|(_, peer)| peer.identity.allowed_ips.is_empty())
+        .map(|(id, _)| *id)
+}
+
+fn log_drop(peer: &str, kind: PacketKind, payload: &[u8], reason: DropReason) {
+    match reason {
+        DropReason::SourceNotAllowed => {
+            let source = if kind == PacketKind::DataTap {
+                ethernet_payload_ip(payload, false)
+            } else {
+                packet_source(payload)
+            };
+            tracing::warn!(%peer, ?source, "discarding packet with unauthorized source address");
+        }
+        DropReason::MacConflict | DropReason::InvalidSourceMac | DropReason::TooManyMacs => {
+            tracing::warn!(%peer, reason = reason.as_str(), "discarding suspicious Ethernet frame");
+        }
+        _ => tracing::debug!(%peer, reason = reason.as_str(), "dropping packet"),
+    }
+}
+
+/// Everything needed to put a decrypted packet on the wire or a local device.
+struct DataPlane<'a> {
+    transport: &'a UdpTransport,
+    obfuscation: Option<&'a ObfuscationKey>,
+    outbound: &'a OutboundQueue,
+    tun: Option<&'a VirtualInterface>,
+    tap: Option<&'a VirtualInterface>,
+    rekey_packet_limit: u64,
+}
+
+impl DataPlane<'_> {
+    async fn send_to(
+        &self,
+        active: &mut HashMap<SessionId, ActivePeer>,
+        session_id: SessionId,
+        kind: PacketKind,
+        payload: &[u8],
+    ) {
+        let Some(peer) = active.get_mut(&session_id) else {
+            tracing::debug!(?session_id, "routing target is no longer active; dropping packet");
+            return;
+        };
+        maybe_rekey(
+            self.transport,
+            self.obfuscation,
+            peer,
+            self.rekey_packet_limit,
+        )
+        .await;
+        seal_and_queue(
+            peer,
+            kind,
+            payload,
+            self.obfuscation,
+            self.outbound,
+            self.transport,
+        );
+    }
+
+    async fn inject_ip(&self, packet: &[u8], peer: &str) {
+        match self.tun {
+            Some(device) => inject(device, packet, peer).await,
+            None => tracing::debug!(%peer, "no TUN device; dropping IP packet addressed to the server"),
+        }
+    }
+
+    async fn inject_frame(&self, frame: &[u8], peer: &str) {
+        if let Some(device) = self.tap.or(self.tun) {
+            inject(device, frame, peer).await;
+        }
+    }
+}
+
+/// Routes one authenticated, decrypted packet from `session_id`: to other
+/// peers this peer is linked with, to the server's own device, or nowhere.
+async fn route_inbound(
+    plane: &DataPlane<'_>,
+    router: &mut Router,
+    active: &mut HashMap<SessionId, ActivePeer>,
+    session_id: SessionId,
+    kind: PacketKind,
+    payload: &[u8],
+) {
+    let verdict = if kind == PacketKind::DataTap {
+        router.route_frame(session_id, payload)
+    } else {
+        router.route_ip(session_id, payload)
+    };
+    let peer_name = router.name(session_id).unwrap_or("unknown");
+
+    let delivery = match verdict {
+        Verdict::Forward(delivery) => delivery,
+        Verdict::Drop(reason) => {
+            log_drop(peer_name, kind, payload, reason);
+            return;
+        }
+    };
+
+    for target in delivery.peers {
+        if kind == PacketKind::DataTap {
+            plane
+                .send_to(active, target, PacketKind::DataTap, payload)
+                .await;
+        } else {
+            // Layer 3 forwarding: this hop consumes one TTL / hop limit.
+            let Some(forwarded) = prepare_forward(payload) else {
+                tracing::debug!(peer = %peer_name, "TTL expired while forwarding peer-to-peer; dropping");
+                continue;
+            };
+            plane
+                .send_to(active, target, PacketKind::Data, &forwarded)
+                .await;
+        }
+    }
+
+    if delivery.local {
+        if kind == PacketKind::DataTap {
+            plane.inject_frame(payload, peer_name).await;
+        } else {
+            plane.inject_ip(payload, peer_name).await;
+        }
+    }
+}
+
 pub async fn run_server_loop(
     transport: UdpTransport,
     config: ServerConfig,
     identities: Vec<PeerIdentity>,
     certificate_authority: Option<CertificateAuthorityConfig>,
     obfuscation: Option<ObfuscationKey>,
-    mode: DeviceMode,
     cookie_key: rvpn_crypto::CookieKey,
     tun: Option<VirtualInterface>,
     tap: Option<VirtualInterface>,
@@ -113,7 +259,14 @@ pub async fn run_server_loop(
     let obfuscation = obfuscation.as_ref();
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
     let mut pending: HashMap<SessionId, PendingHandshake> = HashMap::new();
-    let mut mac_table: HashMap<[u8; 6], SessionId> = HashMap::new();
+    let mut router = Router::new(Links::from_groups(
+        config.links.iter().map(|link| link.between.as_slice()),
+    ));
+    if config.links.is_empty() {
+        tracing::info!("no [[links]] configured; peers cannot reach each other");
+    } else {
+        tracing::info!(groups = config.links.len(), "peer-to-peer links loaded");
+    }
     let mut retry_sleep = Box::pin(sleep(rvpn_config::jittered_retry_interval(
         config.handshake.retry_interval_ms,
         config.handshake.retry_jitter_ms,
@@ -125,6 +278,15 @@ pub async fn run_server_loop(
     let mut recv_errors = 0u32;
 
     let result: Result<()> = async {
+        let plane = DataPlane {
+            transport: &transport,
+            obfuscation,
+            outbound: &outbound,
+            tun: tun.as_ref(),
+            tap: tap.as_ref(),
+            rekey_packet_limit: config.rekey.packet_limit,
+        };
+
         loop {
             tokio::select! {
                 signal = &mut shutdown_signal => {
@@ -153,7 +315,7 @@ pub async fn run_server_loop(
                             if let Some(peer) = active.remove(&id) {
                                 tracing::info!(peer = %peer.identity.name, session_id = ?id, idle_secs = timeout.as_secs(), "peer timed out; dropping session");
                             }
-                            mac_table.retain(|_, session| *session != id);
+                            router.unregister(id);
                         }
                     }
                 }
@@ -197,12 +359,13 @@ pub async fn run_server_loop(
                             continue;
                         }
                     };
-                    let Some(destination) = packet_destination(&outbound_pkt) else { continue; };
-                    if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
-                        maybe_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await;
-                        seal_and_queue(peer, PacketKind::Data, &outbound_pkt, obfuscation, &outbound, &transport);
-                    } else {
-                        tracing::debug!(%destination, "no RVPN peer owns outbound TUN destination");
+                    match router.route_from_local_ip(&outbound_pkt).or_else(|| catch_all_peer(&active)) {
+                        Some(target) => {
+                            plane.send_to(&mut active, target, PacketKind::Data, &outbound_pkt).await;
+                        }
+                        None => {
+                            tracing::debug!(destination = ?packet_destination(&outbound_pkt), "no RVPN peer owns outbound TUN destination");
+                        }
                     }
                 }
                 outbound_tap = async {
@@ -220,33 +383,8 @@ pub async fn run_server_loop(
                             continue;
                         }
                     };
-                    if outbound_frame.len() < 14 { continue; }
-                    let dst_mac: [u8; 6] = outbound_frame[0..6].try_into().unwrap();
-                    if is_broadcast_or_multicast_mac(&dst_mac) {
-                        for peer in active.values_mut() {
-                            maybe_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await;
-                            seal_and_queue(peer, PacketKind::DataTap, &outbound_frame, obfuscation, &outbound, &transport);
-                        }
-                    } else if let Some(target_session) = mac_table.get(&dst_mac) {
-                        if let Some(peer) = active.get_mut(target_session) {
-                            maybe_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await;
-                            seal_and_queue(peer, PacketKind::DataTap, &outbound_frame, obfuscation, &outbound, &transport);
-                        }
-                    } else {
-                        let dest_ip = ethernet_payload_ip(&outbound_frame, true);
-                        let mut sent = false;
-                        if let Some(destination) = dest_ip {
-                            if let Some((_, peer)) = active.iter_mut().find(|(_, peer)| ip_in_prefixes(&peer.identity.allowed_ips, destination)) {
-                                maybe_rekey(&transport, obfuscation, peer, config.rekey.packet_limit).await;
-                                seal_and_queue(peer, PacketKind::DataTap, &outbound_frame, obfuscation, &outbound, &transport);
-                                sent = true;
-                            }
-                        }
-                        if !sent {
-                            for peer in active.values_mut() {
-                                seal_and_queue(peer, PacketKind::DataTap, &outbound_frame, obfuscation, &outbound, &transport);
-                            }
-                        }
+                    for target in router.route_from_local_frame(&outbound_frame) {
+                        plane.send_to(&mut active, target, PacketKind::DataTap, &outbound_frame).await;
                     }
                 }
 
@@ -299,8 +437,9 @@ pub async fn run_server_loop(
                         }
                         PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
                             for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet) {
-                                mac_table.retain(|_, session| *session != evicted);
+                                router.unregister(evicted);
                             }
+                            register_new_peers(&mut router, &active);
                         }
                         PacketKind::Rekey => {
                             if let Some(current) = active.get(&packet.header.session_id) {
@@ -342,58 +481,23 @@ pub async fn run_server_loop(
                             match peer.session.open(packet) {
                                 Ok(plaintext) => {
                                     peer.last_rx = std::time::Instant::now();
-                                    match packet_kind {
-                                        PacketKind::DataTap => {
-                                            if let Some(source) = ethernet_payload_ip(&plaintext, false) {
-                                                if !ip_in_prefixes(&peer.identity.allowed_ips, source) {
-                                                    tracing::warn!(peer = %peer.identity.name, %source, "discarding TAP packet with unauthorized source address");
-                                                    continue;
-                                                }
-                                            }
-                                            if let Some(src_mac) = ethernet_src_mac(&plaintext) {
-                                                mac_table.insert(src_mac, session_id);
-                                            }
-                                            if peer.endpoint != datagram.peer {
-                                                tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
-                                                peer.endpoint = datagram.peer;
-                                            }
-                                            if let Some(t) = &tap {
-                                                inject(t, &plaintext, &peer.identity.name).await;
-                                            } else if let Some(t) = &tun {
-                                                inject(t, &plaintext, &peer.identity.name).await;
-                                            }
-                                        }
-                                        PacketKind::Data => {
-                                            if plaintext.is_empty() {
-                                                continue;
-                                            }
-                                            if mode == DeviceMode::Tap && tap.is_some() && tun.is_none() {
-                                                if let Some(t) = &tap {
-                                                    inject(t, &plaintext, &peer.identity.name).await;
-                                                }
-                                            } else {
-                                                let Some(source) = packet_source(&plaintext) else { continue; };
-                                                if !ip_in_prefixes(&peer.identity.allowed_ips, source) {
-                                                    tracing::warn!(peer = %peer.identity.name, %source, "discarding packet with unauthorized source address");
-                                                    continue;
-                                                }
-                                                if peer.endpoint != datagram.peer {
-                                                    tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
-                                                    peer.endpoint = datagram.peer;
-                                                }
-                                                if let Some(t) = &tun {
-                                                    inject(t, &plaintext, &peer.identity.name).await;
-                                                }
-                                            }
-                                        }
-                                        PacketKind::Close => {
-                                            let name = peer.identity.name.clone();
-                                            active.remove(&session_id);
-                                            mac_table.retain(|_, s_id| *s_id != session_id);
-                                            tracing::info!(%name, "peer closed session");
-                                        }
-                                        _ => {}
+                                    if packet_kind == PacketKind::Close {
+                                        let name = peer.identity.name.clone();
+                                        active.remove(&session_id);
+                                        router.unregister(session_id);
+                                        tracing::info!(%name, "peer closed session");
+                                        continue;
                                     }
+                                    // Legacy empty-Data keepalives from an older packet format.
+                                    if packet_kind == PacketKind::Data && plaintext.is_empty() {
+                                        continue;
+                                    }
+                                    // The packet authenticated, so this is a valid roam.
+                                    if peer.endpoint != datagram.peer {
+                                        tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
+                                        peer.endpoint = datagram.peer;
+                                    }
+                                    route_inbound(&plane, &mut router, &mut active, session_id, packet_kind, &plaintext).await;
                                 }
                                 Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed packet"),
                             }

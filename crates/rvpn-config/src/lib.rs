@@ -15,6 +15,14 @@ pub struct Config {
     pub identity_file: Option<PathBuf>,
 }
 
+/// A peer-to-peer link group: every peer named in `between` may exchange
+/// traffic with every other peer in the same group. Symmetric by construction.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkConfig {
+    pub between: Vec<String>,
+}
+
 impl Config {
     pub fn from_toml(input: &str) -> Result<Self, ConfigError> {
         let config: Self = toml::from_str(input).map_err(ConfigError::Parse)?;
@@ -168,6 +176,8 @@ pub struct ServerConfig {
     pub pre_shared_key: Option<String>,
     #[serde(default)]
     pub peers: Vec<ServerPeerConfig>,
+    #[serde(default)]
+    pub links: Vec<LinkConfig>,
     pub certificate_authority: Option<CertificateAuthorityConfig>,
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -204,6 +214,7 @@ impl ServerConfig {
                 ca.validate()?;
             }
         }
+        self.validate_links()?;
         self.interface
             .validate()
             .and_then(|_| self.handshake.validate())
@@ -231,6 +242,31 @@ impl ServerConfig {
             allowed_ips: Vec::new(),
             auth: rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?),
         }])
+    }
+    fn validate_links(&self) -> Result<(), ConfigError> {
+        let mut names = std::collections::HashSet::new();
+        for peer in &self.peers {
+            if !names.insert(peer.name.as_str()) {
+                return Err(ConfigError::DuplicatePeerName(peer.name.clone()));
+            }
+        }
+        for link in &self.links {
+            let mut members = std::collections::HashSet::new();
+            for name in &link.between {
+                let known = names.contains(name.as_str())
+                    || (self.certificate_authority.is_some() && name.starts_with("cert:"));
+                if !known {
+                    return Err(ConfigError::UnknownLinkPeer(name.clone()));
+                }
+                members.insert(name.as_str());
+            }
+            if members.len() < 2 {
+                return Err(ConfigError::Invalid(
+                    "each [[links]] entry needs `between` to name at least two distinct peers",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -719,6 +755,10 @@ pub enum ConfigError {
     },
     #[error("server endpoint '{0}' did not resolve to any address")]
     NoResolvedAddress(String),
+    #[error("[[links]] references unknown peer '{0}'")]
+    UnknownLinkPeer(String),
+    #[error("duplicate peer name '{0}'; peer names must be unique so links are unambiguous")]
+    DuplicatePeerName(String),
 }
 
 /// Base directory for RVPN's own config files: `$XDG_CONFIG_HOME/rvpn`,
@@ -926,5 +966,53 @@ gateway_v6 = 'fd42::1'
         config
             .validate_resolved("127.0.0.1:9000".parse().unwrap())
             .unwrap();
+    }
+
+    fn two_peer_toml(links: &str) -> String {
+        format!(
+            "bind = '0.0.0.0:9000'\n\
+             [[peers]]\nname = 'laptop'\npre_shared_key = '{p}'\nallowed_ips = ['10.42.0.2/32']\n\
+             [[peers]]\nname = 'phone'\npre_shared_key = '{p}'\nallowed_ips = ['10.42.0.3/32']\n{links}",
+            p = psk()
+        )
+    }
+
+    #[test]
+    fn parses_links_between_peers() {
+        let config =
+            ServerConfig::from_toml(&two_peer_toml("[[links]]\nbetween = ['laptop', 'phone']"))
+                .unwrap();
+        assert_eq!(config.links.len(), 1);
+        assert_eq!(config.links[0].between, ["laptop", "phone"]);
+        assert!(
+            ServerConfig::from_toml(&two_peer_toml(""))
+                .unwrap()
+                .links
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rejects_bad_links_and_duplicate_peer_names() {
+        assert!(matches!(
+            ServerConfig::from_toml(&two_peer_toml("[[links]]\nbetween = ['laptop', 'nobody']")),
+            Err(ConfigError::UnknownLinkPeer(name)) if name == "nobody"
+        ));
+        assert!(
+            ServerConfig::from_toml(&two_peer_toml("[[links]]\nbetween = ['laptop']")).is_err()
+        );
+        assert!(
+            ServerConfig::from_toml(&two_peer_toml("[[links]]\nbetween = ['laptop', 'laptop']"))
+                .is_err()
+        );
+
+        let dup = format!(
+            "bind = '0.0.0.0:9000'\n[[peers]]\nname = 'a'\npre_shared_key = '{p}'\nallowed_ips = ['10.42.0.2/32']\n[[peers]]\nname = 'a'\npre_shared_key = '{p}'\nallowed_ips = ['10.42.0.3/32']",
+            p = psk()
+        );
+        assert!(matches!(
+            ServerConfig::from_toml(&dup),
+            Err(ConfigError::DuplicatePeerName(_))
+        ));
     }
 }

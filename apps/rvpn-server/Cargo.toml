@@ -16,6 +16,7 @@
     rvpn-interface={path="../../crates/rvpn-interface"}
     rvpn-protocol={path="../../crates/rvpn-protocol"}
     rvpn-transport={path="../../crates/rvpn-transport"}
+    rvpn-routing={path="../../crates/rvpn-routing"}
     tokio.workspace=true
     tracing.workspace=true
     tracing-subscriber.workspace=true

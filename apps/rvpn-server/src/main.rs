@@ -131,7 +131,6 @@ async fn main() -> Result<()> {
         identities,
         certificate_authority,
         obfuscation,
-        mode,
         cookie_key,
         tun,
         tap,

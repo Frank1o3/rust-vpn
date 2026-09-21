@@ -77,3 +77,19 @@ retry_limit = 5
 [rekey]
 packet_limit = 1048576 # zero disables automatic rotation
 ```
+
+### Peer-to-peer links
+
+By default peers are isolated: they can reach the server and the internet
+(when forwarding is on) but not each other. To let peers talk directly, add
+link groups. Each group is symmetric and every member can reach every other:
+
+```toml
+    [[links]]
+    between = ["laptop", "phone"]
+```
+
+Names must match `[[peers]]` entries (or `cert:<subject-prefix>` when using a
+certificate authority). Packets are checked against the sender's `allowed_ips`
+before delivery, and forwarded IP packets lose one TTL/hop-limit. Peer-to-peer
+traffic is forwarded inside RVPN and never touches the server's firewall.
