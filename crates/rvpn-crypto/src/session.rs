@@ -5,9 +5,10 @@ use chacha20poly1305::{
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::{
-    CryptoError, Secret,
+    CryptoError, Secret, SharedSecret,
     constants::{INFO_C2S, INFO_S2C, KEY_LEN, NONCE_LEN, PSK_LEN},
 };
 
