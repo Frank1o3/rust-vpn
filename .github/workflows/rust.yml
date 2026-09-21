@@ -1,4 +1,4 @@
-name: Rust
+name: RVPN Rust CI
 
 on:
   push:
