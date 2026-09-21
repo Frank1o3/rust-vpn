@@ -260,7 +260,7 @@ pub async fn refresh_client_endpoint(
 ) -> Result<()> {
     let net = SystemNet::new().context("opening Linux rtnetlink connection")?;
     if old_server.ip() != new_server.ip() {
-        remove_server_route(&net, old_server).await;
+        remove_endpoint_route(&net, old_server).await;
     }
     if config.routing.default_route || config.routing.default_route_v6 {
         let uid = unsafe { libc::geteuid() };
@@ -276,7 +276,7 @@ pub async fn refresh_client_endpoint(
     Ok(())
 }
 
-async fn remove_server_route(net: &SystemNet, server: SocketAddr) {
+async fn remove_endpoint_route(net: &SystemNet, server: SocketAddr) {
     let Ok(best) = net.best_route_to(server.ip()).await else {
         return;
     };
