@@ -16,5 +16,5 @@ pub use network::{
 pub use server::{CertificateAuthorityConfig, PeerIdentity, ServerConfig, ServerPeerConfig};
 pub use util::{
     default_client_config_path, default_config_dir, default_server_config_path,
-    jittered_retry_interval, resolve_endpoint, validate_endpoint_syntax,
+    jittered_retry_interval, read_config_file, resolve_endpoint, validate_endpoint_syntax,
 };
