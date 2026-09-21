@@ -10,7 +10,7 @@ use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{env, fs};
+use std::env;
 
 use firewall::ForwardingGuard;
 use network::configure_server_interface;
