@@ -9,6 +9,7 @@
     anyhow.workspace=true
     bytes.workspace=true
     libc.workspace=true
+    ipnet.workspace=true
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}
