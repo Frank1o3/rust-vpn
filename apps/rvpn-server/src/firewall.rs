@@ -28,7 +28,7 @@ pub struct ForwardingGuard {
 }
 
 impl ForwardingGuard {
-    pub async fn install(config: &ForwardingConfig, tunnel: &str) -> Result<Self> {
+    pub async fn install(config: &ForwardingConfig, tunnel: &str, mtu: u16) -> Result<Self> {
         let mut guard = Self {
             sysctls: Vec::new(),
             cleanup: Vec::new(),
@@ -61,10 +61,10 @@ impl ForwardingGuard {
         };
 
         if use_nft {
-            guard.install_nftables(config, tunnel, external).await?;
+            guard.install_nftables(config, tunnel, external, mtu).await?;
             tracing::info!(backend = "nftables", "installed RVPN firewall rules");
         } else {
-            guard.install_iptables(config, tunnel, external).await?;
+            guard.install_iptables(config, tunnel, external, mtu).await?;
             tracing::info!(backend = "iptables", "installed RVPN firewall rules");
         }
         Ok(guard)
@@ -91,6 +91,7 @@ impl ForwardingGuard {
         config: &ForwardingConfig,
         tunnel: &str,
         external: &str,
+        mtu: u16,
     ) -> Result<()> {
         let _ = run("nft", ["delete", "table", "inet", "rvpn"]).await;
         run("nft", ["add", "table", "inet", "rvpn"]).await?;
@@ -99,7 +100,38 @@ impl ForwardingGuard {
             &["delete", "table", "inet", "rvpn"],
         ));
 
+        let mss_v4 = mtu.saturating_sub(40).max(536);
+        let mss_v6 = mtu.saturating_sub(60).max(1220);
+
         let mut rules: Vec<Vec<&str>> = vec![
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", tunnel, "oifname", external,
+                "meta", "nfproto", "ipv4",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", tunnel, "oifname", external,
+                "meta", "nfproto", "ipv6",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", external, "oifname", tunnel,
+                "meta", "nfproto", "ipv4",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", external, "oifname", tunnel,
+                "meta", "nfproto", "ipv6",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
+            ],
             vec![
                 "add", "chain", "inet", "rvpn", "forward", "{", "type", "filter", "hook",
                 "forward", "priority", "filter;", "policy", "accept;", "}",
@@ -188,11 +220,11 @@ impl ForwardingGuard {
         external: &str,
     ) -> Result<()> {
         if let Some(cidr) = &config.tunnel_cidr {
-            self.install_iptables_family("iptables", tunnel, external, cidr)
+            self.install_iptables_family("iptables", tunnel, external, cidr, mtu)
                 .await?;
         }
         if let Some(cidr) = &config.tunnel_cidr_v6 {
-            self.install_iptables_family("ip6tables", tunnel, external, cidr)
+            self.install_iptables_family("ip6tables", tunnel, external, cidr, mtu)
                 .await?;
         }
         Ok(())
@@ -204,6 +236,7 @@ impl ForwardingGuard {
         tunnel: &str,
         external: &str,
         cidr: &str,
+        mtu: u16,
     ) -> Result<()> {
         let rules: [(Option<&str>, &str, Vec<&str>); 3] = [
             (
@@ -231,6 +264,24 @@ impl ForwardingGuard {
                 Some("nat"),
                 "POSTROUTING",
                 vec!["-s", cidr, "-o", external, "-j", "MASQUERADE"],
+            ),
+            (
+                Some("mangle"),
+                "FORWARD",
+                vec![
+                    "-i", tunnel, "-o", external, "-p", "tcp",
+                    "--tcp-flags", "SYN,RST", "SYN",
+                    "-j", "TCPMSS", "--set-mss", &mss_value,
+                ],
+            ),
+            (
+                Some("mangle"),
+                "FORWARD",
+                vec![
+                    "-i", external, "-o", tunnel, "-p", "tcp",
+                    "--tcp-flags", "SYN,RST", "SYN",
+                    "-j", "TCPMSS", "--set-mss", &mss_value,
+                ],
             ),
         ];
 
