@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
 
     let primary_dev = tun.as_ref().or(tap.as_ref()).expect("at least one device");
     configure_server_interface(primary_dev, &config).await?;
-    let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name()).await?;
+    let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name(), mtu).await?;
 
     tracing::info!(
         bind = %transport.local_addr()?,
