@@ -12,7 +12,7 @@ use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
 use std::{
-    env, fs,
+    env,
     future::Future,
     net::SocketAddr,
     pin::Pin,
