@@ -160,14 +160,57 @@ pub async fn establish(
         },
         payload: finish.encode(),
     };
+    let mut new_session = new_session;
     for attempt in 1..=policy.retry_limit {
         let wire = wrap(finish_packet.encode(), obfuscation)?;
         transport
             .send_to(server, wire, SendOptions::default())
             .await?;
-        if attempt != policy.retry_limit {
-            sleep(Duration::from_millis(policy.retry_jitter_ms)).await;
+
+        let deadline = Instant::now()
+            + Duration::from_millis(policy.retry_interval_ms.max(1) + policy.retry_jitter_ms);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match timeout(remaining, transport.receive()).await {
+                Ok(Ok(datagram)) if datagram.peer == server => {
+                    let payload = match obfuscation {
+                        Some(key) => match key.unwrap(&datagram.payload) {
+                            Ok(payload) => payload,
+                            Err(_) => continue,
+                        },
+                        None => datagram.payload,
+                    };
+                    let Ok(packet) = Packet::decode(payload) else {
+                        continue;
+                    };
+                    if packet.header.session_id != new_session.session_id()
+                        || packet.header.kind != PacketKind::Keepalive
+                    {
+                        continue;
+                    }
+                    if new_session.open(packet).is_ok() {
+                        return Ok(new_session);
+                    }
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(error)) => return Err(error.into()),
+                Err(_) => break,
+            }
         }
+
+        tracing::debug!(
+            attempt,
+            %server,
+            "handshake finish acknowledgment timed out; retransmitting finish"
+        );
     }
-    Ok(new_session)
+
+    bail!(
+        "RVPN handshake finish was not acknowledged after {} attempts to {}",
+        policy.retry_limit,
+        server
+    )
 }
