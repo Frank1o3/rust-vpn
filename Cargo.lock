@@ -2423,6 +2423,7 @@ version = "0.2.9"
 dependencies = [
  "anyhow",
  "bytes",
+ "ipnet",
  "libc",
  "rvpn-config",
  "rvpn-core",

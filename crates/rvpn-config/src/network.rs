@@ -290,8 +290,6 @@ impl InterfaceConfig {
     }
 }
 
-
-
 pub(crate) trait ConfigValidation {
     fn validate(&self) -> Result<(), ConfigError>;
 }

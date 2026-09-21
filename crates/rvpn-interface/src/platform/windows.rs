@@ -145,7 +145,10 @@ impl Drop for VirtualInterface {
 
         if let Some(reader) = self.reader.take() {
             if let Err(error) = reader.join() {
-                tracing::debug!(?error, "failed to join Wintun receive thread during device drop");
+                tracing::debug!(
+                    ?error,
+                    "failed to join Wintun receive thread during device drop"
+                );
             }
         }
 

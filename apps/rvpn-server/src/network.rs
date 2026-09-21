@@ -24,4 +24,3 @@ pub async fn configure_server_interface(
     }
     Ok(())
 }
-

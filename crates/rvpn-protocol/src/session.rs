@@ -2,8 +2,8 @@ use crate::{Header, Packet, PacketKind, ProtocolError, ReplayError, ReplayWindow
 use bytes::Bytes;
 use rvpn_core::SessionId;
 use rvpn_crypto::{CryptoError, PacketNonce, SessionKeys};
-use thiserror::Error;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 
 struct PreviousPhase {
     key_phase: u32,

@@ -23,12 +23,13 @@ async fn main() -> Result<()> {
         .nth(1)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(rvpn_config::default_server_config_path);
-    let config = ServerConfig::from_toml(&rvpn_config::read_config_file(&path).with_context(|| {
-        format!(
-            "reading {} (pass a path as the first argument to override)",
-            path.display()
-        )
-    })?)?;
+    let config =
+        ServerConfig::from_toml(&rvpn_config::read_config_file(&path).with_context(|| {
+            format!(
+                "reading {} (pass a path as the first argument to override)",
+                path.display()
+            )
+        })?)?;
     let identities = config.peer_identities()?;
     let certificate_authority = config.certificate_authority.clone();
     let obfuscation = config

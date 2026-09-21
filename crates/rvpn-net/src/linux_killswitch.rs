@@ -1,11 +1,6 @@
 use crate::{KillSwitchSpec, NetError};
-use nftnl::{
-    Batch, Chain, ChainType, Policy, ProtoFamily, Rule, Table, nft_expr,
-};
-use std::{
-    ffi::CStr,
-    net::SocketAddr,
-};
+use nftnl::{Batch, Chain, ChainType, Policy, ProtoFamily, Rule, Table, nft_expr};
+use std::{ffi::CStr, net::SocketAddr};
 
 const CHAIN_NAME: &CStr = c"output";
 const OUTPUT_HOOK_PRIORITY: i32 = -100;
@@ -131,8 +126,8 @@ fn delete_table(uid: u32) -> Result<(), NetError> {
 
 fn send_batch(batch: Batch) -> Result<(), NetError> {
     let finalized = batch.finalize();
-    let socket = mnl::Socket::new(mnl::Bus::Netfilter)
-        .map_err(|e| NetError::Operation(e.to_string()))?;
+    let socket =
+        mnl::Socket::new(mnl::Bus::Netfilter).map_err(|e| NetError::Operation(e.to_string()))?;
     let portid = socket.portid();
 
     socket
@@ -147,13 +142,11 @@ fn send_batch(batch: Batch) -> Result<(), NetError> {
             .recv(&mut buffer)
             .map_err(|e| NetError::Operation(e.to_string()))?
         {
-            let message =
-                message.map_err(|e| NetError::Operation(e.to_string()))?;
+            let message = message.map_err(|e| NetError::Operation(e.to_string()))?;
             let seq = expected
                 .next()
                 .ok_or_else(|| NetError::Operation("unexpected nftables ACK".into()))?;
-            mnl::cb_run(message, seq, portid)
-                .map_err(|e| NetError::Operation(e.to_string()))?;
+            mnl::cb_run(message, seq, portid).map_err(|e| NetError::Operation(e.to_string()))?;
         }
     }
     Ok(())

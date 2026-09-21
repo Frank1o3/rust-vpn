@@ -136,5 +136,3 @@ fn crypt(
     };
     result.map(Bytes::from)
 }
-
-

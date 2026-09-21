@@ -19,4 +19,3 @@ pub enum CryptoError {
     #[error("invalid Ed25519 identity key encoding")]
     InvalidIdentityKey,
 }
-

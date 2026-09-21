@@ -1,7 +1,7 @@
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::{CryptoError, Secret};
 use crate::constants::KEY_LEN;
+use crate::{CryptoError, Secret};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PublicKeyBytes([u8; KEY_LEN]);
@@ -52,5 +52,3 @@ impl core::fmt::Debug for SharedSecret {
         f.write_str("SharedSecret([REDACTED])")
     }
 }
-
-

@@ -1,17 +1,14 @@
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-};
+use std::{collections::HashMap, net::SocketAddr};
 
+use crate::ConfigError;
 use crate::basic::{AuthMode, LinkConfig};
 use crate::network::{
     ConfigValidation, ForwardingConfig, HandshakeConfig, InterfaceConfig, LivenessConfig,
     RekeyConfig,
 };
 use crate::util::{decode_certificate, decode_psk, validate_endpoint, validate_psk};
-use crate::ConfigError;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -249,4 +246,3 @@ impl core::fmt::Debug for PeerIdentity {
             .finish()
     }
 }
-

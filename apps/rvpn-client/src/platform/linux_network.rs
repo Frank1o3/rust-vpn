@@ -49,7 +49,10 @@ pub async fn configure_client_network(
         })
         .await
         .context("installing persistent Linux kill switch")?;
-        tracing::info!(uid, "Linux RVPN kill switch is active before default routes are installed");
+        tracing::info!(
+            uid,
+            "Linux RVPN kill switch is active before default routes are installed"
+        );
     }
 
     if config.routing.default_route {
@@ -158,7 +161,11 @@ pub async fn teardown_client_network(
     };
 
     if config.routing.default_route {
-        let gateway = config.routing.gateway.as_deref().and_then(|s| s.parse().ok());
+        let gateway = config
+            .routing
+            .gateway
+            .as_deref()
+            .and_then(|s| s.parse().ok());
         let source = tunnel_source(config, false).ok();
         for destination in ["0.0.0.0/1", "128.0.0.0/1"] {
             if let Ok(destination) = destination.parse() {
@@ -176,7 +183,11 @@ pub async fn teardown_client_network(
     }
 
     if config.routing.default_route_v6 {
-        let gateway = config.routing.gateway_v6.as_deref().and_then(|s| s.parse().ok());
+        let gateway = config
+            .routing
+            .gateway_v6
+            .as_deref()
+            .and_then(|s| s.parse().ok());
         let source = tunnel_source(config, true).ok();
         for destination in ["::/1", "8000::/1"] {
             if let Ok(destination) = destination.parse() {
@@ -250,7 +261,6 @@ fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<IpAddr> {
             )
         })
 }
-
 
 pub async fn refresh_client_endpoint(
     dev: &VirtualInterface,

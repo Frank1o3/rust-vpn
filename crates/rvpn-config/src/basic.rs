@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 
+use crate::ConfigError;
 use crate::network::{
     ClientRoutingConfig, ConfigValidation, HandshakeConfig, InterfaceConfig, LivenessConfig,
     RekeyConfig,
 };
 use crate::util::{decode_certificate, decode_psk, validate_endpoint_syntax};
-use crate::ConfigError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -139,4 +139,3 @@ impl ClientConfig {
         self.obfuscation_key.as_deref().map(decode_psk).transpose()
     }
 }
-

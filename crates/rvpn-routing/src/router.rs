@@ -1,8 +1,8 @@
-use ipnet::IpNet;
 use crate::packet::{
     ETHERTYPE_ARP, ETHERTYPE_IPV4, ETHERTYPE_IPV6, Mac, ethernet_dst_mac, ethernet_payload_ip,
     ethernet_src_mac, ethertype, is_broadcast_or_multicast_mac, packet_destination, packet_source,
 };
+use ipnet::IpNet;
 use rvpn_core::SessionId;
 use std::{
     collections::{HashMap, HashSet},
@@ -239,9 +239,11 @@ impl Router {
         if !self.peers.contains_key(&from) {
             return Verdict::Drop(DropReason::UnknownSession);
         }
-        let (Some(dst_mac), Some(src_mac), Some(kind)) =
-            (ethernet_dst_mac(frame), ethernet_src_mac(frame), ethertype(frame))
-        else {
+        let (Some(dst_mac), Some(src_mac), Some(kind)) = (
+            ethernet_dst_mac(frame),
+            ethernet_src_mac(frame),
+            ethertype(frame),
+        ) else {
             return Verdict::Drop(DropReason::Malformed);
         };
         if is_broadcast_or_multicast_mac(&src_mac) {
@@ -312,4 +314,3 @@ impl Router {
         }
     }
 }
-

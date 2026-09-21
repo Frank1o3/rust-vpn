@@ -1,8 +1,4 @@
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use crate::ConfigError;
 
@@ -36,12 +32,13 @@ pub(crate) fn decode_certificate(value: &str) -> Result<[u8; 112], ConfigError> 
 }
 
 pub async fn resolve_endpoint(value: &str) -> Result<SocketAddr, ConfigError> {
-    let mut addrs = tokio::net::lookup_host(value)
-        .await
-        .map_err(|source| ConfigError::Resolution {
-            host: value.to_string(),
-            source,
-        })?;
+    let mut addrs =
+        tokio::net::lookup_host(value)
+            .await
+            .map_err(|source| ConfigError::Resolution {
+                host: value.to_string(),
+                source,
+            })?;
     addrs
         .next()
         .ok_or_else(|| ConfigError::NoResolvedAddress(value.to_string()))
@@ -100,7 +97,6 @@ pub fn default_client_config_path() -> PathBuf {
 pub fn default_server_config_path() -> PathBuf {
     default_config_dir().join("server.toml")
 }
-
 
 pub fn read_config_file(path: impl AsRef<std::path::Path>) -> Result<String, ConfigError> {
     let path = path.as_ref();

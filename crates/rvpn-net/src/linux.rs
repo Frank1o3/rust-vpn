@@ -1,6 +1,4 @@
-use crate::{
-    BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError, RouteSpec,
-};
+use crate::{BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError, RouteSpec};
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
@@ -56,20 +54,26 @@ impl SystemNet {
         .map_err(|e| NetError::Operation(e.to_string()))
     }
 
-    fn route_message(route: &RouteSpec) -> Result<rtnetlink::packet_route::route::RouteMessage, NetError> {
+    fn route_message(
+        route: &RouteSpec,
+    ) -> Result<rtnetlink::packet_route::route::RouteMessage, NetError> {
         match route.destination {
             IpNet::V4(net) => {
-                let mut builder =
-                    RouteMessageBuilder::<Ipv4Addr>::new().destination_prefix(net.addr(), net.prefix_len());
+                let mut builder = RouteMessageBuilder::<Ipv4Addr>::new()
+                    .destination_prefix(net.addr(), net.prefix_len());
                 if let Some(gateway) = route.gateway {
                     let IpAddr::V4(gateway) = gateway else {
-                        return Err(NetError::Operation("IPv4 route cannot use an IPv6 gateway".into()));
+                        return Err(NetError::Operation(
+                            "IPv4 route cannot use an IPv6 gateway".into(),
+                        ));
                     };
                     builder = builder.gateway(gateway);
                 }
                 if let Some(source) = route.source {
                     let IpAddr::V4(source) = source else {
-                        return Err(NetError::Operation("IPv4 route cannot use an IPv6 source".into()));
+                        return Err(NetError::Operation(
+                            "IPv4 route cannot use an IPv6 source".into(),
+                        ));
                     };
                     builder = builder.pref_source(source);
                 }
@@ -79,17 +83,21 @@ impl SystemNet {
                 Ok(builder.build())
             }
             IpNet::V6(net) => {
-                let mut builder =
-                    RouteMessageBuilder::<Ipv6Addr>::new().destination_prefix(net.addr(), net.prefix_len());
+                let mut builder = RouteMessageBuilder::<Ipv6Addr>::new()
+                    .destination_prefix(net.addr(), net.prefix_len());
                 if let Some(gateway) = route.gateway {
                     let IpAddr::V6(gateway) = gateway else {
-                        return Err(NetError::Operation("IPv6 route cannot use an IPv4 gateway".into()));
+                        return Err(NetError::Operation(
+                            "IPv6 route cannot use an IPv4 gateway".into(),
+                        ));
                     };
                     builder = builder.gateway(gateway);
                 }
                 if let Some(source) = route.source {
                     let IpAddr::V6(source) = source else {
-                        return Err(NetError::Operation("IPv6 route cannot use an IPv4 source".into()));
+                        return Err(NetError::Operation(
+                            "IPv6 route cannot use an IPv4 source".into(),
+                        ));
                     };
                     builder = builder.pref_source(source);
                 }
@@ -100,7 +108,6 @@ impl SystemNet {
             }
         }
     }
-
 }
 
 impl NetConfigurator for SystemNet {

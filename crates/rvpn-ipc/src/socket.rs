@@ -64,13 +64,10 @@ async fn create_listener() -> Result<Listener, IpcError> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(
-                    &path,
-                    std::fs::Permissions::from_mode(0o600),
-                ).await?;
+                tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await?;
             }
             Ok(listener)
-        },
+        }
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
             tokio::fs::remove_file(&path).await.ok();
             let name = path_str.as_str().to_fs_name::<GenericFilePath>()?;
@@ -78,10 +75,7 @@ async fn create_listener() -> Result<Listener, IpcError> {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(
-                    &path,
-                    std::fs::Permissions::from_mode(0o600),
-                ).await?;
+                tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await?;
             }
             Ok(listener)
         }

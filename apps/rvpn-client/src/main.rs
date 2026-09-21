@@ -11,14 +11,7 @@ use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{
-    env,
-    future::Future,
-    net::SocketAddr,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{env, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use handshake::establish;
 use platform::{configure_client_network, refresh_client_endpoint, teardown_client_network};
@@ -292,10 +285,7 @@ pub(crate) async fn run_client(
                         }
                         if let Some(state) = &gui_state {
                             let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                            state.connected(
-                                format!("{:?}", new_session.session_id()),
-                                mtu.into(),
-                            );
+                            state.connected(format!("{:?}", new_session.session_id()), mtu.into());
                             state.set_key_phase(new_session.key_phase());
                         }
                         session = new_session;

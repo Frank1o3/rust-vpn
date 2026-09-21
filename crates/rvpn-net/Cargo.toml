@@ -1,19 +1,19 @@
 [package]
-name = "rvpn-net"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-net"
+    version.workspace=true
 
 [dependencies]
-ipnet.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
-tracing.workspace = true
+    ipnet.workspace=true
+    thiserror.workspace=true
+    tokio.workspace=true
+    tracing.workspace=true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-futures-util = "0.3.34"
-mnl = "0.3.1"
-nftnl = "0.9.4"
-rtnetlink = "0.23.0"
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+    futures-util="0.3.34"
+    mnl="0.3.1"
+    nftnl="0.9.4"
+    rtnetlink="0.23.0"
+    zbus={version="5.19.0", default-features=false, features=["tokio"]}

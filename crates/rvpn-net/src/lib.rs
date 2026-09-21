@@ -2,12 +2,12 @@ use ipnet::IpNet;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 
-#[cfg(not(target_os = "linux"))]
-mod unsupported;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 mod linux_killswitch;
+#[cfg(not(target_os = "linux"))]
+mod unsupported;
 
 #[cfg(target_os = "linux")]
 pub use linux::SystemNet;

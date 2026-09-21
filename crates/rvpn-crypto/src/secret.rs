@@ -28,8 +28,6 @@ pub fn random_bytes<const N: usize>() -> Result<[u8; N], CryptoError> {
     Ok(Secret::<N>::random()?.0)
 }
 
-
-
 impl<const N: usize> Drop for Secret<N> {
     fn drop(&mut self) {
         self.0.zeroize();

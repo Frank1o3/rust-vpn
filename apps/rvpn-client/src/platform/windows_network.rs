@@ -252,7 +252,6 @@ async fn run_powershell_output(script: &str) -> Result<String> {
     }
 }
 
-
 pub async fn refresh_client_endpoint(
     _dev: &VirtualInterface,
     config: &ClientConfig,

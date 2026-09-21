@@ -9,11 +9,11 @@ mod secret;
 mod session;
 
 pub use auth::{AuthConfig, AuthIdentity, AuthVerifier};
+pub use constants::AEAD_TAG_LEN;
 pub use cookie::CookieKey;
 pub use error::CryptoError;
 pub use identity::{Certificate, IdentityKeyPair, IdentityPublicKey};
 pub use key_exchange::{EphemeralKeyPair, PublicKeyBytes, SharedSecret};
-pub use constants::AEAD_TAG_LEN;
 pub use obfuscation::{OBFUSCATION_OVERHEAD, ObfuscationKey};
 pub use secret::{Secret, random_bytes};
 pub use session::{HandshakePsk, PacketNonce, SessionKeys, SessionRole};

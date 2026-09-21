@@ -1,4 +1,7 @@
-use std::{path::{Path, PathBuf}, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 use rvpn_config::ClientConfig;
@@ -103,8 +106,8 @@ fn allowed_config_path(raw: &str) -> Result<PathBuf> {
     let config_dir = std::fs::canonicalize(&config_dir)
         .with_context(|| format!("resolving config directory {}", config_dir.display()))?;
     let path = Path::new(raw);
-    let path = std::fs::canonicalize(path)
-        .with_context(|| format!("resolving config path {raw}"))?;
+    let path =
+        std::fs::canonicalize(path).with_context(|| format!("resolving config path {raw}"))?;
     if !path.starts_with(&config_dir) {
         anyhow::bail!(
             "IPC config path {} is outside the RVPN config directory {}",
