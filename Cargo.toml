@@ -21,7 +21,7 @@
         "crates/rvpn-core",
         "crates/rvpn-crypto",
         "crates/rvpn-interface",
-        "crates/rvpn-ipc",
+        "crates/rvpn-ipc", "crates/rvpn-net",
         "crates/rvpn-protocol",
         "crates/rvpn-routing",
         "crates/rvpn-transport",
