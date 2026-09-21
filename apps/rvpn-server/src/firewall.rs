@@ -105,36 +105,36 @@ impl ForwardingGuard {
 
         let mut rules: Vec<Vec<&str>> = vec![
             vec![
-                "add", "rule", "inet", "rvpn", "forward",
-                "iifname", tunnel, "oifname", external,
-                "meta", "nfproto", "ipv4",
-                "tcp", "flags", "syn",
-                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
-            ],
-            vec![
-                "add", "rule", "inet", "rvpn", "forward",
-                "iifname", tunnel, "oifname", external,
-                "meta", "nfproto", "ipv6",
-                "tcp", "flags", "syn",
-                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
-            ],
-            vec![
-                "add", "rule", "inet", "rvpn", "forward",
-                "iifname", external, "oifname", tunnel,
-                "meta", "nfproto", "ipv4",
-                "tcp", "flags", "syn",
-                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
-            ],
-            vec![
-                "add", "rule", "inet", "rvpn", "forward",
-                "iifname", external, "oifname", tunnel,
-                "meta", "nfproto", "ipv6",
-                "tcp", "flags", "syn",
-                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
-            ],
-            vec![
                 "add", "chain", "inet", "rvpn", "forward", "{", "type", "filter", "hook",
                 "forward", "priority", "filter;", "policy", "accept;", "}",
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", tunnel, "oifname", external,
+                "meta", "nfproto", "ipv4",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", tunnel, "oifname", external,
+                "meta", "nfproto", "ipv6",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", external, "oifname", tunnel,
+                "meta", "nfproto", "ipv4",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v4.to_string().into_boxed_str()),
+            ],
+            vec![
+                "add", "rule", "inet", "rvpn", "forward",
+                "iifname", external, "oifname", tunnel,
+                "meta", "nfproto", "ipv6",
+                "tcp", "flags", "syn",
+                "tcp", "option", "maxseg", "size", "set", Box::leak(mss_v6.to_string().into_boxed_str()),
             ],
             vec![
                 "add", "rule", "inet", "rvpn", "forward", "iifname", tunnel, "oifname", external,
@@ -218,6 +218,7 @@ impl ForwardingGuard {
         config: &ForwardingConfig,
         tunnel: &str,
         external: &str,
+        mtu: u16,
     ) -> Result<()> {
         if let Some(cidr) = &config.tunnel_cidr {
             self.install_iptables_family("iptables", tunnel, external, cidr, mtu)
@@ -238,7 +239,13 @@ impl ForwardingGuard {
         cidr: &str,
         mtu: u16,
     ) -> Result<()> {
-        let rules: [(Option<&str>, &str, Vec<&str>); 3] = [
+        let mss = if binary == "iptables" {
+            mtu.saturating_sub(40).max(536)
+        } else {
+            mtu.saturating_sub(60).max(1220)
+        };
+        let mss_value = mss.to_string();
+        let rules: [(Option<&str>, &str, Vec<&str>); 5] = [
             (
                 None,
                 "FORWARD",
