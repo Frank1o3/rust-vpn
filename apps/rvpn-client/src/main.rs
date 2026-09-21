@@ -69,12 +69,11 @@ async fn daemon_disconnect_on_exit(_daemon: &Arc<Daemon>) -> Result<()> {
 /// Returns `Ok(None)` if shutdown was requested while reconnecting.
 async fn reconnect(
     transport: &UdpTransport,
-    server: SocketAddr,
     auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
     config: &ClientConfig,
     shutdown: &mut ShutdownFuture,
-) -> Result<Option<ProtectedSession>> {
+) -> Result<Option<(ProtectedSession, SocketAddr)>> {
     let mut backoff = RECONNECT_INITIAL_BACKOFF;
     let mut attempt = 0u32;
     loop {
@@ -84,11 +83,23 @@ async fn reconnect(
                 signal?;
                 return Ok(None);
             }
-            result = establish(transport, server, auth, obfuscation, &config.handshake, None) => {
+            result = async {
+                let server = rvpn_config::resolve_endpoint(&config.server).await
+                    .context("resolving RVPN server during reconnect")?;
+                let session = establish(
+                    transport,
+                    server,
+                    auth,
+                    obfuscation,
+                    &config.handshake,
+                    None,
+                ).await?;
+                Ok::<_, anyhow::Error>((session, server))
+            } => {
                 match result {
-                    Ok(session) => {
-                        tracing::info!(attempt, "reconnected to RVPN server");
-                        return Ok(Some(session));
+                    Ok((session, server)) => {
+                        tracing::info!(attempt, %server, "reconnected to RVPN server");
+                        return Ok(Some((session, server)));
                     }
                     Err(error) => {
                         tracing::warn!(%error, attempt, retry_in = ?backoff, "reconnect attempt failed");
@@ -114,7 +125,7 @@ pub(crate) async fn run_client(
     shutdown: Option<ShutdownFuture>,
 ) -> Result<()> {
     tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
-    let server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
+    let mut server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving server endpoint")?;
     config.validate_resolved(server)?;
@@ -265,7 +276,6 @@ pub(crate) async fn run_client(
                 tracing::warn!(?reason, "RVPN session lost; reconnecting");
                 match reconnect(
                     &transport,
-                    server,
                     &auth,
                     obfuscation.as_ref(),
                     &config,
