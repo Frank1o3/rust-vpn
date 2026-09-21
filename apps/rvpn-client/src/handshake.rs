@@ -10,7 +10,7 @@ use std::{
     net::SocketAddr,
     time::{Duration, Instant},
 };
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
 fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {
     Ok(match obfuscation {
