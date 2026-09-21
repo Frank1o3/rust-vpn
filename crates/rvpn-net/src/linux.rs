@@ -3,8 +3,8 @@ use crate::{
 };
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
-    Handle, RouteMessageBuilder,
-    packet_route::route::RouteAttribute,
+    Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
+    packet_route::route::{RouteAddress, RouteAttribute},
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 use zbus::{Connection, Proxy};
@@ -112,8 +112,12 @@ impl NetConfigurator for SystemNet {
         let index = self.index(name).await?;
         self.handle
             .link()
-            .set(index)
-            .up()
+            .change(
+                LinkMessageBuilder::<LinkUnspec>::new()
+                    .index(index)
+                    .up()
+                    .build(),
+            )
             .execute()
             .await
             .map_err(|e| NetError::Operation(e.to_string()))
@@ -172,31 +176,17 @@ impl NetConfigurator for SystemNet {
         for nla in route.attributes {
             match nla {
                 RouteAttribute::Oif(index) => interface_index = Some(index),
-                RouteNla::Gateway(bytes) => {
-                    gateway = match bytes.len() {
-                        4 => Some(IpAddr::V4(Ipv4Addr::new(
-                            bytes[0], bytes[1], bytes[2], bytes[3],
-                        ))),
-                        16 => {
-                            let octets: [u8; 16] = bytes
-                                .try_into()
-                                .map_err(|_| NetError::Operation("invalid IPv6 gateway".into()))?;
-                            Some(IpAddr::V6(Ipv6Addr::from(octets)))
-                        }
+                RouteAttribute::Gateway(address) => {
+                    gateway = match address {
+                        RouteAddress::Inet(value) => Some(IpAddr::V4(value)),
+                        RouteAddress::Inet6(value) => Some(IpAddr::V6(value)),
                         _ => None,
                     };
                 }
-                RouteNla::PrefSource(bytes) | RouteNla::Source(bytes) => {
-                    source = match bytes.len() {
-                        4 => Some(IpAddr::V4(Ipv4Addr::new(
-                            bytes[0], bytes[1], bytes[2], bytes[3],
-                        ))),
-                        16 => {
-                            let octets: [u8; 16] = bytes
-                                .try_into()
-                                .map_err(|_| NetError::Operation("invalid IPv6 source".into()))?;
-                            Some(IpAddr::V6(Ipv6Addr::from(octets)))
-                        }
+                RouteAttribute::PrefSource(address) | RouteAttribute::Source(address) => {
+                    source = match address {
+                        RouteAddress::Inet(value) => Some(IpAddr::V4(value)),
+                        RouteAddress::Inet6(value) => Some(IpAddr::V6(value)),
                         _ => None,
                     };
                 }
@@ -225,15 +215,15 @@ impl NetConfigurator for SystemNet {
             })
             .collect();
         proxy
-            .call::<(), _, _>("SetDNS", &addresses)
+            .call::<_, _, ()>("SetDNS", &addresses)
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
-            .call::<(), _, _>("SetDomains", &vec![("~.".to_owned(), true)])
+            .call::<_, _, ()>("SetDomains", &[("~.".to_owned(), true)])
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
-            .call::<(), _, _>("SetDefaultRoute", &true)
+            .call::<_, _, ()>("SetDefaultRoute", &true)
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         Ok(())
@@ -245,7 +235,7 @@ impl NetConfigurator for SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))?;
         let proxy = self.resolve_proxy(name, &connection).await?;
         proxy
-            .call::<(), _, _>("Revert", &())
+            .call::<_, _, ()>("Revert", &())
             .await
             .map_err(|e| NetError::Operation(e.to_string()))
     }
