@@ -6,8 +6,6 @@ use tokio::process::Command;
 const IPV4_FORWARD: &str = "/proc/sys/net/ipv4/ip_forward";
 const IPV6_FORWARD: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
 
-const IPV6_FORWARD: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
-
 async fn run<I, S>(program: &str, args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
