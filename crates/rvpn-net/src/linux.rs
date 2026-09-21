@@ -7,7 +7,7 @@ use rtnetlink::{
     packet_route::route::RouteNla,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
-use zbus_systemd::{resolve1::LinkProxy, zbus::Connection};
+use zbus::{Connection, Proxy};
 
 use crate::linux_killswitch;
 
@@ -37,6 +37,23 @@ impl SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))?
             .map(|link| link.header.index)
             .ok_or_else(|| NetError::InterfaceNotFound(name.to_owned()))
+    }
+
+    async fn resolve_proxy<'a>(
+        &self,
+        name: &str,
+        connection: &'a Connection,
+    ) -> Result<Proxy<'a>, NetError> {
+        let index = self.index(name).await?;
+        let path = format!("/org/freedesktop/resolve1/link/{index}");
+        Proxy::new(
+            connection,
+            "org.freedesktop.resolve1",
+            path,
+            "org.freedesktop.resolve1.Link",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))
     }
 
     fn route_message(route: &RouteSpec) -> Result<rtnetlink::packet_route::route::RouteMessage, NetError> {
@@ -196,14 +213,10 @@ impl NetConfigurator for SystemNet {
     }
 
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
-        let index = self.index(name).await?;
         let connection = Connection::system()
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
-        let path = format!("/org/freedesktop/resolve1/link/{index}");
-        let proxy = LinkProxy::new(&connection, path)
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let proxy = self.resolve_proxy(name, &connection).await?;
         let addresses = servers
             .iter()
             .map(|address| match address {
@@ -212,31 +225,27 @@ impl NetConfigurator for SystemNet {
             })
             .collect();
         proxy
-            .set_dns(addresses)
+            .call::<(), _, _>("SetDNS", &addresses)
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
-            .set_domains(vec![("~.".to_owned(), true)])
+            .call::<(), _, _>("SetDomains", &vec![("~.".to_owned(), true)])
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
-            .set_default_route(true)
+            .call::<(), _, _>("SetDefaultRoute", &true)
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         Ok(())
     }
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
-        let index = self.index(name).await?;
         let connection = Connection::system()
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
-        let path = format!("/org/freedesktop/resolve1/link/{index}");
-        let proxy = LinkProxy::new(&connection, path)
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let proxy = self.resolve_proxy(name, &connection).await?;
         proxy
-            .revert()
+            .call::<(), _, _>("Revert", &())
             .await
             .map_err(|e| NetError::Operation(e.to_string()))
     }
