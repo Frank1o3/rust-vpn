@@ -5,4 +5,5 @@ local.properties
 *.jks
 **/jniLibs/
 rvpn-setup/
-server.toml
+.venv/
+__pycache__
