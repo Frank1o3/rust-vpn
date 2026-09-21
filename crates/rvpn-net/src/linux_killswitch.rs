@@ -4,10 +4,7 @@ use nftnl::{
 };
 use std::{
     ffi::CStr,
-    io,
     net::SocketAddr,
-    os::unix::ffi::OsStrExt,
-    path::Path,
 };
 
 const CHAIN_NAME: &CStr = c"output";
@@ -51,8 +48,8 @@ pub fn remove(uid: u32) -> Result<(), NetError> {
 }
 
 fn add_interface_accept(
-    batch: &mut Batch<'_>,
-    chain: &Chain<'_>,
+    batch: &mut Batch,
+    chain: &Chain,
     uid: u32,
     interface: &[u8],
 ) -> Result<(), NetError> {
