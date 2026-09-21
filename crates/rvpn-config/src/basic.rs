@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 
-use crate::util::{decode_certificate, decode_psk};
-use crate::network::ConfigValidation;
+use crate::network::{
+    ClientRoutingConfig, ConfigValidation, HandshakeConfig, InterfaceConfig, LivenessConfig,
+    RekeyConfig,
+};
+use crate::util::{decode_certificate, decode_psk, validate_endpoint_syntax};
 use crate::ConfigError;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
