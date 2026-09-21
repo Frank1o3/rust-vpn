@@ -21,7 +21,7 @@ use std::{
 };
 
 use handshake::establish;
-use platform::{configure_client_network, teardown_client_network};
+use platform::{configure_client_network, refresh_client_endpoint, teardown_client_network};
 use tunnel::{DataPlaneExit, run_data_plane};
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
