@@ -16,4 +16,4 @@ futures-util = "0.3"
 mnl = "0.3"
 nftnl = "0.9.4"
 rtnetlink = "0.23"
-zbus-systemd = { version = "0.261", default-features = false, features = ["resolve1", "zbus-async-tokio"] }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
