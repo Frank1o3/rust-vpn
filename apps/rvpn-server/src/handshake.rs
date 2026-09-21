@@ -244,9 +244,6 @@ pub async fn maybe_send_rekey(
     {
         return Ok(());
     }
-    if packet_limit == 0 || !peer.session.should_rekey(packet_limit) {
-        return Ok(());
-    }
     if peer
         .last_rekey_request
         .is_some_and(|sent| sent.elapsed() < REKEY_REQUEST_INTERVAL)
