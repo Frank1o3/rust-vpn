@@ -1,8 +1,7 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rvpn_config::ServerConfig;
 use rvpn_interface::VirtualInterface;
-use rvpn_net::{NetConfigurator, RouteSpec, SystemNet};
-use tokio::process::Command;
+use rvpn_net::{NetConfigurator, SystemNet};
 
 pub async fn configure_server_interface(
     dev: &VirtualInterface,
@@ -26,19 +25,3 @@ pub async fn configure_server_interface(
     Ok(())
 }
 
-pub async fn run<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .context("running network command")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!(
-            "{} failed: {}",
-            program,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-    }
-}
