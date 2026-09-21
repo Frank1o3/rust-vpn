@@ -2354,6 +2354,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvpn-net"
+version = "0.2.9"
+
+[[package]]
 name = "rvpn-protocol"
 version = "0.2.9"
 dependencies = [
