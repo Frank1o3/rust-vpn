@@ -4,7 +4,7 @@ use crate::{
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
     Handle, RouteMessageBuilder,
-    packet_route::route::RouteNla,
+    packet_route::route::RouteAttribute,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 use zbus::{Connection, Proxy};
@@ -169,9 +169,9 @@ impl NetConfigurator for SystemNet {
         let mut interface_index = None;
         let mut gateway = None;
         let mut source = None;
-        for nla in route.nlas {
+        for nla in route.attributes {
             match nla {
-                RouteNla::Oif(index) => interface_index = Some(index),
+                RouteAttribute::Oif(index) => interface_index = Some(index),
                 RouteNla::Gateway(bytes) => {
                     gateway = match bytes.len() {
                         4 => Some(IpAddr::V4(Ipv4Addr::new(
