@@ -268,5 +268,11 @@ pub async fn refresh_client_endpoint(
     if config.routing.default_route_v6 && old_server.is_ipv6() {
         let _ = route_delete(&format!("{}/128", old_server.ip()), "").await;
     }
-    preserve_server_route(new_server).await
+    if config.routing.default_route && new_server.is_ipv4() {
+        return preserve_server_route(new_server).await;
+    }
+    if config.routing.default_route_v6 && new_server.is_ipv6() {
+        return preserve_server_route(new_server).await;
+    }
+    Ok(())
 }
