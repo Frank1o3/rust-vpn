@@ -207,7 +207,7 @@ impl NetConfigurator for SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         let proxy = self.resolve_proxy(name, &connection).await?;
-        let addresses = servers
+        let addresses: Vec<(i32, Vec<u8>)> = servers
             .iter()
             .map(|address| match address {
                 IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
