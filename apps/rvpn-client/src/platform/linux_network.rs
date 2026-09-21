@@ -1,71 +1,117 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
+use ipnet::IpNet;
 use rvpn_config::ClientConfig;
 use rvpn_interface::VirtualInterface;
+use rvpn_net::{KillSwitchSpec, NetConfigurator, RouteSpec, SystemNet};
 use std::net::{IpAddr, SocketAddr};
-use tokio::process::Command;
 
 pub async fn configure_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
 ) -> Result<()> {
-    let addresses = config
+    let net = SystemNet::new().context("opening Linux rtnetlink connection")?;
+    let interface_index = net.interface_index(dev.name()).await?;
+
+    net.set_link_up(dev.name()).await?;
+
+    for address in config
         .interface
         .address
         .iter()
-        .chain(&config.interface.addresses);
-    if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
-        for address in addresses {
-            run("ip", ["address", "replace", address, "dev", dev.name()]).await?;
-        }
-        run("ip", ["link", "set", "dev", dev.name(), "up"]).await?;
+        .chain(&config.interface.addresses)
+    {
+        let prefix: IpNet = address
+            .parse()
+            .with_context(|| format!("invalid configured interface address: {address}"))?;
+        net.add_address(dev.name(), prefix).await?;
     }
+
     for route in &config.routing.routes {
-        route_replace(route, None, dev.name(), None).await?;
+        let destination = route
+            .parse::<IpNet>()
+            .with_context(|| format!("invalid configured route: {route}"))?;
+        net.replace_route(&RouteSpec {
+            destination,
+            gateway: None,
+            interface_index: Some(interface_index),
+            source: None,
+        })
+        .await?;
     }
+
+    if config.routing.default_route || config.routing.default_route_v6 {
+        let uid = unsafe { libc::geteuid() };
+        net.install_kill_switch(&KillSwitchSpec {
+            endpoint: server,
+            tunnel_interface: dev.name().to_owned(),
+            uid,
+        })
+        .await
+        .context("installing persistent Linux kill switch")?;
+        tracing::info!(uid, "Linux RVPN kill switch is active before default routes are installed");
+    }
+
     if config.routing.default_route {
-        let gateway = config
+        let gateway: IpAddr = config
             .routing
             .gateway
             .as_deref()
-            .expect("validated gateway");
-
-        if server.is_ipv4() {
-            preserve_server_route(server).await?;
+            .expect("validated gateway")
+            .parse()
+            .context("parsing IPv4 tunnel gateway")?;
+        if !gateway.is_ipv4() || !server.is_ipv4() {
+            anyhow::bail!("IPv4 default routing requires IPv4 gateway and server endpoint");
         }
-        let source = tunnel_source(config, false)?;
 
-        route_replace("0.0.0.0/1", Some(gateway), dev.name(), Some(&source)).await?;
-        route_replace("128.0.0.0/1", Some(gateway), dev.name(), Some(&source)).await?;
+        preserve_server_route(&net, server).await?;
+        let source = tunnel_source(config, false)?;
+        let destination_1: IpNet = "0.0.0.0/1".parse().unwrap();
+        let destination_2: IpNet = "128.0.0.0/1".parse().unwrap();
+        for destination in [destination_1, destination_2] {
+            net.replace_route(&RouteSpec {
+                destination,
+                gateway: Some(gateway),
+                interface_index: Some(interface_index),
+                source: Some(source),
+            })
+            .await?;
+        }
     }
 
     if config.routing.default_route_v6 {
-        let gateway = config
+        let gateway: IpAddr = config
             .routing
             .gateway_v6
             .as_deref()
-            .expect("validated gateway");
-
-        if server.is_ipv6() {
-            preserve_server_route(server).await?;
+            .expect("validated gateway_v6")
+            .parse()
+            .context("parsing IPv6 tunnel gateway")?;
+        if !gateway.is_ipv6() || !server.is_ipv6() {
+            anyhow::bail!("IPv6 default routing requires IPv6 gateway and server endpoint");
         }
-        let source = tunnel_source(config, true)?;
 
-        route_replace("::/1", Some(gateway), dev.name(), Some(&source)).await?;
-        route_replace("8000::/1", Some(gateway), dev.name(), Some(&source)).await?;
+        preserve_server_route(&net, server).await?;
+        let source = tunnel_source(config, true)?;
+        let destination_1: IpNet = "::/1".parse().unwrap();
+        let destination_2: IpNet = "8000::/1".parse().unwrap();
+        for destination in [destination_1, destination_2] {
+            net.replace_route(&RouteSpec {
+                destination,
+                gateway: Some(gateway),
+                interface_index: Some(interface_index),
+                source: Some(source),
+            })
+            .await?;
+        }
     }
 
-    if let Ok(dns_list) = config.interface.dns_server_list() {
-        if !dns_list.is_empty() {
-            let dns_strs: Vec<String> = dns_list.iter().map(|ip| ip.to_string()).collect();
-            let mut args = vec!["dns", dev.name()];
-            let dns_refs: Vec<&str> = dns_strs.iter().map(|s| s.as_str()).collect();
-            args.extend(dns_refs);
-            if let Err(e) = run("resolvectl", args).await {
-                tracing::warn!(%e, "failed to configure DNS via resolvectl");
+    if let Ok(dns_servers) = config.interface.dns_server_list() {
+        if !dns_servers.is_empty() {
+            if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
+                tracing::warn!(%error, "systemd-resolved rejected RVPN DNS configuration");
             } else {
-                let _ = run("resolvectl", ["domain", dev.name(), "~."]).await;
-                tracing::info!(interface = dev.name(), dns = ?dns_strs, "configured DNS servers via resolvectl");
+                tracing::info!(interface = dev.name(), dns = ?dns_servers, "configured DNS servers through systemd-resolved D-Bus");
             }
         }
     }
@@ -73,61 +119,28 @@ pub async fn configure_client_network(
     Ok(())
 }
 
-async fn preserve_server_route(server: SocketAddr) -> Result<()> {
-    let output = Command::new("ip")
-        .args([
-            if server.is_ipv6() { "-6" } else { "-4" },
-            "route",
-            "get",
-            &server.ip().to_string(),
-        ])
-        .output()
-        .await
-        .context("querying existing route to RVPN server")?;
-
-    if !output.status.success() {
-        bail!(
-            "ip route get failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    let route = String::from_utf8_lossy(&output.stdout);
-    let fields: Vec<&str> = route.split_whitespace().collect();
-
-    let gateway = fields
-        .windows(2)
-        .find(|window| window[0] == "via")
-        .map(|window| window[1]);
-
-    let device = fields
-        .windows(2)
-        .find(|window| window[0] == "dev")
-        .map(|window| window[1]);
-
-    let Some(device) = device else {
-        bail!("could not determine physical interface for RVPN server route");
+async fn preserve_server_route(net: &SystemNet, server: SocketAddr) -> Result<()> {
+    let best = net.best_route_to(server.ip()).await?;
+    let destination: IpNet = if server.is_ipv4() {
+        format!("{}/32", server.ip()).parse().unwrap()
+    } else {
+        format!("{}/128", server.ip()).parse().unwrap()
     };
 
-    let destination = if server.is_ipv6() {
-        format!("{}/128", server.ip())
-    } else {
-        format!("{}/32", server.ip())
-    };
-
-    if let Some(gateway) = gateway {
-        route_replace(&destination, Some(gateway), device, None).await?;
-    } else {
-        route_replace(&destination, None, device, None).await?;
-    }
+    net.replace_route(&RouteSpec {
+        destination,
+        gateway: best.gateway,
+        interface_index: Some(best.interface_index),
+        source: None,
+    })
+    .await?;
 
     tracing::info!(
-        server = %server,
-        gateway = gateway.unwrap_or("<direct>"),
-        device,
-        "preserved physical route to RVPN server"
+        %server,
+        interface_index = best.interface_index,
+        gateway = ?best.gateway,
+        "preserved physical route to RVPN server using RTM_GETROUTE"
     );
-
     Ok(())
 }
 
@@ -136,30 +149,88 @@ pub async fn teardown_client_network(
     config: &ClientConfig,
     server: SocketAddr,
 ) {
+    let Ok(net) = SystemNet::new() else {
+        tracing::warn!("could not open rtnetlink connection during client network teardown");
+        return;
+    };
+    let Ok(interface_index) = net.interface_index(dev.name()).await else {
+        return;
+    };
+
     if config.routing.default_route {
-        for half in ["0.0.0.0/1", "128.0.0.0/1"] {
-            let _ = run("ip", ["route", "del", half, "dev", dev.name()]).await;
+        let gateway = config.routing.gateway.as_deref().and_then(|s| s.parse().ok());
+        let source = tunnel_source(config, false).ok();
+        for destination in ["0.0.0.0/1", "128.0.0.0/1"] {
+            if let Ok(destination) = destination.parse() {
+                let _ = net
+                    .delete_route(&RouteSpec {
+                        destination,
+                        gateway,
+                        interface_index: Some(interface_index),
+                        source,
+                    })
+                    .await;
+            }
         }
-        if server.is_ipv4() {
-            let endpoint = format!("{}/32", server.ip());
-            let _ = run("ip", ["route", "del", &endpoint]).await;
-        }
+        remove_server_route(&net, server, false).await;
     }
+
     if config.routing.default_route_v6 {
-        for half in ["::/1", "8000::/1"] {
-            let _ = run("ip", ["-6", "route", "del", half, "dev", dev.name()]).await;
+        let gateway = config.routing.gateway_v6.as_deref().and_then(|s| s.parse().ok());
+        let source = tunnel_source(config, true).ok();
+        for destination in ["::/1", "8000::/1"] {
+            if let Ok(destination) = destination.parse() {
+                let _ = net
+                    .delete_route(&RouteSpec {
+                        destination,
+                        gateway,
+                        interface_index: Some(interface_index),
+                        source,
+                    })
+                    .await;
+            }
         }
-        if server.is_ipv6() {
-            let endpoint = format!("{}/128", server.ip());
-            let _ = run("ip", ["-6", "route", "del", &endpoint]).await;
+        remove_server_route(&net, server, true).await;
+    }
+
+    if config.interface.dns_servers.is_some() {
+        if let Err(error) = net.revert_dns(dev.name()).await {
+            tracing::warn!(%error, "failed to revert systemd-resolved RVPN DNS state");
         }
     }
-    if config.interface.dns_servers.is_some() {
-        let _ = run("resolvectl", ["revert", dev.name()]).await;
+
+    if config.routing.default_route || config.routing.default_route_v6 {
+        let uid = unsafe { libc::geteuid() };
+        if let Err(error) = net.remove_kill_switch(uid).await {
+            tracing::warn!(%error, "failed to remove Linux RVPN kill switch");
+        }
     }
 }
 
-fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<String> {
+async fn remove_server_route(net: &SystemNet, server: SocketAddr, ipv6: bool) {
+    if server.is_ipv6() != ipv6 {
+        return;
+    }
+
+    let Ok(best) = net.best_route_to(server.ip()).await else {
+        return;
+    };
+    let destination: IpNet = if ipv6 {
+        format!("{}/128", server.ip()).parse().unwrap()
+    } else {
+        format!("{}/32", server.ip()).parse().unwrap()
+    };
+    let _ = net
+        .delete_route(&RouteSpec {
+            destination,
+            gateway: best.gateway,
+            interface_index: Some(best.interface_index),
+            source: None,
+        })
+        .await;
+}
+
+fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<IpAddr> {
     config
         .interface
         .address
@@ -172,52 +243,10 @@ fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<String> {
                 .ok()
                 .filter(|address| address.is_ipv6() == ipv6)
         })
-        .map(|address| address.to_string())
         .with_context(|| {
             format!(
                 "default {} routing requires an address of the same family on the tunnel interface",
                 if ipv6 { "IPv6" } else { "IPv4" }
             )
         })
-}
-
-async fn route_replace(
-    destination: &str,
-    gateway: Option<&str>,
-    device: &str,
-    source: Option<&str>,
-) -> Result<()> {
-    let ipv6 = destination.contains(':') || gateway.is_some_and(|value| value.contains(':'));
-    let mut args = if ipv6 {
-        vec!["-6", "route", "replace", destination]
-    } else {
-        vec!["route", "replace", destination]
-    };
-    if let Some(gateway) = gateway {
-        args.extend(["via", gateway]);
-    }
-    if !device.is_empty() {
-        args.extend(["dev", device]);
-    }
-    if let Some(source) = source {
-        args.extend(["src", source]);
-    }
-    run("ip", args).await
-}
-
-async fn run<'a>(program: &str, args: impl IntoIterator<Item = &'a str>) -> Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .context("running network command")?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        bail!(
-            "{} failed: {}",
-            program,
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-    }
 }
