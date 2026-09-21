@@ -12,6 +12,12 @@ def toml_list(values: list[str]) -> str:
     return "[" + ", ".join(toml_str(value) for value in values) + "]"
 
 
+def socket_endpoint(host: str, port: int) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
 def render_security(lines: list[str], setup: SetupConfig) -> None:
     security = setup.security
     lines.extend(
@@ -38,7 +44,9 @@ def render_server_toml(
     links: list[list[str]],
 ) -> str:
     lines = ["# RVPN Server configuration (generated)", ""]
-    lines.append(f"bind={toml_str(f'{setup.bind_address}:{setup.bind_port}')}")
+    lines.append(
+        f"bind={toml_str(socket_endpoint(setup.bind_address, setup.bind_port))}"
+    )
     if setup.obfuscation_enabled:
         lines.append(f"obfuscation_key={toml_str(setup.obfuscation_key)}")
     lines.append("")
@@ -165,7 +173,7 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
     lines.extend(
         [
             "[interface]",
-            f"    address={toml_str(f'{peer.tunnel_v4}/{setup.server_v4.split('/')[-1]}')}",
+            f"    address={toml_str(f'{peer.tunnel_v4}/{setup.server_v4.split("/")[-1]}')}",
             f"    mode={toml_str(interface.mode)}",
             f"    mtu={interface.mtu}",
             f"    name={toml_str(interface.interface_name)}",
@@ -175,7 +183,7 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
         lines.append(f"    tap_name={toml_str(interface.tap_name)}")
     if setup.ipv6_enabled:
         lines.append(
-            f"    addresses={toml_list([f'{peer.tunnel_v6}/{setup.server_v6.split('/')[-1]}'])}"
+            f"    addresses={toml_list([f'{peer.tunnel_v6}/{setup.server_v6.split("/")[-1]}'])}"
         )
     if interface.dns_servers:
         lines.append(f"    dns_servers={toml_str(interface.dns_servers)}")
