@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{net::IpAddr, time::Duration};
 
 use crate::ConfigError;
-use rvpn_interface::DeviceMode;
+pub use rvpn_interface::DeviceMode;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
