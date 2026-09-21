@@ -1,12 +1,16 @@
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::SocketAddr,
 };
 
+use crate::basic::{AuthMode, LinkConfig};
+use crate::network::{
+    ConfigValidation, ForwardingConfig, HandshakeConfig, InterfaceConfig, LivenessConfig,
+    RekeyConfig,
+};
 use crate::util::{decode_certificate, decode_psk, validate_endpoint, validate_psk};
-use crate::network::ConfigValidation;
 use crate::ConfigError;
 
 #[derive(Clone, Deserialize, Serialize)]
