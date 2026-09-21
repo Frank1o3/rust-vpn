@@ -89,21 +89,6 @@ impl Default for HandshakeConfig {
     }
 }
 
-pub fn jittered_retry_interval(base_ms: u64, jitter_ms: u64) -> std::time::Duration {
-    if jitter_ms == 0 {
-        return std::time::Duration::from_millis(base_ms.max(1));
-    }
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0) as u64;
-    let span = 2 * jitter_ms + 1;
-    let offset = (nanos % span) as i64 - jitter_ms as i64;
-    let millis = (base_ms as i64 + offset).max(1) as u64;
-    std::time::Duration::from_millis(millis)
-}
-
 impl HandshakeConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.retry_interval_ms == 0 || self.retry_limit == 0 {
