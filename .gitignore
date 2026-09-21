@@ -4,3 +4,5 @@ local.properties
 *.keystore
 *.jks
 **/jniLibs/
+rvpn-setup/
+server.toml
