@@ -84,17 +84,6 @@ impl SystemNet {
         }
     }
 
-    async fn resolved_link(&self, name: &str) -> Result<LinkProxy<'static>, NetError> {
-        let index = self.index(name).await?;
-        let connection = Connection::system()
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        let path = format!("/org/freedesktop/resolve1/link/{index}");
-        let proxy = LinkProxy::new(&connection, path)
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        Ok(proxy)
-    }
 }
 
 impl NetConfigurator for SystemNet {
@@ -207,7 +196,14 @@ impl NetConfigurator for SystemNet {
     }
 
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
-        let proxy = self.resolved_link(name).await?;
+        let index = self.index(name).await?;
+        let connection = Connection::system()
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let path = format!("/org/freedesktop/resolve1/link/{index}");
+        let proxy = LinkProxy::new(&connection, path)
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
         let addresses = servers
             .iter()
             .map(|address| match address {
@@ -231,7 +227,14 @@ impl NetConfigurator for SystemNet {
     }
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
-        let proxy = self.resolved_link(name).await?;
+        let index = self.index(name).await?;
+        let connection = Connection::system()
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let path = format!("/org/freedesktop/resolve1/link/{index}");
+        let proxy = LinkProxy::new(&connection, path)
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
             .revert()
             .await
