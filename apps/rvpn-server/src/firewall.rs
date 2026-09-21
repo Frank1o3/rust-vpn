@@ -1,13 +1,29 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rvpn_config::{FirewallBackend, ForwardingConfig};
 use std::{fs, process::Command as StdCommand};
 use tokio::process::Command;
 
-use crate::network::run;
-
 const IPV4_FORWARD: &str = "/proc/sys/net/ipv4/ip_forward";
 const IPV6_FORWARD: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
 
+const IPV6_FORWARD: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
+
+async fn run<I, S>(program: &str, args: I) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let args: Vec<S> = args.into_iter().collect();
+    let status = Command::new(program)
+        .args(&args)
+        .status()
+        .await
+        .with_context(|| format!("running {program}"))?;
+    if !status.success() {
+        bail!("{program} exited with status {status}");
+    }
+    Ok(())
+}
 struct CleanupCommand {
     program: &'static str,
     args: Vec<String>,
