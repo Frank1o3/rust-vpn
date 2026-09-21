@@ -236,7 +236,14 @@ pub async fn maybe_send_rekey(
     obfuscation: Option<&ObfuscationKey>,
     peer: &mut ActivePeer,
     packet_limit: u64,
+    time_limit: Option<Duration>,
 ) -> Result<()> {
+    if !peer
+        .session
+        .should_rekey_with_policy(packet_limit, time_limit)
+    {
+        return Ok(());
+    }
     if packet_limit == 0 || !peer.session.should_rekey(packet_limit) {
         return Ok(());
     }

@@ -7,6 +7,7 @@ use rvpn_protocol::{
     HEADER_LEN, HandshakeMessage, Header, InitiatorHandshake, Packet, PacketKind, ProtectedSession,
 };
 use rvpn_transport::{OutboundQueue, SendOptions, TransportConfig, TransportError, UdpTransport};
+use std::time::Duration;
 use std::{net::SocketAddr, os::fd::RawFd, sync::Arc, time::Instant};
 use tokio::{
     sync::watch,
@@ -313,7 +314,7 @@ async fn maybe_rekey(
     packet_limit: u64,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<()> {
-    if packet_limit != 0 && session.should_rekey(packet_limit) {
+    if session.should_rekey_with_policy(packet_limit, Some(Duration::from_secs(120))) {
         *session = establish(
             transport,
             server,

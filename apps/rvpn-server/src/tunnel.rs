@@ -78,8 +78,11 @@ async fn maybe_rekey(
     obfuscation: Option<&ObfuscationKey>,
     peer: &mut ActivePeer,
     packet_limit: u64,
+    time_limit: Option<Duration>,
 ) {
-    if let Err(error) = maybe_send_rekey(transport, obfuscation, peer, packet_limit).await {
+    if let Err(error) =
+        maybe_send_rekey(transport, obfuscation, peer, packet_limit, time_limit).await
+    {
         tracing::warn!(peer = %peer.identity.name, %error, "could not send rekey request");
     }
 }
@@ -148,6 +151,7 @@ struct DataPlane<'a> {
     tun: Option<&'a VirtualInterface>,
     tap: Option<&'a VirtualInterface>,
     rekey_packet_limit: u64,
+    rekey_time_limit: Option<Duration>,
 }
 
 impl DataPlane<'_> {
@@ -159,7 +163,10 @@ impl DataPlane<'_> {
         payload: &[u8],
     ) {
         let Some(peer) = active.get_mut(&session_id) else {
-            tracing::debug!(?session_id, "routing target is no longer active; dropping packet");
+            tracing::debug!(
+                ?session_id,
+                "routing target is no longer active; dropping packet"
+            );
             return;
         };
         maybe_rekey(
@@ -167,6 +174,7 @@ impl DataPlane<'_> {
             self.obfuscation,
             peer,
             self.rekey_packet_limit,
+            self.rekey_time_limit,
         )
         .await;
         seal_and_queue(
@@ -182,7 +190,9 @@ impl DataPlane<'_> {
     async fn inject_ip(&self, packet: &[u8], peer: &str) {
         match self.tun {
             Some(device) => inject(device, packet, peer).await,
-            None => tracing::debug!(%peer, "no TUN device; dropping IP packet addressed to the server"),
+            None => {
+                tracing::debug!(%peer, "no TUN device; dropping IP packet addressed to the server")
+            }
         }
     }
 
@@ -285,6 +295,7 @@ pub async fn run_server_loop(
             tun: tun.as_ref(),
             tap: tap.as_ref(),
             rekey_packet_limit: config.rekey.packet_limit,
+            rekey_time_limit: config.rekey.time_limit(),
         };
 
         loop {

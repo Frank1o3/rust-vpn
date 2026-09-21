@@ -1,20 +1,60 @@
 use anyhow::Result;
 use rvpn_config::ClientConfig;
+use rvpn_core::GuiStateHandle;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
 use rvpn_interface::VirtualInterface;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession};
 use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::handshake::{establish, maybe_rekey};
-use rvpn_core::GuiStateHandle;
+
+/// Why the data plane returned. Everything except `Shutdown` means the
+/// session is gone but the local TUN device and routes are still up, so the
+/// caller should re-handshake instead of tearing the client down.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DataPlaneExit {
+    /// The user/daemon asked us to stop.
+    Shutdown,
+    /// The server sent an authenticated Close.
+    ServerClosed,
+    /// No authenticated packet within `liveness.timeout_secs`, or a rekey failed.
+    LinkLost,
+}
 
 fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<bytes::Bytes> {
     Ok(match obfuscation {
         Some(key) => key.wrap(&encoded)?,
         None => encoded,
     })
+}
+
+fn mark_disconnected(gui_state: &Option<GuiStateHandle>) {
+    if let Some(state) = gui_state {
+        state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .disconnected();
+    }
+}
+
+fn record_tx(gui_state: &Option<GuiStateHandle>, bytes: usize) {
+    if let Some(state) = gui_state {
+        state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_tx(bytes);
+    }
+}
+
+fn record_rx(gui_state: &Option<GuiStateHandle>, bytes: usize) {
+    if let Some(state) = gui_state {
+        state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_rx(bytes);
+    }
 }
 
 /// Send `wire` bytes to `peer`, reporting path failures to the adaptive MTU.
@@ -44,11 +84,20 @@ pub async fn run_data_plane(
     tap: Option<&VirtualInterface>,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
     gui_state: Option<GuiStateHandle>,
-) -> Result<()> {
+) -> Result<DataPlaneExit> {
     let keepalive = transport.keepalive();
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let (outbound, mut outbound_rx) = OutboundQueue::new(256);
     let mut telemetry = tokio::time::interval(Duration::from_millis(250));
+
+    // Dead-link detection: `last_rx` moves only on *authenticated* packets, so
+    // spoofed or replayed datagrams cannot keep a dead session alive.
+    let liveness_timeout = config.liveness.timeout();
+    let mut liveness_check = tokio::time::interval(Duration::from_secs(5));
+    let mut last_rx = Instant::now();
+
+    // Time-based rekey must not depend on outbound traffic, so it gets its own timer.
+    let mut rekey_check = tokio::time::interval(Duration::from_secs(5));
 
     loop {
         tokio::select! {
@@ -60,25 +109,15 @@ pub async fn run_data_plane(
 
                 match send_wire(transport, server, wire).await {
                     Ok(bytes) => {
-                        tracing::info!(
-                            bytes,
-                            server = %server,
-                            "sent authenticated close packet"
-                        );
+                        tracing::info!(bytes, server = %server, "sent authenticated close packet");
                     }
                     Err(error) => {
-                        tracing::error!(
-                            %error,
-                            server = %server,
-                            "failed to send authenticated close packet"
-                        );
+                        tracing::error!(%error, server = %server, "failed to send authenticated close packet");
                     }
                 }
 
-                if let Some(state) = &gui_state {
-                    state.lock().unwrap_or_else(|e| e.into_inner()).disconnected();
-                }
-                return Ok(());
+                mark_disconnected(&gui_state);
+                return Ok(DataPlaneExit::Shutdown);
             }
             _ = telemetry.tick() => {
                 if let Some(state) = &gui_state {
@@ -91,6 +130,36 @@ pub async fn run_data_plane(
                     }
                     state.update_transport(metrics, mtu);
                     state.set_key_phase(session.key_phase());
+                }
+            }
+            _ = liveness_check.tick() => {
+                if let Some(limit) = liveness_timeout {
+                    let silent_for = last_rx.elapsed();
+                    if silent_for > limit {
+                        tracing::warn!(
+                            silent_secs = silent_for.as_secs(),
+                            limit_secs = limit.as_secs(),
+                            "no authenticated packet from server; treating link as dead"
+                        );
+                        mark_disconnected(&gui_state);
+                        return Ok(DataPlaneExit::LinkLost);
+                    }
+                }
+            }
+            _ = rekey_check.tick() => {
+                match maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, &config.rekey).await {
+                    Ok(true) => {
+                        last_rx = Instant::now();
+                        if let Some(state) = &gui_state {
+                            state.lock().unwrap_or_else(|e| e.into_inner()).set_key_phase(session.key_phase());
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "scheduled rekey failed; reconnecting");
+                        mark_disconnected(&gui_state);
+                        return Ok(DataPlaneExit::LinkLost);
+                    }
                 }
             }
             () = keepalive.wait_for_due() => {
@@ -126,10 +195,16 @@ pub async fn run_data_plane(
                 }
             } => {
                 let packet = packet?;
-                if let Some(state) = &gui_state {
-                    state.lock().unwrap_or_else(|e| e.into_inner()).record_tx(packet.len());
+                record_tx(&gui_state, packet.len());
+                match maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, &config.rekey).await {
+                    Ok(true) => last_rx = Instant::now(),
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "rekey failed; reconnecting");
+                        mark_disconnected(&gui_state);
+                        return Ok(DataPlaneExit::LinkLost);
+                    }
                 }
-                maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::Data, &packet)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
                 if let Err(e) = outbound.try_enqueue(server, wire) {
@@ -145,10 +220,16 @@ pub async fn run_data_plane(
                 }
             } => {
                 let frame = frame?;
-                if let Some(state) = &gui_state {
-                    state.lock().unwrap_or_else(|e| e.into_inner()).record_tx(frame.len());
+                record_tx(&gui_state, frame.len());
+                match maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, &config.rekey).await {
+                    Ok(true) => last_rx = Instant::now(),
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "rekey failed; reconnecting");
+                        mark_disconnected(&gui_state);
+                        return Ok(DataPlaneExit::LinkLost);
+                    }
                 }
-                maybe_rekey(&mut session, transport, server, auth, obfuscation, &config.handshake, config.rekey.packet_limit).await?;
                 let sealed = session.seal(PacketKind::DataTap, &frame)?;
                 let wire = wrap(sealed.encode(), obfuscation)?;
                 if let Err(e) = outbound.try_enqueue(server, wire) {
@@ -172,25 +253,36 @@ pub async fn run_data_plane(
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data || packet.header.kind == PacketKind::DataTap => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Keepalive => {
-                        let _ = session.open(packet);
+                        if session.open(packet).is_ok() {
+                            last_rx = Instant::now();
+                        }
                         continue;
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Close => {
                         if session.open(packet).is_ok() {
                             tracing::info!("server closed the session");
-                            if let Some(state) = &gui_state {
-                                state.lock().unwrap_or_else(|e| e.into_inner()).disconnected();
-                            }
-                            return Ok(());
+                            mark_disconnected(&gui_state);
+                            return Ok(DataPlaneExit::ServerClosed);
                         }
                         continue;
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Rekey => {
                         if session.open(packet).is_ok() {
-                            session = establish(transport, server, auth, obfuscation, &config.handshake, Some(&session)).await?;
-                            tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys at server request");
-                            if let Some(state) = &gui_state {
-                                state.lock().unwrap_or_else(|e| e.into_inner()).set_key_phase(session.key_phase());
+                            last_rx = Instant::now();
+                            match establish(transport, server, auth, obfuscation, &config.handshake, Some(&session)).await {
+                                Ok(new_session) => {
+                                    session = new_session;
+                                    last_rx = Instant::now();
+                                    tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys at server request");
+                                    if let Some(state) = &gui_state {
+                                        state.lock().unwrap_or_else(|e| e.into_inner()).set_key_phase(session.key_phase());
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(%error, "server-requested rekey failed; reconnecting");
+                                    mark_disconnected(&gui_state);
+                                    return Ok(DataPlaneExit::LinkLost);
+                                }
                             }
                         }
                         continue;
@@ -204,28 +296,14 @@ pub async fn run_data_plane(
                 let kind = packet.header.kind;
                 match session.open(packet) {
                     Ok(plaintext) => {
-                        if kind == PacketKind::DataTap {
-                            if let Some(dev) = tap {
-                                dev.send(&plaintext).await?;
-                                if let Some(state) = &gui_state {
-                                    state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
-                                }
-                            } else if let Some(dev) = tun {
-                                dev.send(&plaintext).await?;
-                                if let Some(state) = &gui_state {
-                                    state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
-                                }
-                            }
-                        } else if let Some(dev) = tun {
+                        last_rx = Instant::now();
+                        if plaintext.is_empty() {
+                            continue;
+                        }
+                        let target = if kind == PacketKind::DataTap { tap.or(tun) } else { tun.or(tap) };
+                        if let Some(dev) = target {
                             dev.send(&plaintext).await?;
-                            if let Some(state) = &gui_state {
-                                state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
-                            }
-                        } else if let Some(dev) = tap {
-                            dev.send(&plaintext).await?;
-                            if let Some(state) = &gui_state {
-                                state.lock().unwrap_or_else(|e| e.into_inner()).record_rx(plaintext.len());
-                            }
+                            record_rx(&gui_state, plaintext.len());
                         }
                     }
                     Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed RVPN packet"),

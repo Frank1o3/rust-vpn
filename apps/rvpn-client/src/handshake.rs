@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use rvpn_config::HandshakeConfig;
+use rvpn_config::{HandshakeConfig, RekeyConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::{AuthConfig, ObfuscationKey};
 use rvpn_protocol::{
@@ -19,6 +19,8 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
     })
 }
 
+/// Rotates keys if the packet-count or age limit is reached.
+/// Returns `Ok(true)` when a rekey actually happened.
 pub async fn maybe_rekey(
     session: &mut ProtectedSession,
     transport: &UdpTransport,
@@ -26,23 +28,23 @@ pub async fn maybe_rekey(
     auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
     handshake: &HandshakeConfig,
-    packet_limit: u64,
-) -> Result<()> {
-    if packet_limit != 0 && session.should_rekey(packet_limit) {
-        *session = establish(
-            transport,
-            server,
-            auth,
-            obfuscation,
-            handshake,
-            Some(session),
-        )
-        .await?;
-        tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
+    rekey: &RekeyConfig,
+) -> Result<bool> {
+    if !session.should_rekey_with_policy(rekey.packet_limit, rekey.time_limit()) {
+        return Ok(false);
     }
-    Ok(())
+    *session = establish(
+        transport,
+        server,
+        auth,
+        obfuscation,
+        handshake,
+        Some(session),
+    )
+    .await?;
+    tracing::info!(key_phase = session.key_phase(), "rotated RVPN session keys");
+    Ok(true)
 }
-
 pub async fn establish(
     transport: &UdpTransport,
     server: SocketAddr,

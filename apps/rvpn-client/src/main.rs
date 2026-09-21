@@ -7,15 +7,27 @@ use anyhow::{Context, Result};
 use ipc::{Daemon, run_ipc_server};
 use rvpn_config::{ClientConfig, DeviceMode};
 use rvpn_core::GuiStateHandle;
-use rvpn_crypto::AEAD_TAG_LEN;
+use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
-use rvpn_protocol::HEADER_LEN;
+use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{env, fs, net::SocketAddr, sync::Arc};
+use std::{
+    env, fs,
+    future::Future,
+    net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
+    time::Duration,
+};
 
 use handshake::establish;
 use platform::{configure_client_network, teardown_client_network};
-use tunnel::run_data_plane;
+use tunnel::{DataPlaneExit, run_data_plane};
+
+type ShutdownFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+const RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
+const RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -50,10 +62,56 @@ async fn daemon_disconnect_on_exit(_daemon: &Arc<Daemon>) -> Result<()> {
     Ok(())
 }
 
+/// Re-handshakes with the server after the session was lost, with exponential
+/// backoff. The TUN device, routes and DNS stay in place the whole time, so
+/// applications see a stall rather than a route flap (or a traffic leak).
+///
+/// Returns `Ok(None)` if shutdown was requested while reconnecting.
+async fn reconnect(
+    transport: &UdpTransport,
+    server: SocketAddr,
+    auth: &AuthConfig,
+    obfuscation: Option<&ObfuscationKey>,
+    config: &ClientConfig,
+    shutdown: &mut ShutdownFuture,
+) -> Result<Option<ProtectedSession>> {
+    let mut backoff = RECONNECT_INITIAL_BACKOFF;
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        tokio::select! {
+            signal = &mut *shutdown => {
+                signal?;
+                return Ok(None);
+            }
+            result = establish(transport, server, auth, obfuscation, &config.handshake, None) => {
+                match result {
+                    Ok(session) => {
+                        tracing::info!(attempt, "reconnected to RVPN server");
+                        return Ok(Some(session));
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, attempt, retry_in = ?backoff, "reconnect attempt failed");
+                    }
+                }
+            }
+        }
+
+        tokio::select! {
+            signal = &mut *shutdown => {
+                signal?;
+                return Ok(None);
+            }
+            _ = tokio::time::sleep(backoff) => {}
+        }
+        backoff = (backoff * 2).min(RECONNECT_MAX_BACKOFF);
+    }
+}
+
 pub(crate) async fn run_client(
     config: ClientConfig,
     gui_state: Option<GuiStateHandle>,
-    shutdown: Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>>,
+    shutdown: Option<ShutdownFuture>,
 ) -> Result<()> {
     tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
     let server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
@@ -177,24 +235,62 @@ pub(crate) async fn run_client(
         "authenticated RVPN client data plane started"
     );
 
-    let shutdown = match shutdown {
+    let mut shutdown: ShutdownFuture = match shutdown {
         Some(shutdown) => shutdown,
         None => Box::pin(shutdown_signal()),
     };
 
-    let result = run_data_plane(
-        session,
-        &transport,
-        &config,
-        server,
-        &auth,
-        obfuscation.as_ref(),
-        tun.as_ref(),
-        tap.as_ref(),
-        shutdown,
-        gui_state,
-    )
-    .await;
+    // Run the data plane; if the session dies (server restart, network change,
+    // silent link) keep the interface up and re-handshake until it comes back
+    // or the user stops us.
+    let mut session = session;
+    let result = loop {
+        let exit = run_data_plane(
+            session,
+            &transport,
+            &config,
+            server,
+            &auth,
+            obfuscation.as_ref(),
+            tun.as_ref(),
+            tap.as_ref(),
+            &mut shutdown,
+            gui_state.clone(),
+        )
+        .await;
+
+        match exit {
+            Ok(DataPlaneExit::Shutdown) => break Ok(()),
+            Ok(reason) => {
+                tracing::warn!(?reason, "RVPN session lost; reconnecting");
+                match reconnect(
+                    &transport,
+                    server,
+                    &auth,
+                    obfuscation.as_ref(),
+                    &config,
+                    &mut shutdown,
+                )
+                .await
+                {
+                    Ok(Some(new_session)) => {
+                        if let Some(state) = &gui_state {
+                            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.connected(
+                                format!("{:?}", new_session.session_id()),
+                                mtu.into(),
+                            );
+                            state.set_key_phase(new_session.key_phase());
+                        }
+                        session = new_session;
+                    }
+                    Ok(None) => break Ok(()),
+                    Err(error) => break Err(error),
+                }
+            }
+            Err(error) => break Err(error),
+        }
+    };
 
     tracing::info!("restoring host network state");
     teardown_client_network(primary_dev, &config, server).await;
@@ -226,4 +322,3 @@ async fn shutdown_signal() -> Result<()> {
             .context("waiting for shutdown signal")
     }
 }
-

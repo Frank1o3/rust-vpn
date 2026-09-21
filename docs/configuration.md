@@ -75,7 +75,11 @@ retry_interval_ms = 500
 retry_limit = 5
 
 [rekey]
-packet_limit = 1048576 # zero disables automatic rotation
+packet_limit = 1048576   # rotate after this many sent packets; 0 disables the packet trigger
+time_limit_secs = 120    # rotate after this session age; 0 disables the time trigger
+
+[liveness]
+timeout_secs = 90        # 0 disables; otherwise >= 60
 ```
 
 ### Peer-to-peer links
