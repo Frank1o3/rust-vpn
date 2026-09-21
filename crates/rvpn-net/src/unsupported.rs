@@ -3,6 +3,13 @@ use crate::{BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError,
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemNet;
 
+impl SystemNet {
+    pub fn new() -> Result<Self, NetError> {
+        Ok(Self)
+    }
+}
+
+
 impl NetConfigurator for SystemNet {
     async fn interface_index(&self, _: &str) -> Result<u32, NetError> { Err(NetError::Unsupported) }
     async fn set_link_up(&self, _: &str) -> Result<(), NetError> { Err(NetError::Unsupported) }
