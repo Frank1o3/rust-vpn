@@ -251,3 +251,22 @@ async fn run_powershell_output(script: &str) -> Result<String> {
         )
     }
 }
+
+
+pub async fn refresh_client_endpoint(
+    _dev: &VirtualInterface,
+    config: &ClientConfig,
+    old_server: SocketAddr,
+    new_server: SocketAddr,
+) -> Result<()> {
+    if old_server == new_server {
+        return Ok(());
+    }
+    if config.routing.default_route && old_server.is_ipv4() {
+        let _ = route_delete(&format!("{}/32", old_server.ip()), "").await;
+    }
+    if config.routing.default_route_v6 && old_server.is_ipv6() {
+        let _ = route_delete(&format!("{}/128", old_server.ip()), "").await;
+    }
+    preserve_server_route(new_server).await
+}
