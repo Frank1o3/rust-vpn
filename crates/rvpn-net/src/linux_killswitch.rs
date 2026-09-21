@@ -38,7 +38,7 @@ pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
     add_endpoint_accept(&mut batch, &chain, spec.uid, spec.endpoint)?;
     add_uid_drop(&mut batch, &chain, spec.uid);
 
-    send_batch(&batch)?;
+    send_batch(batch)?;
     tracing::info!(uid = spec.uid, endpoint = %spec.endpoint, tunnel = %spec.tunnel_interface, "installed persistent RVPN kill switch");
     Ok(())
 }
@@ -112,7 +112,7 @@ fn delete_table(uid: u32) -> Result<(), NetError> {
     let mut batch = Batch::new();
     let table = Table::new(table_c.as_c_str(), ProtoFamily::Inet);
     batch.add(&table, nftnl::MsgType::Del);
-    match send_batch(&batch) {
+    match send_batch(batch) {
         Ok(()) => Ok(()),
         Err(error) => {
             // The table not existing is safe during startup/teardown. Preserve other errors.
@@ -129,7 +129,7 @@ fn delete_table(uid: u32) -> Result<(), NetError> {
     }
 }
 
-fn send_batch(batch: &Batch) -> Result<(), NetError> {
+fn send_batch(batch: Batch) -> Result<(), NetError> {
     let finalized = batch.finalize();
     let socket = mnl::Socket::new(mnl::Bus::Netfilter)
         .map_err(|e| NetError::Operation(e.to_string()))?;
