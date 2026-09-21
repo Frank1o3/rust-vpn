@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 #[derive(Debug, Error)]
 pub enum CryptoError {
     #[error("secure randomness is unavailable: {0}")]
