@@ -1,9 +1,10 @@
 use crate::*;
-use crate::packet::{self, ipv4_header_checksum, prepare_forward, Mac, ETHERTYPE_IPV4};
+use crate::packet::{ipv4_header_checksum, prepare_forward, Mac, ETHERTYPE_IPV4};
+use rvpn_core::SessionId;
 
-    fn sid(n: u8) -> SessionId {
+fn sid(n: u8) -> SessionId {
         SessionId::new([n; 16])
-    }
+}
 
     fn ipv4(src: [u8; 4], dst: [u8; 4], ttl: u8) -> Vec<u8> {
         let mut packet = vec![0u8; 28];
