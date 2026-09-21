@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::ServerConfig;
 use rvpn_interface::VirtualInterface;
+use rvpn_net::{NetConfigurator, RouteSpec, SystemNet};
+use std::net::IpAddr;
 use tokio::process::Command;
 
 pub async fn configure_server_interface(
@@ -8,15 +10,19 @@ pub async fn configure_server_interface(
     config: &ServerConfig,
 ) -> Result<()> {
     if config.interface.address.is_some() || !config.interface.addresses.is_empty() {
+        let net = SystemNet::new().context("opening native networking backend")?;
+        net.set_link_up(dev.name()).await?;
+
         for address in config
             .interface
             .address
             .iter()
             .chain(&config.interface.addresses)
         {
-            run("ip", ["address", "replace", address, "dev", dev.name()]).await?;
+            let prefix = rvpn_net::cidr(address)
+                .with_context(|| format!("invalid configured interface address: {address}"))?;
+            net.add_address(dev.name(), prefix).await?;
         }
-        run("ip", ["link", "set", "dev", dev.name(), "up"]).await?;
     }
     Ok(())
 }
