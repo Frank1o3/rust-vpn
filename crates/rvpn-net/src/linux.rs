@@ -219,7 +219,7 @@ impl NetConfigurator for SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
-            .call::<_, _, ()>("SetDomains", &[("~.".to_owned(), true)])
+            .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         proxy
