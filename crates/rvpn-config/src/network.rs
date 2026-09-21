@@ -290,3 +290,44 @@ impl InterfaceConfig {
     }
 }
 
+
+
+pub(crate) trait ConfigValidation {
+    fn validate(&self) -> Result<(), ConfigError>;
+}
+
+impl ConfigValidation for HandshakeConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        HandshakeConfig::validate(self)
+    }
+}
+
+impl ConfigValidation for RekeyConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        RekeyConfig::validate(self)
+    }
+}
+
+impl ConfigValidation for LivenessConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        LivenessConfig::validate(self)
+    }
+}
+
+impl ConfigValidation for ClientRoutingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        ClientRoutingConfig::validate(self)
+    }
+}
+
+impl ConfigValidation for ForwardingConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        ForwardingConfig::validate(self)
+    }
+}
+
+impl ConfigValidation for InterfaceConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        InterfaceConfig::validate(self)
+    }
+}
