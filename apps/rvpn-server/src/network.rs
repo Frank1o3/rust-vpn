@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail};
 use rvpn_config::ServerConfig;
 use rvpn_interface::VirtualInterface;
 use rvpn_net::{NetConfigurator, RouteSpec, SystemNet};
-use std::net::IpAddr;
 use tokio::process::Command;
 
 pub async fn configure_server_interface(
