@@ -3,6 +3,7 @@ use zeroize::Zeroize;
 
 use crate::CryptoError;
 
+#[derive(Clone)]
 pub struct Secret<const N: usize>(pub(crate) [u8; N]);
 
 impl<const N: usize> Secret<N> {
