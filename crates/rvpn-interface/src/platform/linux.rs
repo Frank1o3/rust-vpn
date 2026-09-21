@@ -134,10 +134,12 @@ impl VirtualInterface {
         loop {
             let mut ready = self.file.readable().await?;
             match ready.try_io(|file| {
-                unsafe { buffer.set_len(capacity) };
+                buffer.resize(capacity, 0);
                 let result = file.get_ref().read(&mut buffer);
                 if let Ok(n) = result {
-                    unsafe { buffer.set_len(n) };
+                    buffer.truncate(n);
+                } else {
+                    buffer.clear();
                 }
                 result
             }) {
@@ -155,7 +157,7 @@ impl VirtualInterface {
                 }
                 Ok(Err(error)) => return Err(error.into()),
                 Err(_) => {
-                    unsafe { buffer.set_len(0) };
+                    buffer.clear();
                     continue;
                 }
             }
