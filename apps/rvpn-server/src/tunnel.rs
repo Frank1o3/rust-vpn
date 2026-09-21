@@ -460,13 +460,14 @@ pub async fn run_server_loop(
                                 if peer.endpoint == datagram.peer {
                                     match peer.session.seal(PacketKind::Keepalive, b"") {
                                         Ok(ack) => {
+                                            let peer_name = peer.identity.name.clone();
                                             if let Err(error) = send_wire(
                                                 &transport,
                                                 datagram.peer,
                                                 wrap(ack.encode(), obfuscation)?,
                                             ).await {
                                                 tracing::debug!(
-                                                    peer = %peer.identity.name,
+                                                    peer = %peer_name,
                                                     %error,
                                                     "failed to send handshake finish acknowledgment"
                                                 );
