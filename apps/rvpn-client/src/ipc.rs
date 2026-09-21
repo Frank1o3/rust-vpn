@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::{Path, PathBuf}, sync::Arc};
 
 use anyhow::{Context, Result};
 use rvpn_config::ClientConfig;
@@ -35,10 +35,10 @@ impl Daemon {
         if guard.is_some() {
             anyhow::bail!("already connected; disconnect first");
         }
+        let config_path = allowed_config_path(&config_path)?;
         let config = ClientConfig::from_toml(
-            &tokio::fs::read_to_string(&config_path)
-                .await
-                .with_context(|| format!("reading {config_path}"))?,
+            &rvpn_config::read_config_file(&config_path)
+                .with_context(|| format!("reading {}", config_path.display()))?,
         )?;
         let gui_state = GuiState::handle();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -96,6 +96,23 @@ impl Daemon {
             keepalives_sent: snap.keepalives_sent,
         }
     }
+}
+
+fn allowed_config_path(raw: &str) -> Result<PathBuf> {
+    let config_dir = rvpn_config::default_config_dir();
+    let config_dir = std::fs::canonicalize(&config_dir)
+        .with_context(|| format!("resolving config directory {}", config_dir.display()))?;
+    let path = Path::new(raw);
+    let path = std::fs::canonicalize(path)
+        .with_context(|| format!("resolving config path {raw}"))?;
+    if !path.starts_with(&config_dir) {
+        anyhow::bail!(
+            "IPC config path {} is outside the RVPN config directory {}",
+            path.display(),
+            config_dir.display()
+        );
+    }
+    Ok(path)
 }
 
 async fn wait_for_shutdown(mut rx: watch::Receiver<bool>) -> Result<()> {
