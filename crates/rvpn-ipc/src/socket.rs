@@ -51,15 +51,39 @@ async fn create_listener() -> Result<Listener, IpcError> {
     let path = socket_path();
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+        }
     }
     let path_str = path.to_string_lossy().into_owned();
     let name = path_str.as_str().to_fs_name::<GenericFilePath>()?;
     match ListenerOptions::new().name(name).create_tokio() {
-        Ok(listener) => Ok(listener),
+        Ok(listener) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                tokio::fs::set_permissions(
+                    &path,
+                    std::fs::Permissions::from_mode(0o600),
+                ).await?;
+            }
+            Ok(listener)
+        },
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
             tokio::fs::remove_file(&path).await.ok();
             let name = path_str.as_str().to_fs_name::<GenericFilePath>()?;
-            Ok(ListenerOptions::new().name(name).create_tokio()?)
+            let listener = ListenerOptions::new().name(name).create_tokio()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                tokio::fs::set_permissions(
+                    &path,
+                    std::fs::Permissions::from_mode(0o600),
+                ).await?;
+            }
+            Ok(listener)
         }
         Err(e) => Err(e.into()),
     }
