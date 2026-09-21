@@ -250,3 +250,47 @@ fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<IpAddr> {
             )
         })
 }
+
+
+pub async fn refresh_client_endpoint(
+    dev: &VirtualInterface,
+    config: &ClientConfig,
+    old_server: SocketAddr,
+    new_server: SocketAddr,
+) -> Result<()> {
+    let net = SystemNet::new().context("opening Linux rtnetlink connection")?;
+    if old_server.ip() != new_server.ip() {
+        remove_server_route(&net, old_server).await;
+    }
+    if config.routing.default_route || config.routing.default_route_v6 {
+        let uid = unsafe { libc::geteuid() };
+        net.install_kill_switch(&KillSwitchSpec {
+            endpoint: new_server,
+            tunnel_interface: dev.name().to_owned(),
+            uid,
+        })
+        .await
+        .context("refreshing Linux RVPN kill switch")?;
+        preserve_server_route(&net, new_server).await?;
+    }
+    Ok(())
+}
+
+async fn remove_server_route(net: &SystemNet, server: SocketAddr) {
+    let Ok(best) = net.best_route_to(server.ip()).await else {
+        return;
+    };
+    let destination: IpNet = if server.is_ipv4() {
+        format!("{}/32", server.ip()).parse().unwrap()
+    } else {
+        format!("{}/128", server.ip()).parse().unwrap()
+    };
+    let _ = net
+        .delete_route(&RouteSpec {
+            destination,
+            gateway: best.gateway,
+            interface_index: Some(best.interface_index),
+            source: None,
+        })
+        .await;
+}
