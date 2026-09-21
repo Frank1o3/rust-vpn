@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::PathBuf};
 
-use crate::{decode_psk, validate_endpoint_syntax, ConfigError};
+use crate::{decode_psk, ConfigError};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -133,33 +133,5 @@ impl ClientConfig {
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
         self.obfuscation_key.as_deref().map(decode_psk).transpose()
     }
-}
-
-pub async fn resolve_endpoint(value: &str) -> Result<SocketAddr, ConfigError> {
-    let mut addrs =
-        tokio::net::lookup_host(value)
-            .await
-            .map_err(|source| ConfigError::Resolution {
-                host: value.to_string(),
-                source,
-            })?;
-    addrs
-        .next()
-        .ok_or_else(|| ConfigError::NoResolvedAddress(value.to_string()))
-}
-
-pub fn validate_endpoint_syntax(value: &str) -> Result<(), ConfigError> {
-    let (_, port_str) = value.rsplit_once(':').ok_or(ConfigError::Invalid(
-        "server endpoint must be in host:port or ip:port form",
-    ))?;
-    let port: u16 = port_str
-        .parse()
-        .map_err(|_| ConfigError::Invalid("server endpoint port must be a valid number"))?;
-    if port == 0 {
-        return Err(ConfigError::Invalid(
-            "server endpoint port must not be zero",
-        ));
-    }
-    Ok(())
 }
 
