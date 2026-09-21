@@ -44,6 +44,7 @@ async fn send_wire(
     }
 }
 
+#[allow(unused_assignments)]
 pub async fn run_tunnel(
     config: AndroidTunnelConfig,
     mut shutdown: watch::Receiver<bool>,
