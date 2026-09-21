@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -24,4 +25,8 @@ pub enum ConfigError {
     UnknownLinkPeer(String),
     #[error("duplicate peer name '{0}'; peer names must be unique so links are unambiguous")]
     DuplicatePeerName(String),
+    #[error("failed to read configuration file: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("configuration file '{0}' is group/world-readable; use mode 0600")]
+    InsecurePermissions(PathBuf),
 }
