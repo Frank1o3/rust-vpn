@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::util::{decode_certificate, decode_psk, validate_endpoint, validate_psk};
+use crate::network::ConfigValidation;
 use crate::ConfigError;
 
 #[derive(Clone, Deserialize, Serialize)]
