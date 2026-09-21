@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
         .nth(1)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(rvpn_config::default_server_config_path);
-    let config = ServerConfig::from_toml(&fs::read_to_string(&path).with_context(|| {
+    let config = ServerConfig::from_toml(&rvpn_config::read_config_file(&path).with_context(|| {
         format!(
             "reading {} (pass a path as the first argument to override)",
             path.display()
