@@ -2,6 +2,7 @@ package org.rvpn.client
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -15,6 +16,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : AppCompatActivity() {
 
@@ -26,9 +29,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statsUptimeText: TextView
     private lateinit var connectButton: Button
 
-    // Config section: paste a client.toml, WireGuard-import style.
+    // Config section: scan a QR code or paste a client.toml, WireGuard-import style.
     private lateinit var configInput: EditText
     private lateinit var saveConfigButton: Button
+    private lateinit var scanQrButton: Button
+    private lateinit var pasteClipboardButton: Button
     private lateinit var configStatusText: TextView
 
     private lateinit var sections: Map<Int, View>
@@ -41,6 +46,17 @@ class MainActivity : AppCompatActivity() {
         } else {
             Toast.makeText(this, "VPN permission denied", Toast.LENGTH_SHORT).show()
             updateUiState(false, "Permission Denied")
+        }
+    }
+
+    // ZXing's ScanContract shows the camera preview and asks for the CAMERA
+    // permission itself; `contents` is null when the user backs out.
+    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val contents = result.contents
+        if (contents.isNullOrBlank()) {
+            configStatusText.text = "QR scan cancelled."
+        } else {
+            importConfigText(contents, "QR code")
         }
     }
 
@@ -74,8 +90,12 @@ class MainActivity : AppCompatActivity() {
 
         configInput = findViewById(R.id.configInput)
         saveConfigButton = findViewById(R.id.saveConfigButton)
+        scanQrButton = findViewById(R.id.scanQrButton)
+        pasteClipboardButton = findViewById(R.id.pasteClipboardButton)
         configStatusText = findViewById(R.id.configStatusText)
         saveConfigButton.setOnClickListener { saveConfigSection() }
+        scanQrButton.setOnClickListener { launchQrScanner() }
+        pasteClipboardButton.setOnClickListener { pasteFromClipboard() }
 
         sections = mapOf(
             R.id.nav_main to findViewById(R.id.sectionMain),
@@ -125,18 +145,49 @@ class MainActivity : AppCompatActivity() {
         configInput.setText(RvpnConfig.load(this).rawClientToml)
     }
 
-    /** Parses whatever is currently in the paste box and persists it. */
+    private fun launchQrScanner() {
+        val options = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Scan the RVPN client QR code")
+            setBeepEnabled(false)
+            setOrientationLocked(false)
+        }
+        qrScanLauncher.launch(options)
+    }
+
+    private fun pasteFromClipboard() {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        val text = clipboard?.primaryClip
+            ?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)
+            ?.coerceToText(this)
+            ?.toString()
+        if (text.isNullOrBlank()) {
+            configStatusText.text = "The clipboard is empty."
+        } else {
+            importConfigText(text, "clipboard")
+        }
+    }
+
+    /** Fills the config box with [text] and saves it right away. */
+    private fun importConfigText(text: String, source: String) {
+        configInput.setText(text.trim())
+        configStatusText.text = "Loaded config from $source."
+        saveConfigSection()
+    }
+
+    /** Parses whatever is currently in the config box and persists it. */
     private fun saveConfigSection() {
         val text = configInput.text.toString()
         if (text.isBlank()) {
-            configStatusText.text = "Paste your client.toml contents above first."
+            configStatusText.text = "Scan a QR code or paste your client.toml above first."
             return
         }
         try {
             val base = RvpnConfig.load(this)
             val updated = TomlConfigParser.toRvpnConfig(text, base)
             if (updated.server.isBlank()) {
-                configStatusText.text = "Could not find `server = \"host:port\"` in the pasted config."
+                configStatusText.text = "Could not find `server = \"host:port\"` in this config."
                 return
             }
             RvpnConfig.save(this, updated)
@@ -151,7 +202,7 @@ class MainActivity : AppCompatActivity() {
         val config = RvpnConfig.load(this)
         if (config.server.isBlank()) {
             showSection(R.id.nav_config)
-            Toast.makeText(this, "Paste and save a client.toml first", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Scan a QR code or paste a client.toml first", Toast.LENGTH_SHORT).show()
             return
         }
         val authValid = when (config.authMode) {

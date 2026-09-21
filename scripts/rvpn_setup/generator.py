@@ -22,7 +22,7 @@ from .prompts import (
     prompt_hex_list,
 )
 from .render import render_client_toml, render_server_toml
-
+from .qr import emit_android_qr
 
 def network_cidr(address_with_prefix: str) -> str:
     return str(ipaddress.ip_interface(address_with_prefix).network)
@@ -543,10 +543,10 @@ def generate(output_dir: Path) -> tuple[Path, list[Path]]:
     client_paths: list[Path] = []
     for peer in peers:
         path = output_dir / f"client-{peer.platform}-{slugify(peer.name)}.toml"
-        path.write_text(
-            render_client_toml(setup, peer),
-            encoding="utf-8",
-        )
+        client_text = render_client_toml(setup, peer)
+        path.write_text(client_text, encoding="utf-8")
         client_paths.append(path)
+        if peer.platform == "android":
+            emit_android_qr(peer.name, client_text, path.with_suffix(".png"))
 
     return server_path, client_paths
