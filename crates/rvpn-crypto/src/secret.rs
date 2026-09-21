@@ -3,7 +3,7 @@ use zeroize::Zeroize;
 
 use crate::CryptoError;
 
-pub struct Secret<const N: usize>([u8; N]);
+pub struct Secret<const N: usize>(pub(crate) [u8; N]);
 
 impl<const N: usize> Secret<N> {
     pub fn random() -> Result<Self, CryptoError> {
@@ -14,11 +14,11 @@ impl<const N: usize> Secret<N> {
         Ok(Self(bytes))
     }
 
-    fn from_bytes(bytes: [u8; N]) -> Self {
+    pub(crate) fn from_bytes(bytes: [u8; N]) -> Self {
         Self(bytes)
     }
 
-    fn as_bytes(&self) -> &[u8; N] {
+    pub(crate) fn as_bytes(&self) -> &[u8; N] {
         &self.0
     }
 }
