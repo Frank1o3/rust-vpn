@@ -2157,9 +2157,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20",
  "getrandom",
@@ -2252,7 +2252,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rvpn-android"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2272,11 +2272,10 @@ dependencies = [
 
 [[package]]
 name = "rvpn-client"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bytes",
- "caps",
  "libc",
  "rvpn-config",
  "rvpn-core",
@@ -2285,16 +2284,14 @@ dependencies = [
  "rvpn-ipc",
  "rvpn-protocol",
  "rvpn-transport",
- "tao",
  "tokio",
  "tracing",
  "tracing-subscriber",
- "tray-icon",
 ]
 
 [[package]]
 name = "rvpn-config"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "hex",
  "ipnet",
@@ -2308,7 +2305,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-core"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "rvpn-transport",
  "thiserror 2.0.20",
@@ -2316,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-crypto"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "bytes",
  "chacha20",
@@ -2335,7 +2332,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-interface"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "bytes",
  "libc",
@@ -2348,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-ipc"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "interprocess",
  "libc",
@@ -2358,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-protocol"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "bytes",
  "rvpn-core",
@@ -2368,7 +2365,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-routing"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "ipnet",
  "rvpn-core",
@@ -2376,7 +2373,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-server"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2396,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-transport"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "bytes",
  "criterion",
@@ -2408,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "rvpn-tray"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "anyhow",
  "bytes",
