@@ -114,7 +114,7 @@ pub async fn configure_client_network(
             if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
                 tracing::warn!(%error, "native Linux DNS backend rejected RVPN DNS configuration");
             } else {
-                tracing::info!(interface = dev.name(), dns = ?dns_servers, "configured DNS servers through systemd-resolved D-Bus");
+                tracing::info!(interface = dev.name(), dns = ?dns_servers, "configured DNS servers for RVPN interface");
             }
         }
     }
@@ -206,7 +206,7 @@ pub async fn teardown_client_network(
 
     if config.interface.dns_servers.is_some() {
         if let Err(error) = net.revert_dns(dev.name()).await {
-            tracing::warn!(%error, "failed to revert systemd-resolved RVPN DNS state");
+            tracing::warn!(%error, "failed to revert RVPN DNS configuration");
         }
     }
 

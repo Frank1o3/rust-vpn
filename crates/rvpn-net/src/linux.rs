@@ -132,7 +132,11 @@ impl SystemNet {
         let device: OwnedObjectPath = manager
             .call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &name)
             .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager DNS: could not find device for interface {name}: {e}"
+                ))
+            })?;
 
         let interface_addresses = self.interface_addresses(name).await?;
         if interface_addresses.is_empty() {
@@ -150,14 +154,19 @@ impl SystemNet {
             .filter_map(|server| server.is_ipv6().then(|| server.to_string()))
             .collect();
 
-        let mut connection_settings = HashMap::new();
+        // Use the "generic" connection type so that NetworkManager manages DNS
+        // for this interface without attempting to create or take ownership of
+        // the underlying kernel device.  RVPN already created the TUN/TAP via
+        // /dev/net/tun; using "tun" here would cause NM to introspect the
+        // device as a NM-owned TUN, which fails with:
+        //   "failed to determine interface name for a TUN"
+        // The "generic" type tells NM the device already exists externally and
+        // NM should only manage the connection properties (DNS, routing policy).
+        let mut connection_settings: HashMap<&str, Value<'_>> = HashMap::new();
         connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
-        connection_settings.insert("type", Value::from("tun"));
+        connection_settings.insert("type", Value::from("generic"));
         connection_settings.insert("interface-name", Value::from(name.to_owned()));
         connection_settings.insert("autoconnect", Value::from(false));
-
-        let mut tun = HashMap::new();
-        tun.insert("mode", Value::from(1_u32));
 
         let v4_addresses: Vec<HashMap<&str, Value<'_>>> = interface_addresses
             .iter()
@@ -183,40 +192,51 @@ impl SystemNet {
             })
             .collect();
 
-        let mut ipv4 = HashMap::new();
+        // Always use "manual" method when addresses of a given family are
+        // present.  NM does not permit dns-data when method is "disabled", so
+        // DNS entries are only included together with a "manual" method entry.
+        // When a family has no addresses, set "disabled" and omit DNS for that
+        // family entirely.
+        let mut ipv4: HashMap<&str, Value<'_>> = HashMap::new();
         if !v4_addresses.is_empty() {
             ipv4.insert("method", Value::from("manual"));
             ipv4.insert("address-data", Value::from(v4_addresses));
             ipv4.insert("never-default", Value::from(true));
+            if !v4.is_empty() {
+                ipv4.insert("dns-data", Value::from(v4));
+                ipv4.insert("dns-priority", Value::from(-42_i32));
+            }
         } else {
             ipv4.insert("method", Value::from("disabled"));
         }
-        if !v4.is_empty() {
-            ipv4.insert("dns-data", Value::from(v4));
-            ipv4.insert("dns-priority", Value::from(-42_i32));
-        }
 
-        let mut ipv6 = HashMap::new();
+        let mut ipv6: HashMap<&str, Value<'_>> = HashMap::new();
         if !v6_addresses.is_empty() {
             ipv6.insert("method", Value::from("manual"));
             ipv6.insert("address-data", Value::from(v6_addresses));
             ipv6.insert("never-default", Value::from(true));
+            if !v6.is_empty() {
+                ipv6.insert("dns-data", Value::from(v6));
+                ipv6.insert("dns-priority", Value::from(-42_i32));
+            }
         } else {
             ipv6.insert("method", Value::from("disabled"));
-        }
-        if !v6.is_empty() {
-            ipv6.insert("dns-data", Value::from(v6));
-            ipv6.insert("dns-priority", Value::from(-42_i32));
         }
 
         let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
         settings.insert("connection", connection_settings);
-        settings.insert("tun", tun);
         settings.insert("ipv4", ipv4);
         settings.insert("ipv6", ipv6);
+        // Note: no type-specific section (no "tun" key).  The "generic" type
+        // does not require one, and including a device-type-specific section
+        // for an externally-created interface causes NM to attempt device
+        // introspection/creation, which fails for RVPN-owned TUN/TAP devices.
 
-        let mut options = HashMap::new();
+        let mut options: HashMap<&str, Value<'_>> = HashMap::new();
         options.insert("persist", Value::from("volatile"));
+        // "dbus-client" scopes this volatile connection to this D-Bus client;
+        // NM will automatically deactivate it when the process exits, providing
+        // a safe fallback even if explicit teardown does not run.
         options.insert("bind-activation", Value::from("dbus-client"));
 
         let _: (
@@ -235,7 +255,11 @@ impl SystemNet {
                 ),
             )
             .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager DNS configuration failed for interface {name}: {e}"
+                ))
+            })?;
 
         Ok(())
     }
