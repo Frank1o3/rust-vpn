@@ -148,7 +148,13 @@ impl SystemNet {
         ) = manager
             .call(
                 "AddAndActivateConnection2",
-                &(&settings, &device, &OwnedObjectPath::try_from("/")?, &options),
+                &(
+                    &settings,
+                    &device,
+                    &OwnedObjectPath::try_from("/")
+                        .map_err(|e| NetError::Operation(e.to_string()))?,
+                    &options,
+                ),
             )
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
