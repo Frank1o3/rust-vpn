@@ -112,7 +112,7 @@ pub async fn configure_client_network(
     if let Ok(dns_servers) = config.interface.dns_server_list() {
         if !dns_servers.is_empty() {
             if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
-                tracing::warn!(%error, "systemd-resolved rejected RVPN DNS configuration");
+                tracing::warn!(%error, "native Linux DNS backend rejected RVPN DNS configuration");
             } else {
                 tracing::info!(interface = dev.name(), dns = ?dns_servers, "configured DNS servers through systemd-resolved D-Bus");
             }
