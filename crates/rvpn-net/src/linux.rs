@@ -2,18 +2,12 @@ use crate::{BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError,
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
-    packet_route::{
-        address::AddressAttribute,
-        route::{RouteAddress, RouteAttribute},
-    },
+    packet_route::route::{RouteAddress, RouteAttribute},
 };
-use std::{
-    collections::HashMap,
-    net::{Ipv4Addr, Ipv6Addr},
-};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::sync::OnceCell;
 use zbus::{
-    zvariant::{OwnedObjectPath, OwnedValue, Value},
+    zvariant::OwnedObjectPath,
     Connection, Proxy,
 };
 
@@ -60,6 +54,11 @@ impl SystemNet {
             .map(Clone::clone)
     }
 
+    /// Query NetworkManager for its current DNS processing mode.
+    ///
+    /// Common return values: `"default"`, `"dnsmasq"`, `"systemd-resolved"`,
+    /// `"none"`.  Returns an error when NetworkManager is not running or the
+    /// DnsManager interface is unavailable.
     async fn network_manager_dns_mode(
         connection: &Connection,
     ) -> Result<String, NetError> {
@@ -77,193 +76,14 @@ impl SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))
     }
 
-    async fn interface_addresses(
-        &self,
-        name: &str,
-    ) -> Result<Vec<(IpAddr, u8)>, NetError> {
-        let index = self.index(name).await?;
-        let mut addresses = self
-            .handle
-            .address()
-            .get()
-            .set_link_index_filter(index)
-            .execute();
-        let mut result = Vec::new();
-
-        while let Some(address) = addresses
-            .try_next()
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?
-        {
-            for attribute in address.attributes {
-                match attribute {
-                    AddressAttribute::Address(value) | AddressAttribute::Local(value) => {
-                        if !result.iter().any(|(existing, _)| *existing == value) {
-                            result.push((value, address.header.prefix_len));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(result)
-    }
-
-    async fn set_dns_networkmanager(
-        &self,
-        connection: &Connection,
-        name: &str,
-        servers: &[IpAddr],
-    ) -> Result<(), NetError> {
-        let manager = Proxy::new(
-            connection,
-            "org.freedesktop.NetworkManager",
-            "/org/freedesktop/NetworkManager",
-            "org.freedesktop.NetworkManager",
-        )
-        .await
-        .map_err(|e| NetError::Operation(e.to_string()))?;
-
-        // Replace an RVPN DNS activation left over from a reconnect before
-        // installing the current server set.
-        Self::revert_dns_networkmanager(connection, name).await?;
-
-        let device: OwnedObjectPath = manager
-            .call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &name)
-            .await
-            .map_err(|e| {
-                NetError::Operation(format!(
-                    "NetworkManager DNS: could not find device for interface {name}: {e}"
-                ))
-            })?;
-
-        let interface_addresses = self.interface_addresses(name).await?;
-        if interface_addresses.is_empty() {
-            return Err(NetError::Operation(format!(
-                "NetworkManager DNS activation requires an existing IP address on {name}"
-            )));
-        }
-
-        let v4: Vec<String> = servers
-            .iter()
-            .filter_map(|server| server.is_ipv4().then(|| server.to_string()))
-            .collect();
-        let v6: Vec<String> = servers
-            .iter()
-            .filter_map(|server| server.is_ipv6().then(|| server.to_string()))
-            .collect();
-
-        // Use the "generic" connection type so that NetworkManager manages DNS
-        // for this interface without attempting to create or take ownership of
-        // the underlying kernel device.  RVPN already created the TUN/TAP via
-        // /dev/net/tun; using "tun" here would cause NM to introspect the
-        // device as a NM-owned TUN, which fails with:
-        //   "failed to determine interface name for a TUN"
-        // The "generic" type tells NM the device already exists externally and
-        // NM should only manage the connection properties (DNS, routing policy).
-        let mut connection_settings: HashMap<&str, Value<'_>> = HashMap::new();
-        connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
-        connection_settings.insert("type", Value::from("generic"));
-        connection_settings.insert("interface-name", Value::from(name.to_owned()));
-        connection_settings.insert("autoconnect", Value::from(false));
-
-        let v4_addresses: Vec<HashMap<&str, Value<'_>>> = interface_addresses
-            .iter()
-            .filter_map(|(address, prefix)| {
-                address.is_ipv4().then(|| {
-                    let mut item = HashMap::new();
-                    item.insert("address", Value::from(address.to_string()));
-                    item.insert("prefix-length", Value::from(u32::from(*prefix)));
-                    item
-                })
-            })
-            .collect();
-
-        let v6_addresses: Vec<HashMap<&str, Value<'_>>> = interface_addresses
-            .iter()
-            .filter_map(|(address, prefix)| {
-                address.is_ipv6().then(|| {
-                    let mut item = HashMap::new();
-                    item.insert("address", Value::from(address.to_string()));
-                    item.insert("prefix-length", Value::from(u32::from(*prefix)));
-                    item
-                })
-            })
-            .collect();
-
-        // Always use "manual" method when addresses of a given family are
-        // present.  NM does not permit dns-data when method is "disabled", so
-        // DNS entries are only included together with a "manual" method entry.
-        // When a family has no addresses, set "disabled" and omit DNS for that
-        // family entirely.
-        let mut ipv4: HashMap<&str, Value<'_>> = HashMap::new();
-        if !v4_addresses.is_empty() {
-            ipv4.insert("method", Value::from("manual"));
-            ipv4.insert("address-data", Value::from(v4_addresses));
-            ipv4.insert("never-default", Value::from(true));
-            if !v4.is_empty() {
-                ipv4.insert("dns-data", Value::from(v4));
-                ipv4.insert("dns-priority", Value::from(-42_i32));
-            }
-        } else {
-            ipv4.insert("method", Value::from("disabled"));
-        }
-
-        let mut ipv6: HashMap<&str, Value<'_>> = HashMap::new();
-        if !v6_addresses.is_empty() {
-            ipv6.insert("method", Value::from("manual"));
-            ipv6.insert("address-data", Value::from(v6_addresses));
-            ipv6.insert("never-default", Value::from(true));
-            if !v6.is_empty() {
-                ipv6.insert("dns-data", Value::from(v6));
-                ipv6.insert("dns-priority", Value::from(-42_i32));
-            }
-        } else {
-            ipv6.insert("method", Value::from("disabled"));
-        }
-
-        let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
-        settings.insert("connection", connection_settings);
-        settings.insert("ipv4", ipv4);
-        settings.insert("ipv6", ipv6);
-        // Note: no type-specific section (no "tun" key).  The "generic" type
-        // does not require one, and including a device-type-specific section
-        // for an externally-created interface causes NM to attempt device
-        // introspection/creation, which fails for RVPN-owned TUN/TAP devices.
-
-        let mut options: HashMap<&str, Value<'_>> = HashMap::new();
-        options.insert("persist", Value::from("volatile"));
-        // "dbus-client" scopes this volatile connection to this D-Bus client;
-        // NM will automatically deactivate it when the process exits, providing
-        // a safe fallback even if explicit teardown does not run.
-        options.insert("bind-activation", Value::from("dbus-client"));
-
-        let _: (
-            OwnedObjectPath,
-            OwnedObjectPath,
-            HashMap<String, OwnedValue>,
-        ) = manager
-            .call(
-                "AddAndActivateConnection2",
-                &(
-                    &settings,
-                    &device,
-                    &OwnedObjectPath::try_from("/")
-                        .map_err(|e| NetError::Operation(e.to_string()))?,
-                    &options,
-                ),
-            )
-            .await
-            .map_err(|e| {
-                NetError::Operation(format!(
-                    "NetworkManager DNS configuration failed for interface {name}: {e}"
-                ))
-            })?;
-
-        Ok(())
-    }
-
+    /// Deactivate any RVPN DNS connection profile that NetworkManager is
+    /// currently holding for `name`.
+    ///
+    /// This cleans up volatile `"RVPN DNS {name}"` profiles that may have been
+    /// left behind by a previous RVPN version which used
+    /// `AddAndActivateConnection2`, or by a reconnect cycle.  It is safe to
+    /// call unconditionally — if no such profile exists the function returns
+    /// `Ok(())`.
     async fn revert_dns_networkmanager(
         connection: &Connection,
         name: &str,
@@ -327,6 +147,10 @@ impl SystemNet {
         Ok(())
     }
 
+    /// Build a `org.freedesktop.resolve1.Link` proxy for the given interface.
+    ///
+    /// The proxy targets `/org/freedesktop/resolve1/link/{index}` where
+    /// `index` is the kernel interface index obtained via rtnetlink.
     async fn resolve_proxy<'a>(
         &self,
         name: &str,
@@ -342,6 +166,69 @@ impl SystemNet {
         )
         .await
         .map_err(|e| NetError::Operation(e.to_string()))
+    }
+
+    /// Configure per-link DNS on `name` through `org.freedesktop.resolve1`.
+    ///
+    /// Sets the DNS server list, makes `"~."` a routing domain so that all
+    /// queries are eligible to be routed through this link, and marks the link
+    /// as the default DNS route.
+    async fn set_dns_resolved(
+        &self,
+        name: &str,
+        servers: &[IpAddr],
+        connection: &Connection,
+    ) -> Result<(), NetError> {
+        let proxy = self.resolve_proxy(name, connection).await?;
+        let addresses: Vec<(i32, Vec<u8>)> = servers
+            .iter()
+            .map(|address| match address {
+                IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
+                IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
+            })
+            .collect();
+        proxy
+            .call::<_, _, ()>("SetDNS", &addresses)
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "systemd-resolved SetDNS failed for interface {name}: {e}"
+                ))
+            })?;
+        proxy
+            .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "systemd-resolved SetDomains failed for interface {name}: {e}"
+                ))
+            })?;
+        proxy
+            .call::<_, _, ()>("SetDefaultRoute", &true)
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "systemd-resolved SetDefaultRoute failed for interface {name}: {e}"
+                ))
+            })?;
+        Ok(())
+    }
+
+    /// Revert per-link DNS on `name` through `org.freedesktop.resolve1`.
+    async fn revert_dns_resolved(
+        &self,
+        name: &str,
+        connection: &Connection,
+    ) -> Result<(), NetError> {
+        let proxy = self.resolve_proxy(name, connection).await?;
+        proxy
+            .call::<_, _, ()>("Revert", &())
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "systemd-resolved Revert failed for interface {name}: {e}"
+                ))
+            })
     }
 
     fn route_message(
@@ -501,88 +388,72 @@ impl NetConfigurator for SystemNet {
 
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
+
+        // NetworkManager's AddAndActivateConnection2 API cannot handle
+        // TUN/TAP interfaces created externally (outside NM) — it fails with
+        // "failed to determine interface name for a TUN" regardless of the
+        // connection type ("tun", "generic", etc.) because NM internally
+        // classifies the device as NMDeviceTun and cannot activate against it.
+        //
+        // Instead, we always configure per-link DNS through systemd-resolved's
+        // org.freedesktop.resolve1.Link D-Bus interface.  This is the standard
+        // per-link DNS API on systemd-based Linux systems and works correctly
+        // regardless of NetworkManager's dns= mode:
+        //
+        //   dns=systemd-resolved  →  NM pushes its own DNS to resolved; our
+        //                            per-link config coexists with priority set
+        //                            by the routing domain ("~.").
+        //   dns=default           →  On systems with resolved, /etc/resolv.conf
+        //                            points to the resolved stub (127.0.0.53),
+        //                            so per-link resolved config is effective.
+        //   dns=dnsmasq           →  Similar — resolved handles per-link routing.
+        //   dns=none              →  NM does not touch DNS; resolved is the
+        //                            sole manager.
+        //
+        // Detect the NM DNS mode for diagnostics/logging.
         match Self::network_manager_dns_mode(&connection).await {
-            Ok(mode) if mode != "systemd-resolved" => {
+            Ok(mode) => {
                 tracing::info!(
                     interface = name,
-                    mode = %mode,
-                    "configuring RVPN DNS through NetworkManager"
+                    nm_dns_mode = %mode,
+                    "configuring RVPN DNS via systemd-resolved per-link API"
                 );
-                self.set_dns_networkmanager(&connection, name, servers).await
-            }
-            Ok(_) => {
-                let proxy = self.resolve_proxy(name, &connection).await?;
-                let addresses: Vec<(i32, Vec<u8>)> = servers
-                    .iter()
-                    .map(|address| match address {
-                        IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
-                        IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
-                    })
-                    .collect();
-                proxy
-                    .call::<_, _, ()>("SetDNS", &addresses)
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                proxy
-                    .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                proxy
-                    .call::<_, _, ()>("SetDefaultRoute", &true)
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                Ok(())
+                // Clean up any stale NM DNS profile from a previous RVPN
+                // version that used AddAndActivateConnection2.
+                if let Err(e) = Self::revert_dns_networkmanager(&connection, name).await {
+                    tracing::debug!(
+                        interface = name,
+                        %e,
+                        "no stale NetworkManager RVPN DNS profile to clean up"
+                    );
+                }
             }
             Err(error) => {
-                // If NetworkManager itself is unavailable, preserve the
-                // previous systemd-resolved behavior as a fallback.
-                tracing::debug!(%error, "NetworkManager D-Bus DNS mode unavailable; trying systemd-resolved");
-                let proxy = self.resolve_proxy(name, &connection).await?;
-                let addresses: Vec<(i32, Vec<u8>)> = servers
-                    .iter()
-                    .map(|address| match address {
-                        IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
-                        IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
-                    })
-                    .collect();
-                proxy
-                    .call::<_, _, ()>("SetDNS", &addresses)
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                proxy
-                    .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                proxy
-                    .call::<_, _, ()>("SetDefaultRoute", &true)
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))?;
-                Ok(())
+                tracing::debug!(
+                    %error,
+                    "NetworkManager D-Bus unavailable; configuring DNS via systemd-resolved"
+                );
             }
         }
+
+        self.set_dns_resolved(name, servers, &connection).await
     }
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
-        match Self::network_manager_dns_mode(&connection).await {
-            Ok(mode) if mode != "systemd-resolved" => {
-                Self::revert_dns_networkmanager(&connection, name).await
-            }
-            Ok(_) => {
-                let proxy = self.resolve_proxy(name, &connection).await?;
-                proxy
-                    .call::<_, _, ()>("Revert", &())
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))
-            }
-            Err(_) => {
-                let proxy = self.resolve_proxy(name, &connection).await?;
-                proxy
-                    .call::<_, _, ()>("Revert", &())
-                    .await
-                    .map_err(|e| NetError::Operation(e.to_string()))
-            }
+
+        // Clean up any stale NetworkManager RVPN DNS profile (from a previous
+        // version that used AddAndActivateConnection2).  Safe to call even
+        // when no such profile exists.
+        if let Err(e) = Self::revert_dns_networkmanager(&connection, name).await {
+            tracing::debug!(
+                interface = name,
+                %e,
+                "no NetworkManager RVPN DNS profile to deactivate"
+            );
         }
+
+        self.revert_dns_resolved(name, &connection).await
     }
 
     async fn install_kill_switch(&self, spec: &KillSwitchSpec) -> Result<(), NetError> {
