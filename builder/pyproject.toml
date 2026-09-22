@@ -1,7 +1,7 @@
 [project]
 name = "builder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Cli tool to setup Rust vpn or RVPN configs"
 readme = "README.md"
 authors = [
     { name = "Frank1o3", email = "jahdy1o3@gmail.com" }

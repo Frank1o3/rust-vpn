@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
-"""Interactive RVPN configuration generator.
+"""Interactive RVPN configuration generator — thin entry point.
 
-Generates a complete server.toml and one client-*.toml per peer using the
-current rvpn-config schema, including handshake, rekey, liveness, forwarding,
-peer-to-peer links, routing, and all supported authentication modes.
-
-Requires Python 3.10+ and the ``cryptography`` package.
+See builder.cli for the implementation. Kept as a standalone script because
+the Android app's config screen points users at
+`scripts/generate_rvpn_setup.py`.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from rvpn_setup.cli import main  # noqa: E402
-
+from .cli import main
 
 if __name__ == "__main__":
     raise SystemExit(main())
