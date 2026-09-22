@@ -4,8 +4,15 @@ use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
     packet_route::route::{RouteAddress, RouteAttribute},
 };
-use std::net::{Ipv4Addr, Ipv6Addr};
-use zbus::{Connection, Proxy};
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, Ipv6Addr},
+};
+use tokio::sync::OnceCell;
+use zbus::{
+    zvariant::{OwnedObjectPath, OwnedValue, Value},
+    Connection, Proxy,
+};
 
 use crate::linux_killswitch;
 
@@ -13,6 +20,8 @@ use crate::linux_killswitch;
 pub struct SystemNet {
     handle: Handle,
 }
+
+static SYSTEM_BUS: OnceCell<Connection> = OnceCell::const_new();
 
 impl SystemNet {
     pub fn new() -> Result<Self, NetError> {
@@ -35,6 +44,179 @@ impl SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))?
             .map(|link| link.header.index)
             .ok_or_else(|| NetError::InterfaceNotFound(name.to_owned()))
+    }
+
+    async fn system_bus() -> Result<Connection, NetError> {
+        SYSTEM_BUS
+            .get_or_try_init(|| async {
+                Connection::system()
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))
+            })
+            .await
+            .map(Clone::clone)
+    }
+
+    async fn network_manager_dns_mode(
+        connection: &Connection,
+    ) -> Result<String, NetError> {
+        let proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager/DnsManager",
+            "org.freedesktop.NetworkManager.DnsManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        proxy
+            .get_property::<String>("Mode")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))
+    }
+
+    async fn set_dns_networkmanager(
+        connection: &Connection,
+        name: &str,
+        servers: &[IpAddr],
+    ) -> Result<(), NetError> {
+        let manager = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        // Replace an RVPN DNS activation left over from a reconnect before
+        // installing the current server set.
+        Self::revert_dns_networkmanager(connection, name).await?;
+
+        let device: OwnedObjectPath = manager
+            .call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &name)
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        let v4: Vec<String> = servers
+            .iter()
+            .filter_map(|server| server.is_ipv4().then(|| server.to_string()))
+            .collect();
+        let v6: Vec<String> = servers
+            .iter()
+            .filter_map(|server| server.is_ipv6().then(|| server.to_string()))
+            .collect();
+
+        let mut connection_settings = HashMap::new();
+        connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
+        connection_settings.insert("type", Value::from("tun"));
+        connection_settings.insert("interface-name", Value::from(name.to_owned()));
+        connection_settings.insert("autoconnect", Value::from(false));
+
+        let mut tun = HashMap::new();
+        tun.insert("mode", Value::from(1_u32));
+
+        let mut ipv4 = HashMap::new();
+        ipv4.insert("method", Value::from("disabled"));
+        ipv4.insert("never-default", Value::from(true));
+        if !v4.is_empty() {
+            ipv4.insert("dns-data", Value::from(v4));
+            ipv4.insert("dns-priority", Value::from(-42_i32));
+        }
+
+        let mut ipv6 = HashMap::new();
+        ipv6.insert("method", Value::from("disabled"));
+        ipv6.insert("never-default", Value::from(true));
+        if !v6.is_empty() {
+            ipv6.insert("dns-data", Value::from(v6));
+            ipv6.insert("dns-priority", Value::from(-42_i32));
+        }
+
+        let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+        settings.insert("connection", connection_settings);
+        settings.insert("tun", tun);
+        settings.insert("ipv4", ipv4);
+        settings.insert("ipv6", ipv6);
+
+        let mut options = HashMap::new();
+        options.insert("persist", Value::from("volatile"));
+        options.insert("bind-activation", Value::from("dbus-name"));
+
+        let _: (
+            OwnedObjectPath,
+            OwnedObjectPath,
+            HashMap<String, OwnedValue>,
+        ) = manager
+            .call(
+                "AddAndActivateConnection2",
+                &(&settings, &device, &OwnedObjectPath::try_from("/")?, &options),
+            )
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn revert_dns_networkmanager(
+        connection: &Connection,
+        name: &str,
+    ) -> Result<(), NetError> {
+        let manager = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        let device: OwnedObjectPath = match manager
+            .call::<_, _, OwnedObjectPath>("GetDeviceByIpIface", &name)
+            .await
+        {
+            Ok(device) => device,
+            Err(_) => return Ok(()),
+        };
+
+        let device_proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            device.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        let active: OwnedObjectPath = device_proxy
+            .get_property("ActiveConnection")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        if active.as_str() == "/" {
+            return Ok(());
+        }
+
+        let active_proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            active.as_str(),
+            "org.freedesktop.NetworkManager.Connection.Active",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let id = active_proxy
+            .get_property::<String>("Id")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        if id != format!("RVPN DNS {name}") {
+            return Ok(());
+        }
+
+        manager
+            .call::<_, _, ()>("DeactivateConnection", &active)
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        Ok(())
     }
 
     async fn resolve_proxy<'a>(
@@ -210,41 +392,89 @@ impl NetConfigurator for SystemNet {
     }
 
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
-        let connection = Connection::system()
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        let proxy = self.resolve_proxy(name, &connection).await?;
-        let addresses: Vec<(i32, Vec<u8>)> = servers
-            .iter()
-            .map(|address| match address {
-                IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
-                IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
-            })
-            .collect();
-        proxy
-            .call::<_, _, ()>("SetDNS", &addresses)
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        proxy
-            .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        proxy
-            .call::<_, _, ()>("SetDefaultRoute", &true)
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        Ok(())
+        let connection = Self::system_bus().await?;
+        match Self::network_manager_dns_mode(&connection).await {
+            Ok(mode) if mode != "systemd-resolved" => {
+                tracing::info!(
+                    interface = name,
+                    mode = %mode,
+                    "configuring RVPN DNS through NetworkManager"
+                );
+                Self::set_dns_networkmanager(&connection, name, servers).await
+            }
+            Ok(_) => {
+                let proxy = self.resolve_proxy(name, &connection).await?;
+                let addresses: Vec<(i32, Vec<u8>)> = servers
+                    .iter()
+                    .map(|address| match address {
+                        IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
+                        IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
+                    })
+                    .collect();
+                proxy
+                    .call::<_, _, ()>("SetDNS", &addresses)
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                proxy
+                    .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                proxy
+                    .call::<_, _, ()>("SetDefaultRoute", &true)
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                Ok(())
+            }
+            Err(error) => {
+                // If NetworkManager itself is unavailable, preserve the
+                // previous systemd-resolved behavior as a fallback.
+                tracing::debug!(%error, "NetworkManager D-Bus DNS mode unavailable; trying systemd-resolved");
+                let proxy = self.resolve_proxy(name, &connection).await?;
+                let addresses: Vec<(i32, Vec<u8>)> = servers
+                    .iter()
+                    .map(|address| match address {
+                        IpAddr::V4(value) => (2_i32, value.octets().to_vec()),
+                        IpAddr::V6(value) => (10_i32, value.octets().to_vec()),
+                    })
+                    .collect();
+                proxy
+                    .call::<_, _, ()>("SetDNS", &addresses)
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                proxy
+                    .call::<_, _, ()>("SetDomains", &vec![("~.".to_owned(), true)])
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                proxy
+                    .call::<_, _, ()>("SetDefaultRoute", &true)
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))?;
+                Ok(())
+            }
+        }
     }
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
-        let connection = Connection::system()
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        let proxy = self.resolve_proxy(name, &connection).await?;
-        proxy
-            .call::<_, _, ()>("Revert", &())
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))
+        let connection = Self::system_bus().await?;
+        match Self::network_manager_dns_mode(&connection).await {
+            Ok(mode) if mode != "systemd-resolved" => {
+                Self::revert_dns_networkmanager(&connection, name).await
+            }
+            Ok(_) => {
+                let proxy = self.resolve_proxy(name, &connection).await?;
+                proxy
+                    .call::<_, _, ()>("Revert", &())
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))
+            }
+            Err(_) => {
+                let proxy = self.resolve_proxy(name, &connection).await?;
+                proxy
+                    .call::<_, _, ()>("Revert", &())
+                    .await
+                    .map_err(|e| NetError::Operation(e.to_string()))
+            }
+        }
     }
 
     async fn install_kill_switch(&self, spec: &KillSwitchSpec) -> Result<(), NetError> {
