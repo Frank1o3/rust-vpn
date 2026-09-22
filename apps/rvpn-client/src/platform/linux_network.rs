@@ -63,8 +63,8 @@ pub async fn configure_client_network(
             .expect("validated gateway")
             .parse()
             .context("parsing IPv4 tunnel gateway")?;
-        if !gateway.is_ipv4() || !server.is_ipv4() {
-            anyhow::bail!("IPv4 default routing requires IPv4 gateway and server endpoint");
+        if !gateway.is_ipv4() {
+            anyhow::bail!("IPv4 default routing requires an IPv4 tunnel gateway");
         }
 
         preserve_server_route(&net, server).await?;
@@ -90,8 +90,8 @@ pub async fn configure_client_network(
             .expect("validated gateway_v6")
             .parse()
             .context("parsing IPv6 tunnel gateway")?;
-        if !gateway.is_ipv6() || !server.is_ipv6() {
-            anyhow::bail!("IPv6 default routing requires IPv6 gateway and server endpoint");
+        if !gateway.is_ipv6() {
+            anyhow::bail!("IPv6 default routing requires an IPv6 tunnel gateway");
         }
 
         preserve_server_route(&net, server).await?;
