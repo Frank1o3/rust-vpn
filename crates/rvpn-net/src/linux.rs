@@ -13,6 +13,9 @@ use zbus::{
 
 use crate::linux_killswitch;
 
+const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
+const RESOLV_CONF_BACKUP_PATH: &str = "/etc/resolv.conf.rvpn-backup";
+
 #[derive(Clone)]
 pub struct SystemNet {
     handle: Handle,
@@ -54,11 +57,51 @@ impl SystemNet {
             .map(Clone::clone)
     }
 
-    /// Query NetworkManager for its current DNS processing mode.
-    ///
-    /// Common return values: `"default"`, `"dnsmasq"`, `"systemd-resolved"`,
-    /// `"none"`.  Returns an error when NetworkManager is not running or the
-    /// DnsManager interface is unavailable.
+    async fn resolved_service_available(connection: &Connection) -> Result<bool, NetError> {
+        let dbus = Proxy::new(
+            connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let names: Vec<String> = dbus
+            .call("ListActivatableNames", &())
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        Ok(names.iter().any(|n| n == "org.freedesktop.resolve1"))
+    }
+
+    async fn set_dns_resolv_conf_fallback(servers: &[IpAddr]) -> Result<(), NetError> {
+        if tokio::fs::metadata(RESOLV_CONF_BACKUP_PATH).await.is_err() {
+            if let Ok(current) = tokio::fs::read(RESOLV_CONF_PATH).await {
+                tokio::fs::write(RESOLV_CONF_BACKUP_PATH, current)
+                    .await
+                    .map_err(|e| NetError::Operation(format!("backing up resolv.conf: {e}")))?;
+            }
+        }
+
+        let mut contents = String::from("# Managed by RVPN (systemd-resolved unavailable)\n");
+        for server in servers {
+            contents.push_str(&format!("nameserver {server}\n"));
+        }
+
+        tokio::fs::write(RESOLV_CONF_PATH, contents)
+            .await
+            .map_err(|e| NetError::Operation(format!("writing resolv.conf: {e}")))
+    }
+
+    async fn revert_dns_resolv_conf_fallback() -> Result<(), NetError> {
+        if let Ok(backup) = tokio::fs::read(RESOLV_CONF_BACKUP_PATH).await {
+            tokio::fs::write(RESOLV_CONF_PATH, backup)
+                .await
+                .map_err(|e| NetError::Operation(format!("restoring resolv.conf: {e}")))?;
+            let _ = tokio::fs::remove_file(RESOLV_CONF_BACKUP_PATH).await;
+        }
+        Ok(())
+    }
+
     async fn network_manager_dns_mode(
         connection: &Connection,
     ) -> Result<String, NetError> {
@@ -76,14 +119,6 @@ impl SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))
     }
 
-    /// Deactivate any RVPN DNS connection profile that NetworkManager is
-    /// currently holding for `name`.
-    ///
-    /// This cleans up volatile `"RVPN DNS {name}"` profiles that may have been
-    /// left behind by a previous RVPN version which used
-    /// `AddAndActivateConnection2`, or by a reconnect cycle.  It is safe to
-    /// call unconditionally — if no such profile exists the function returns
-    /// `Ok(())`.
     async fn revert_dns_networkmanager(
         connection: &Connection,
         name: &str,
@@ -147,10 +182,6 @@ impl SystemNet {
         Ok(())
     }
 
-    /// Build a `org.freedesktop.resolve1.Link` proxy for the given interface.
-    ///
-    /// The proxy targets `/org/freedesktop/resolve1/link/{index}` where
-    /// `index` is the kernel interface index obtained via rtnetlink.
     async fn resolve_proxy<'a>(
         &self,
         name: &str,
@@ -168,11 +199,6 @@ impl SystemNet {
         .map_err(|e| NetError::Operation(e.to_string()))
     }
 
-    /// Configure per-link DNS on `name` through `org.freedesktop.resolve1`.
-    ///
-    /// Sets the DNS server list, makes `"~."` a routing domain so that all
-    /// queries are eligible to be routed through this link, and marks the link
-    /// as the default DNS route.
     async fn set_dns_resolved(
         &self,
         name: &str,
@@ -389,28 +415,19 @@ impl NetConfigurator for SystemNet {
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
 
-        // NetworkManager's AddAndActivateConnection2 API cannot handle
-        // TUN/TAP interfaces created externally (outside NM) — it fails with
-        // "failed to determine interface name for a TUN" regardless of the
-        // connection type ("tun", "generic", etc.) because NM internally
-        // classifies the device as NMDeviceTun and cannot activate against it.
-        //
-        // Instead, we always configure per-link DNS through systemd-resolved's
-        // org.freedesktop.resolve1.Link D-Bus interface.  This is the standard
-        // per-link DNS API on systemd-based Linux systems and works correctly
-        // regardless of NetworkManager's dns= mode:
-        //
-        //   dns=systemd-resolved  →  NM pushes its own DNS to resolved; our
-        //                            per-link config coexists with priority set
-        //                            by the routing domain ("~.").
-        //   dns=default           →  On systems with resolved, /etc/resolv.conf
-        //                            points to the resolved stub (127.0.0.53),
-        //                            so per-link resolved config is effective.
-        //   dns=dnsmasq           →  Similar — resolved handles per-link routing.
-        //   dns=none              →  NM does not touch DNS; resolved is the
-        //                            sole manager.
-        //
-        // Detect the NM DNS mode for diagnostics/logging.
+        if !Self::resolved_service_available(&connection)
+            .await
+            .unwrap_or(false)
+        {
+            tracing::warn!(
+                interface = name,
+                "org.freedesktop.resolve1 is not installed/activatable on this host; \
+                 falling back to writing /etc/resolv.conf directly (best-effort — may be \
+                 overwritten later by NetworkManager or another DNS manager)"
+            );
+            return Self::set_dns_resolv_conf_fallback(servers).await;
+        }
+
         match Self::network_manager_dns_mode(&connection).await {
             Ok(mode) => {
                 tracing::info!(
@@ -441,6 +458,13 @@ impl NetConfigurator for SystemNet {
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
+
+        if !Self::resolved_service_available(&connection)
+            .await
+            .unwrap_or(false)
+        {
+            return Self::revert_dns_resolv_conf_fallback().await;
+        }
 
         // Clean up any stale NetworkManager RVPN DNS profile (from a previous
         // version that used AddAndActivateConnection2).  Safe to call even
