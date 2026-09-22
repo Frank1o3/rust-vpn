@@ -1,11 +1,13 @@
 package org.rvpn.client
 
+import android.Manifest
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -16,6 +18,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
@@ -50,13 +53,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ZXing's ScanContract shows the camera preview and asks for the CAMERA
-    // permission itself; `contents` is null when the user backs out.
+    // permission itself, right when the user taps "Load from QR code" — not
+    // upfront. `contents` is null when the user backs out.
     private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
         val contents = result.contents
         if (contents.isNullOrBlank()) {
             configStatusText.text = "QR scan cancelled."
         } else {
             importConfigText(contents, "QR code")
+        }
+    }
+
+    // Android 13+ requires an explicit runtime grant before a foreground
+    // service's notification is shown. Requested once, right after launch,
+    // since RvpnService posts its status notification the moment Connect is
+    // tapped — asking at that point would be too late for the first connect.
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                this,
+                "Notifications are off; connection status won't appear in the shade",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -115,6 +135,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        requestNotificationPermissionIfNeeded()
+
         loadSavedConfig()
         val hasConfig = RvpnConfig.load(this).server.isNotBlank()
         showSection(if (hasConfig) R.id.nav_main else R.id.nav_config)
@@ -135,6 +157,22 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         unregisterReceiver(statusReceiver)
+    }
+
+    /**
+     * Asks for POST_NOTIFICATIONS up front on Android 13+ so the app never
+     * silently fails to show the "Connected" status notification. Skipped
+     * entirely below API 33, where the permission doesn't exist.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     private fun showSection(id: Int) {
