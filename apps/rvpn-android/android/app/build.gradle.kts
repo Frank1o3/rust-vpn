@@ -93,7 +93,6 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.7.1")
-    implementation("com.akuleshov7:ktoml-core:0.7.1")
+    implementation("com.akuleshov7:ktoml-core:0.5.1")
 }
