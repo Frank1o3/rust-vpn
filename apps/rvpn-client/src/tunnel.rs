@@ -268,7 +268,6 @@ pub async fn run_data_plane(
                     }
                     Ok(packet) if packet.header.kind == PacketKind::Rekey => {
                         if session.open(packet).is_ok() {
-                            last_rx = Instant::now();
                             match establish(transport, server, auth, obfuscation, &config.handshake, Some(&session)).await {
                                 Ok(new_session) => {
                                     session = new_session;

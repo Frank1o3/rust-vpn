@@ -11,17 +11,10 @@ use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{
-    env, fs,
-    future::Future,
-    net::SocketAddr,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{env, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use handshake::establish;
-use platform::{configure_client_network, teardown_client_network};
+use platform::{configure_client_network, refresh_client_endpoint, teardown_client_network};
 use tunnel::{DataPlaneExit, run_data_plane};
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -41,7 +34,7 @@ fn main() -> Result<()> {
         .block_on(async move {
             match arg {
                 Some(path) if path != "--daemon" => {
-                    let config = ClientConfig::from_toml(&fs::read_to_string(&path)?)?;
+                    let config = ClientConfig::from_toml(&rvpn_config::read_config_file(&path)?)?;
                     run_client(config, None, None).await
                 }
                 _ => {
@@ -69,12 +62,11 @@ async fn daemon_disconnect_on_exit(_daemon: &Arc<Daemon>) -> Result<()> {
 /// Returns `Ok(None)` if shutdown was requested while reconnecting.
 async fn reconnect(
     transport: &UdpTransport,
-    server: SocketAddr,
     auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
     config: &ClientConfig,
     shutdown: &mut ShutdownFuture,
-) -> Result<Option<ProtectedSession>> {
+) -> Result<Option<(ProtectedSession, SocketAddr)>> {
     let mut backoff = RECONNECT_INITIAL_BACKOFF;
     let mut attempt = 0u32;
     loop {
@@ -84,11 +76,23 @@ async fn reconnect(
                 signal?;
                 return Ok(None);
             }
-            result = establish(transport, server, auth, obfuscation, &config.handshake, None) => {
+            result = async {
+                let server = rvpn_config::resolve_endpoint(&config.server).await
+                    .context("resolving RVPN server during reconnect")?;
+                let session = establish(
+                    transport,
+                    server,
+                    auth,
+                    obfuscation,
+                    &config.handshake,
+                    None,
+                ).await?;
+                Ok::<_, anyhow::Error>((session, server))
+            } => {
                 match result {
-                    Ok(session) => {
-                        tracing::info!(attempt, "reconnected to RVPN server");
-                        return Ok(Some(session));
+                    Ok((session, server)) => {
+                        tracing::info!(attempt, %server, "reconnected to RVPN server");
+                        return Ok(Some((session, server)));
                     }
                     Err(error) => {
                         tracing::warn!(%error, attempt, retry_in = ?backoff, "reconnect attempt failed");
@@ -114,7 +118,7 @@ pub(crate) async fn run_client(
     shutdown: Option<ShutdownFuture>,
 ) -> Result<()> {
     tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
-    let server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
+    let mut server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving server endpoint")?;
     config.validate_resolved(server)?;
@@ -265,7 +269,6 @@ pub(crate) async fn run_client(
                 tracing::warn!(?reason, "RVPN session lost; reconnecting");
                 match reconnect(
                     &transport,
-                    server,
                     &auth,
                     obfuscation.as_ref(),
                     &config,
@@ -273,13 +276,16 @@ pub(crate) async fn run_client(
                 )
                 .await
                 {
-                    Ok(Some(new_session)) => {
+                    Ok(Some((new_session, new_server))) => {
+                        if new_server != server {
+                            refresh_client_endpoint(primary_dev, &config, server, new_server)
+                                .await
+                                .context("refreshing client network endpoint after reconnect")?;
+                            server = new_server;
+                        }
                         if let Some(state) = &gui_state {
                             let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-                            state.connected(
-                                format!("{:?}", new_session.session_id()),
-                                mtu.into(),
-                            );
+                            state.connected(format!("{:?}", new_session.session_id()), mtu.into());
                             state.set_key_phase(new_session.key_phase());
                         }
                         session = new_session;

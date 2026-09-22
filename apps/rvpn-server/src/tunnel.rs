@@ -447,10 +447,42 @@ pub async fn run_server_loop(
                             }
                         }
                         PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
+                            let finish_session_id = packet.header.session_id;
                             for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet) {
                                 router.unregister(evicted);
                             }
                             register_new_peers(&mut router, &active);
+
+                            // A small authenticated keepalive confirms that the responder
+                            // accepted the finish. If the first ACK is lost, duplicate
+                            // finish packets cause the current session to ACK again.
+                            if let Some(peer) = active.get_mut(&finish_session_id) {
+                                if peer.endpoint == datagram.peer {
+                                    match peer.session.seal(PacketKind::Keepalive, b"") {
+                                        Ok(ack) => {
+                                            let peer_name = peer.identity.name.clone();
+                                            if let Err(error) = send_wire(
+                                                &transport,
+                                                datagram.peer,
+                                                wrap(ack.encode(), obfuscation)?,
+                                            ).await {
+                                                tracing::debug!(
+                                                    peer = %peer_name,
+                                                    %error,
+                                                    "failed to send handshake finish acknowledgment"
+                                                );
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::debug!(
+                                                peer = %peer.identity.name,
+                                                %error,
+                                                "failed to seal handshake finish acknowledgment"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
                         }
                         PacketKind::Rekey => {
                             if let Some(current) = active.get(&packet.header.session_id) {

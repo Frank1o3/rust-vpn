@@ -1,6 +1,7 @@
 use crate::{DeviceMode, InterfaceError, TunConfig};
 use bytes::Bytes;
-use std::sync::Arc;
+use std::{sync::Arc, thread};
+use tokio::sync::{Mutex, mpsc};
 
 const DEFAULT_ADAPTER_NAME: &str = "RVPN";
 const TUNNEL_TYPE: &str = "RVPN";
@@ -12,6 +13,8 @@ pub struct VirtualInterface {
     name: String,
     mtu: u16,
     mode: DeviceMode,
+    receive_rx: Mutex<mpsc::Receiver<Result<Bytes, InterfaceError>>>,
+    reader: Option<thread::JoinHandle<()>>,
 }
 
 impl VirtualInterface {
@@ -51,6 +54,29 @@ impl VirtualInterface {
                 .map_err(wintun_error)?,
         );
 
+        let (receive_tx, receive_rx) = mpsc::channel(256);
+        let reader_session = Arc::clone(&session);
+        let reader = thread::Builder::new()
+            .name(format!("rvpn-wintun-rx-{name}"))
+            .spawn(move || {
+                loop {
+                    match reader_session.receive_blocking() {
+                        Ok(packet) => {
+                            let bytes = Bytes::copy_from_slice(packet.bytes());
+                            let result = validate_packet(&bytes, mtu).map(|_| bytes);
+                            if receive_tx.blocking_send(result).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = receive_tx.blocking_send(Err(wintun_error(error)));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| InterfaceError::Io(std::io::Error::other(error)))?;
+
         tracing::info!(interface = %name, mtu, "created Windows Wintun virtual device");
 
         Ok(Self {
@@ -59,6 +85,8 @@ impl VirtualInterface {
             name,
             mtu,
             mode: DeviceMode::Tun,
+            receive_rx: Mutex::new(receive_rx),
+            reader: Some(reader),
         })
     }
 
@@ -75,18 +103,13 @@ impl VirtualInterface {
     }
 
     pub async fn recv(&self) -> Result<Bytes, InterfaceError> {
-        let session = Arc::clone(&self.session);
-        let mtu = self.mtu;
-
-        tokio::task::spawn_blocking(move || {
-            let packet = session.receive_blocking().map_err(wintun_error)?;
-            let bytes = packet.bytes();
-
-            validate_packet(bytes, mtu)?;
-            Ok::<Bytes, InterfaceError>(Bytes::copy_from_slice(bytes))
+        let mut receive_rx = self.receive_rx.lock().await;
+        receive_rx.recv().await.unwrap_or_else(|| {
+            Err(InterfaceError::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Wintun receive thread stopped",
+            )))
         })
-        .await
-        .map_err(join_error)?
     }
 
     pub async fn send(&self, packet: &[u8]) -> Result<(), InterfaceError> {
@@ -118,6 +141,15 @@ impl Drop for VirtualInterface {
     fn drop(&mut self) {
         if let Err(error) = self.session.shutdown() {
             tracing::debug!(%error, "failed to shut down Wintun session during device drop");
+        }
+
+        if let Some(reader) = self.reader.take() {
+            if let Err(error) = reader.join() {
+                tracing::debug!(
+                    ?error,
+                    "failed to join Wintun receive thread during device drop"
+                );
+            }
         }
 
         let _ = &self.adapter;

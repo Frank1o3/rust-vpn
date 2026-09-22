@@ -2,8 +2,8 @@ use crate::{Header, Packet, PacketKind, ProtocolError, ReplayError, ReplayWindow
 use bytes::Bytes;
 use rvpn_core::SessionId;
 use rvpn_crypto::{CryptoError, PacketNonce, SessionKeys};
-use thiserror::Error;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 
 struct PreviousPhase {
     key_phase: u32,
@@ -167,6 +167,23 @@ mod tests {
             ProtectedSession::new(session_id, 0, send),
             ProtectedSession::new(session_id, 0, receive),
         )
+    }
+
+    #[test]
+    fn configured_rekey_policy_honors_time_limit_without_packet_limit() {
+        let (session, _) = pair();
+        assert!(session.should_rekey_with_policy(0, Some(Duration::ZERO)));
+        assert!(!session.should_rekey_with_policy(0, None));
+    }
+
+    #[test]
+    fn configured_packet_rekey_policy_is_independent_of_hardcoded_time() {
+        let (mut sender, _) = pair();
+        assert!(!sender.should_rekey_with_policy(2, None));
+        sender.seal(PacketKind::Data, b"one").unwrap();
+        assert!(!sender.should_rekey_with_policy(2, None));
+        sender.seal(PacketKind::Data, b"two").unwrap();
+        assert!(sender.should_rekey_with_policy(2, None));
     }
 
     #[test]

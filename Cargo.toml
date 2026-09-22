@@ -8,6 +8,7 @@
         "crates/rvpn-crypto",
         "crates/rvpn-interface",
         "crates/rvpn-ipc",
+        "crates/rvpn-net",
         "crates/rvpn-protocol",
         "crates/rvpn-routing",
         "crates/rvpn-transport",
@@ -21,7 +22,8 @@
         "crates/rvpn-core",
         "crates/rvpn-crypto",
         "crates/rvpn-interface",
-        "crates/rvpn-ipc", "crates/rvpn-net",
+        "crates/rvpn-ipc",
+        "crates/rvpn-net",
         "crates/rvpn-protocol",
         "crates/rvpn-routing",
         "crates/rvpn-transport",
@@ -32,7 +34,7 @@
         authors=["Frank1o3"]
         edition="2024"
         license="BSD-3-Clause"
-        version="0.2.9"
+        version="0.3.0"
 
     [workspace.dependencies]
         anyhow="1.0.104"

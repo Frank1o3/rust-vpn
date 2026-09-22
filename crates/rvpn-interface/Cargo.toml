@@ -1,17 +1,17 @@
 [package]
-name = "rvpn-interface"
-authors.workspace = true
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-interface"
+    version.workspace=true
 
 [dependencies]
-bytes.workspace=true
-libc.workspace=true
-serde.workspace=true
-thiserror.workspace=true
-tokio.workspace=true
-tracing.workspace=true
+    bytes.workspace=true
+    libc.workspace=true
+    serde.workspace=true
+    thiserror.workspace=true
+    tokio.workspace=true
+    tracing.workspace=true
 
 [target.'cfg(windows)'.dependencies]
-wintun.workspace=true
+    wintun.workspace=true

@@ -10,7 +10,7 @@ use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{env, fs};
+use std::env;
 
 use firewall::ForwardingGuard;
 use network::configure_server_interface;
@@ -23,12 +23,13 @@ async fn main() -> Result<()> {
         .nth(1)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(rvpn_config::default_server_config_path);
-    let config = ServerConfig::from_toml(&fs::read_to_string(&path).with_context(|| {
-        format!(
-            "reading {} (pass a path as the first argument to override)",
-            path.display()
-        )
-    })?)?;
+    let config =
+        ServerConfig::from_toml(&rvpn_config::read_config_file(&path).with_context(|| {
+            format!(
+                "reading {} (pass a path as the first argument to override)",
+                path.display()
+            )
+        })?)?;
     let identities = config.peer_identities()?;
     let certificate_authority = config.certificate_authority.clone();
     let obfuscation = config
@@ -112,7 +113,7 @@ async fn main() -> Result<()> {
 
     let primary_dev = tun.as_ref().or(tap.as_ref()).expect("at least one device");
     configure_server_interface(primary_dev, &config).await?;
-    let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name()).await?;
+    let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name(), mtu).await?;
 
     tracing::info!(
         bind = %transport.local_addr()?,
