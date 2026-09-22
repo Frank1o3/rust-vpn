@@ -2,7 +2,10 @@ use crate::{BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError,
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
-    packet_route::route::{RouteAddress, RouteAttribute},
+    packet_route::{
+        address::AddressAttribute,
+        route::{RouteAddress, RouteAttribute},
+    },
 };
 use std::{
     collections::HashMap,
@@ -74,7 +77,41 @@ impl SystemNet {
             .map_err(|e| NetError::Operation(e.to_string()))
     }
 
+    async fn interface_addresses(
+        &self,
+        name: &str,
+    ) -> Result<Vec<(IpAddr, u8)>, NetError> {
+        let index = self.index(name).await?;
+        let mut addresses = self
+            .handle
+            .address()
+            .get()
+            .set_link_index_filter(index)
+            .execute();
+        let mut result = Vec::new();
+
+        while let Some(address) = addresses
+            .try_next()
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?
+        {
+            for attribute in address.attributes {
+                match attribute {
+                    AddressAttribute::Address(value) | AddressAttribute::Local(value) => {
+                        if !result.iter().any(|(existing, _)| *existing == value) {
+                            result.push((value, address.header.prefix_len));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
     async fn set_dns_networkmanager(
+        &self,
         connection: &Connection,
         name: &str,
         servers: &[IpAddr],
@@ -97,6 +134,13 @@ impl SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
 
+        let interface_addresses = self.interface_addresses(name).await?;
+        if interface_addresses.is_empty() {
+            return Err(NetError::Operation(format!(
+                "NetworkManager DNS activation requires an existing IP address on {name}"
+            )));
+        }
+
         let v4: Vec<String> = servers
             .iter()
             .filter_map(|server| server.is_ipv4().then(|| server.to_string()))
@@ -115,17 +159,51 @@ impl SystemNet {
         let mut tun = HashMap::new();
         tun.insert("mode", Value::from(1_u32));
 
+        let v4_addresses: Vec<HashMap<&str, Value<'_>>> = interface_addresses
+            .iter()
+            .filter_map(|(address, prefix)| {
+                address.is_ipv4().then(|| {
+                    let mut item = HashMap::new();
+                    item.insert("address", Value::from(address.to_string()));
+                    item.insert("prefix-length", Value::from(u32::from(*prefix)));
+                    item
+                })
+            })
+            .collect();
+
+        let v6_addresses: Vec<HashMap<&str, Value<'_>>> = interface_addresses
+            .iter()
+            .filter_map(|(address, prefix)| {
+                address.is_ipv6().then(|| {
+                    let mut item = HashMap::new();
+                    item.insert("address", Value::from(address.to_string()));
+                    item.insert("prefix-length", Value::from(u32::from(*prefix)));
+                    item
+                })
+            })
+            .collect();
+
         let mut ipv4 = HashMap::new();
-        ipv4.insert("method", Value::from("disabled"));
-        ipv4.insert("never-default", Value::from(true));
+        if !v4_addresses.is_empty() {
+            ipv4.insert("method", Value::from("manual"));
+            ipv4.insert("address-data", Value::from(v4_addresses));
+            ipv4.insert("never-default", Value::from(true));
+        } else {
+            ipv4.insert("method", Value::from("disabled"));
+        }
         if !v4.is_empty() {
             ipv4.insert("dns-data", Value::from(v4));
             ipv4.insert("dns-priority", Value::from(-42_i32));
         }
 
         let mut ipv6 = HashMap::new();
-        ipv6.insert("method", Value::from("disabled"));
-        ipv6.insert("never-default", Value::from(true));
+        if !v6_addresses.is_empty() {
+            ipv6.insert("method", Value::from("manual"));
+            ipv6.insert("address-data", Value::from(v6_addresses));
+            ipv6.insert("never-default", Value::from(true));
+        } else {
+            ipv6.insert("method", Value::from("disabled"));
+        }
         if !v6.is_empty() {
             ipv6.insert("dns-data", Value::from(v6));
             ipv6.insert("dns-priority", Value::from(-42_i32));
@@ -406,7 +484,7 @@ impl NetConfigurator for SystemNet {
                     mode = %mode,
                     "configuring RVPN DNS through NetworkManager"
                 );
-                Self::set_dns_networkmanager(&connection, name, servers).await
+                self.set_dns_networkmanager(&connection, name, servers).await
             }
             Ok(_) => {
                 let proxy = self.resolve_proxy(name, &connection).await?;
