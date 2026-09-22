@@ -139,7 +139,7 @@ impl SystemNet {
 
         let mut options = HashMap::new();
         options.insert("persist", Value::from("volatile"));
-        options.insert("bind-activation", Value::from("dbus-name"));
+        options.insert("bind-activation", Value::from("dbus-client"));
 
         let _: (
             OwnedObjectPath,
