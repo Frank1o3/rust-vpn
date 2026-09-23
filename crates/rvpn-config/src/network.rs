@@ -5,7 +5,7 @@ use std::{net::IpAddr, time::Duration};
 use crate::ConfigError;
 pub use rvpn_interface::DeviceMode;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterfaceConfig {
     pub name: Option<String>,
@@ -15,23 +15,7 @@ pub struct InterfaceConfig {
     pub address: Option<String>,
     #[serde(default)]
     pub addresses: Vec<String>,
-    /// Client-side DNS servers: one IP address or a comma/space separated
-    /// list, e.g. `"1.1.1.1, 2606:4700:4700::1111"`.
     pub dns_servers: Option<String>,
-}
-
-impl Default for InterfaceConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            tap_name: None,
-            mtu: None,
-            mode: None,
-            address: None,
-            addresses: Vec::new(),
-            dns_servers: None,
-        }
-    }
 }
 
 impl InterfaceConfig {
@@ -257,19 +241,20 @@ impl ForwardingConfig {
                 "forwarding.external_interface and at least one tunnel CIDR are required when forwarding is enabled",
             ));
         }
-        if let Some(cidr) = &self.tunnel_cidr {
-            if !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V4(_))) {
-                return Err(ConfigError::Invalid(
-                    "forwarding.tunnel_cidr must be an IPv4 CIDR",
-                ));
-            }
+        if let Some(cidr) = &self.tunnel_cidr
+            && !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V4(_)))
+        {
+            return Err(ConfigError::Invalid(
+                "forwarding.tunnel_cidr must be an IPv4 CIDR",
+            ));
         }
-        if let Some(cidr) = &self.tunnel_cidr_v6 {
-            if !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V6(_))) {
-                return Err(ConfigError::Invalid(
-                    "forwarding.tunnel_cidr_v6 must be an IPv6 CIDR",
-                ));
-            }
+
+        if let Some(cidr) = &self.tunnel_cidr_v6
+            && !matches!(cidr.parse::<IpNet>(), Ok(IpNet::V6(_)))
+        {
+            return Err(ConfigError::Invalid(
+                "forwarding.tunnel_cidr_v6 must be an IPv6 CIDR",
+            ));
         }
         Ok(())
     }

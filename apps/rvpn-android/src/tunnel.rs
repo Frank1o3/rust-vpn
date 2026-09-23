@@ -56,13 +56,6 @@ pub async fn run_tunnel(
         DeviceMode::Tun,
     )
     .context("opening Android TUN device")?;
-
-    // `server` is reassigned on every authenticated endpoint change below
-    // and read again on later loop iterations (passed into `establish`,
-    // `maybe_rekey`, and `send_wire`); rustc's per-branch liveness check
-    // doesn't see that far across `tokio::select!` loop iterations and
-    // flags some of those writes as unread, so the lint is suppressed here
-    // rather than restructuring otherwise-correct code.
     #[allow(unused_assignments)]
     let mut server = rvpn_config::resolve_endpoint(&config.server)
         .await
@@ -185,10 +178,10 @@ pub async fn run_tunnel(
             }
             // Drains sealed datagrams queued by the TUN read arm below.
             queued = outbound_rx.recv() => {
-                if let Some(datagram) = queued {
-                    if let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await {
-                        tracing::debug!(%e, "queued datagram send failed");
-                    }
+                if let Some(datagram) = queued
+                    && let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await
+                {
+                    tracing::debug!(%e, "queued datagram send failed");
                 }
             }
             packet = tun.recv() => {
@@ -227,14 +220,13 @@ pub async fn run_tunnel(
                 let packet = match Packet::decode(payload) {
                     Ok(packet) if packet.header.kind == PacketKind::Data => packet,
                     Ok(packet) if packet.header.kind == PacketKind::Keepalive => {
-                        match session.open(packet) {
-                            Ok(_) => {
-                                if peer != server {
-                                    tracing::debug!(old = %server, new = %peer, "accepted authenticated Android server endpoint change");
-                                    server = peer;
-                                }
-                            }
-                            Err(_) => {}
+                        if session.open(packet).is_ok() && peer != server {
+                            tracing::debug!(
+                                old = %server,
+                                new = %peer,
+                                "accepted authenticated Android server endpoint change"
+                            );
+                            server = peer;
                         }
                         continue;
                     }
@@ -305,6 +297,7 @@ pub async fn run_tunnel(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn maybe_rekey(
     session: &mut ProtectedSession,
     transport: &UdpTransport,
@@ -363,7 +356,7 @@ async fn establish(
         payload: initiation.encode(),
     };
 
-    let response = 'retry: loop {
+    let response = 'retry: {
         for attempt in 1..=policy.retry_limit {
             if *shutdown.borrow() {
                 bail!("handshake cancelled by shutdown");
@@ -399,10 +392,10 @@ async fn establish(
                                     Some(key) => match key.unwrap(&datagram.payload) { Ok(p) => p, Err(_) => continue },
                                     None => datagram.payload,
                                 };
-                                if let Ok(packet) = Packet::decode(payload) {
-                                    if packet.header.kind == kind
-                                        && (old.is_none() || packet.header.session_id == session_id)
-                                    {
+                                if let Ok(packet) = Packet::decode(payload)
+                                    && packet.header.kind == kind
+                                    && (old.is_none() || packet.header.session_id == session_id)
+                                {
                                         match HandshakeMessage::decode(packet.payload) {
                                             Ok(response @ HandshakeMessage::Response { .. }) => {
                                                 let advertised_session = match response {
@@ -416,9 +409,6 @@ async fn establish(
                                                 }
                                             }
                                             Ok(HandshakeMessage::CookieReply { cookie }) => {
-                                                // Cheap, immediate resend with the proven
-                                                // cookie attached; doesn't consume a retry
-                                                // attempt or wait out the deadline.
                                                 handshake.attach_cookie(cookie);
                                                 initiation_packet.payload = handshake.initiation().encode();
                                                 let encoded = initiation_packet.encode();
@@ -430,7 +420,6 @@ async fn establish(
                                             }
                                             _ => {}
                                         }
-                                    }
                                 }
                             }
                             Ok(Ok(_)) => continue,

@@ -73,6 +73,7 @@ async fn send_wire(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_data_plane(
     mut session: ProtectedSession,
     transport: &UdpTransport,
@@ -181,10 +182,10 @@ pub async fn run_data_plane(
                 }
             }
             queued = outbound_rx.recv() => {
-                if let Some(datagram) = queued {
-                    if let Err(e) = send_wire(transport, datagram.peer, datagram.payload).await {
-                        tracing::debug!(%e, "queued datagram send failed");
-                    }
+                if let Some(datagram) = queued
+                    && let Err(e) = send_wire(transport, datagram.peer, datagram.payload).await
+                {
+                    tracing::debug!(%e, "queued datagram send failed");
                 }
             }
             packet = async {

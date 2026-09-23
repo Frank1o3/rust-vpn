@@ -76,7 +76,7 @@ pub async fn establish(
         payload: initiation.encode(),
     };
 
-    let response = 'retry: loop {
+    let response = 'retry: {
         for attempt in 1..=policy.retry_limit {
             let wire = wrap(initiation_packet.encode(), obfuscation)?;
             transport
@@ -97,35 +97,32 @@ pub async fn establish(
                             },
                             None => datagram.payload,
                         };
-                        if let Ok(packet) = Packet::decode(payload) {
-                            if packet.header.kind == kind
-                                && (old.is_none() || packet.header.session_id == session_id)
-                            {
-                                match HandshakeMessage::decode(packet.payload) {
-                                    Ok(response @ HandshakeMessage::Response { .. }) => {
-                                        let advertised_session = match response {
-                                            HandshakeMessage::Response { session_id, .. } => {
-                                                session_id
-                                            }
-                                            _ => unreachable!(),
-                                        };
-                                        if packet.header.session_id == advertised_session
-                                            && handshake.authenticates_response(response)?
-                                        {
-                                            break 'retry response;
-                                        }
+                        if let Ok(packet) = Packet::decode(payload)
+                            && packet.header.kind == kind
+                            && (old.is_none() || packet.header.session_id == session_id)
+                        {
+                            match HandshakeMessage::decode(packet.payload) {
+                                Ok(response @ HandshakeMessage::Response { .. }) => {
+                                    let advertised_session = match response {
+                                        HandshakeMessage::Response { session_id, .. } => session_id,
+                                        _ => unreachable!(),
+                                    };
+                                    if packet.header.session_id == advertised_session
+                                        && handshake.authenticates_response(response)?
+                                    {
+                                        break 'retry response;
                                     }
-                                    Ok(HandshakeMessage::CookieReply { cookie }) => {
-                                        // Cheap, immediate resend — doesn't consume a retry attempt.
-                                        handshake.attach_cookie(cookie);
-                                        initiation_packet.payload = handshake.initiation().encode();
-                                        let wire = wrap(initiation_packet.encode(), obfuscation)?;
-                                        transport
-                                            .send_to(server, wire, SendOptions::default())
-                                            .await?;
-                                    }
-                                    _ => {}
                                 }
+                                Ok(HandshakeMessage::CookieReply { cookie }) => {
+                                    // Cheap, immediate resend — doesn't consume a retry attempt.
+                                    handshake.attach_cookie(cookie);
+                                    initiation_packet.payload = handshake.initiation().encode();
+                                    let wire = wrap(initiation_packet.encode(), obfuscation)?;
+                                    transport
+                                        .send_to(server, wire, SendOptions::default())
+                                        .await?;
+                                }
+                                _ => {}
                             }
                         }
                     }

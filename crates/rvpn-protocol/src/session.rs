@@ -98,16 +98,17 @@ impl ProtectedSession {
             return Err(SessionError::UnexpectedSession);
         }
         if packet.header.key_phase != self.key_phase {
-            if let Some(prev) = &mut self.previous {
-                if prev.key_phase == packet.header.key_phase && Instant::now() <= prev.expires_at {
-                    let plaintext = prev.keys.open(
-                        PacketNonce::from_sequence(packet.header.key_phase, packet.header.sequence),
-                        &packet.header.encode(),
-                        &packet.payload,
-                    )?;
-                    prev.replay.check_and_record(packet.header.sequence)?;
-                    return Ok(plaintext);
-                }
+            if let Some(prev) = &mut self.previous
+                && prev.key_phase == packet.header.key_phase
+                && Instant::now() <= prev.expires_at
+            {
+                let plaintext = prev.keys.open(
+                    PacketNonce::from_sequence(packet.header.key_phase, packet.header.sequence),
+                    &packet.header.encode(),
+                    &packet.payload,
+                )?;
+                prev.replay.check_and_record(packet.header.sequence)?;
+                return Ok(plaintext);
             }
             return Err(SessionError::UnexpectedKeyPhase(packet.header.key_phase));
         }

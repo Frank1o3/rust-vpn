@@ -36,10 +36,10 @@ pub async fn challenge_or_admit(
         return Ok(false);
     };
     let now = unix_now();
-    if let Some(cookie) = cookie {
-        if cookie_key.verify(endpoint, public_key, random, cookie, now) {
-            return Ok(true);
-        }
+    if let Some(cookie) = cookie
+        && cookie_key.verify(endpoint, public_key, random, cookie, now)
+    {
+        return Ok(true);
     }
     let expected = cookie_key.mint(endpoint, public_key, random, now);
     let reply = Packet {

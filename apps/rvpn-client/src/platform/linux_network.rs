@@ -109,13 +109,20 @@ pub async fn configure_client_network(
         }
     }
 
-    if let Ok(dns_servers) = config.interface.dns_server_list() {
-        if !dns_servers.is_empty() {
-            if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
-                tracing::warn!(%error, "native Linux DNS backend rejected RVPN DNS configuration");
-            } else {
-                tracing::info!(interface = dev.name(), dns = ?dns_servers, "configured DNS servers for RVPN interface");
-            }
+    if let Ok(dns_servers) = config.interface.dns_server_list()
+        && !dns_servers.is_empty()
+    {
+        if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
+            tracing::warn!(
+                %error,
+                "native Linux DNS backend rejected RVPN DNS configuration"
+            );
+        } else {
+            tracing::info!(
+                interface = dev.name(),
+                dns = ?dns_servers,
+                "configured DNS servers for RVPN interface"
+            );
         }
     }
 
@@ -204,10 +211,10 @@ pub async fn teardown_client_network(
         remove_server_route(&net, server, true).await;
     }
 
-    if config.interface.dns_servers.is_some() {
-        if let Err(error) = net.revert_dns(dev.name()).await {
-            tracing::warn!(%error, "failed to revert RVPN DNS configuration");
-        }
+    if config.interface.dns_servers.is_some()
+        && let Err(error) = net.revert_dns(dev.name()).await
+    {
+        tracing::warn!(%error, "failed to revert RVPN DNS configuration");
     }
 
     if config.routing.default_route || config.routing.default_route_v6 {

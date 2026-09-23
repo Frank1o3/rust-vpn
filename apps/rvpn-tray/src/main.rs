@@ -141,22 +141,22 @@ fn main() -> Result<()> {
                     return;
                 }
 
-                if menu_event.id == connect_id {
-                    if let Err(error) = runtime.block_on(send_connect()) {
-                        tracing::warn!(
-                            %error,
-                            "failed to send Connect to rvpn-client"
-                        );
-                    }
+                if menu_event.id == connect_id
+                    && let Err(error) = runtime.block_on(send_connect())
+                {
+                    tracing::warn!(
+                        %error,
+                        "failed to send Connect to rvpn-client"
+                    );
                 }
 
-                if menu_event.id == disconnect_id {
-                    if let Err(error) = runtime.block_on(send_disconnect()) {
-                        tracing::warn!(
-                            %error,
-                            "failed to send Disconnect to rvpn-client"
-                        );
-                    }
+                if menu_event.id == disconnect_id
+                    && let Err(error) = runtime.block_on(send_disconnect())
+                {
+                    tracing::warn!(
+                        %error,
+                        "failed to send Disconnect to rvpn-client"
+                    );
                 }
             }
 
@@ -233,7 +233,7 @@ fn live_tooltip(snapshot: &StatusSnapshot, activity: LedActivity) -> String {
         LedActivity::Idle => "Idle",
     };
 
-    text.push_str("\n");
+    text.push('\n');
     text.push_str(activity_text);
 
     text
@@ -301,7 +301,7 @@ fn status_icon(connected: bool, activity: LedActivity) -> Icon {
 fn read_network_counters() -> Option<NetworkCounters> {
     #[cfg(target_os = "linux")]
     {
-        return read_linux_network_counters();
+        read_linux_network_counters()
     }
 
     #[cfg(not(target_os = "linux"))]

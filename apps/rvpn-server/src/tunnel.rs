@@ -254,6 +254,7 @@ async fn route_inbound(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_server_loop(
     transport: UdpTransport,
     config: ServerConfig,
@@ -301,10 +302,8 @@ pub async fn run_server_loop(
         loop {
             tokio::select! {
                 signal = &mut shutdown_signal => {
-                    if let Err(error) = signal {
-                        return Err(error);
-                    }
-                    return Ok::<(), anyhow::Error>(());
+                    signal?;
+                    return Ok(());
                 }
                 () = &mut retry_sleep => {
                     if let Err(error) = retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await {
@@ -349,10 +348,10 @@ pub async fn run_server_loop(
                     keepalive.record_keepalive_sent();
                 }
                 queued = outbound_rx.recv() => {
-                    if let Some(datagram) = queued {
-                        if let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await {
-                            tracing::debug!(%e, "queued datagram send failed");
-                        }
+                    if let Some(datagram) = queued
+                        && let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await
+                    {
+                        tracing::debug!(%e, "queued datagram send failed");
                     }
                 }
                 outbound_tun = async {
@@ -453,33 +452,30 @@ pub async fn run_server_loop(
                             }
                             register_new_peers(&mut router, &active);
 
-                            // A small authenticated keepalive confirms that the responder
-                            // accepted the finish. If the first ACK is lost, duplicate
-                            // finish packets cause the current session to ACK again.
-                            if let Some(peer) = active.get_mut(&finish_session_id) {
-                                if peer.endpoint == datagram.peer {
-                                    match peer.session.seal(PacketKind::Keepalive, b"") {
-                                        Ok(ack) => {
-                                            let peer_name = peer.identity.name.clone();
-                                            if let Err(error) = send_wire(
-                                                &transport,
-                                                datagram.peer,
-                                                wrap(ack.encode(), obfuscation)?,
-                                            ).await {
-                                                tracing::debug!(
-                                                    peer = %peer_name,
-                                                    %error,
-                                                    "failed to send handshake finish acknowledgment"
-                                                );
-                                            }
-                                        }
-                                        Err(error) => {
+                            if let Some(peer) = active.get_mut(&finish_session_id)
+                                && peer.endpoint == datagram.peer
+                            {
+                                match peer.session.seal(PacketKind::Keepalive, b"") {
+                                    Ok(ack) => {
+                                        let peer_name = peer.identity.name.clone();
+                                        if let Err(error) = send_wire(
+                                            &transport,
+                                            datagram.peer,
+                                            wrap(ack.encode(), obfuscation)?,
+                                        ).await {
                                             tracing::debug!(
-                                                peer = %peer.identity.name,
+                                                peer = %peer_name,
                                                 %error,
-                                                "failed to seal handshake finish acknowledgment"
+                                                "failed to send handshake finish acknowledgment"
                                             );
                                         }
+                                    }
+                                    Err(error) => {
+                                        tracing::debug!(
+                                            peer = %peer.identity.name,
+                                            %error,
+                                            "failed to seal handshake finish acknowledgment"
+                                        );
                                     }
                                 }
                             }
@@ -495,26 +491,37 @@ pub async fn run_server_loop(
                                     );
                                     continue;
                                 }
-                                if current.session.key_phase() == packet.header.key_phase {
-                                    if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload.clone()) {
-                                        if let Err(error) = begin_rekey(&transport, obfuscation, &mut pending, datagram.peer, current, initiation).await {
-                                            tracing::warn!(%error, peer = %current.identity.name, "could not start rekey");
-                                        }
-                                    }
+
+                                if current.session.key_phase() == packet.header.key_phase
+                                    && let Ok(initiation @ HandshakeMessage::Initiation { .. }) =
+                                        HandshakeMessage::decode(packet.payload.clone())
+                                    && let Err(error) = begin_rekey(
+                                        &transport,
+                                        obfuscation,
+                                        &mut pending,
+                                        datagram.peer,
+                                        current,
+                                        initiation,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        %error,
+                                        peer = %current.identity.name,
+                                        "could not start rekey"
+                                    );
                                 }
                             }
                         }
                         PacketKind::Keepalive => {
                             let session_id = packet.header.session_id;
-                            if let Some(peer) = active.get_mut(&session_id) {
-                                if peer.session.open(packet).is_ok() {
-                                    peer.last_rx = std::time::Instant::now();
-                                    if peer.endpoint != datagram.peer {
-                                        tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
-                                        peer.endpoint = datagram.peer;
-                                    }
-                                    seal_and_queue(peer, PacketKind::Keepalive, b"", obfuscation, &outbound, &transport);
+                            if let Some(peer) = active.get_mut(&session_id) && peer.session.open(packet).is_ok(){
+                                peer.last_rx = std::time::Instant::now();
+                                if peer.endpoint != datagram.peer {
+                                    tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
+                                    peer.endpoint = datagram.peer;
                                 }
+                                seal_and_queue(peer, PacketKind::Keepalive, b"", obfuscation, &outbound, &transport);
                             }
                         }
                         PacketKind::Data | PacketKind::DataTap | PacketKind::Close => {
