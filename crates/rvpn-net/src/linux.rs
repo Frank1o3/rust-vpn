@@ -51,7 +51,7 @@ impl SystemNet {
                     .map_err(|e| NetError::Operation(e.to_string()))
             })
             .await
-            .map(Clone::clone)
+            .cloned()
     }
 
     async fn resolved_service_available(connection: &Connection) -> Result<bool, NetError> {
@@ -71,12 +71,12 @@ impl SystemNet {
     }
 
     async fn set_dns_resolv_conf_fallback(servers: &[IpAddr]) -> Result<(), NetError> {
-        if tokio::fs::metadata(RESOLV_CONF_BACKUP_PATH).await.is_err() {
-            if let Ok(current) = tokio::fs::read(RESOLV_CONF_PATH).await {
-                tokio::fs::write(RESOLV_CONF_BACKUP_PATH, current)
-                    .await
-                    .map_err(|e| NetError::Operation(format!("backing up resolv.conf: {e}")))?;
-            }
+        if tokio::fs::metadata(RESOLV_CONF_BACKUP_PATH).await.is_err()
+            && let Ok(current) = tokio::fs::read(RESOLV_CONF_PATH).await
+        {
+            tokio::fs::write(RESOLV_CONF_BACKUP_PATH, current)
+                .await
+                .map_err(|e| NetError::Operation(format!("backing up resolv.conf: {e}")))?;
         }
 
         let mut contents = String::from("# Managed by RVPN (systemd-resolved unavailable)\n");

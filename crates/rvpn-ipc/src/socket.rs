@@ -32,7 +32,7 @@ pub fn socket_path() -> PathBuf {
     #[cfg(unix)]
     {
         let uid = unsafe { libc::getuid() };
-        return PathBuf::from(format!("/tmp/rvpn-{uid}")).join("control.sock");
+        PathBuf::from(format!("/tmp/rvpn-{uid}")).join("control.sock")
     }
     #[cfg(not(unix))]
     {

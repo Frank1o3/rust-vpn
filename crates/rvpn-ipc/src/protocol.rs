@@ -126,7 +126,7 @@ impl ControlResponse {
             Self::Ok => "OK".to_string(),
             Self::Pong => "PONG".to_string(),
             Self::Err(message) => {
-                format!("ERR\t{}", message.replace('\n', " ").replace('\t', " "))
+                format!("ERR\t{}", message.replace(['\n', '\t'], " "))
             }
             Self::Status(s) => format!(
                 "STATUS\t{connected}\t{server}\t{session_id}\t{uptime}\t{phase}\t{btx}\t{brx}\t{ptx}\t{prx}\t{mtu}\t{mtu_state}\t{mtu_changes}\t{send_errors}\t{dropped_oversized}\t{dropped_backpressure}\t{keepalives}",

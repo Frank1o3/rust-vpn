@@ -37,10 +37,10 @@ impl TunConfig {
         if self.mtu < MIN_MTU {
             return Err(InterfaceError::InvalidMtu(self.mtu));
         }
-        if let Some(name) = &self.name {
-            if name.is_empty() || name.len() > LINUX_IF_NAME_MAX || name.as_bytes().contains(&0) {
-                return Err(InterfaceError::InvalidInterfaceName);
-            }
+        if let Some(name) = &self.name
+            && (name.is_empty() || name.len() > LINUX_IF_NAME_MAX || name.as_bytes().contains(&0))
+        {
+            return Err(InterfaceError::InvalidInterfaceName);
         }
         Ok(())
     }
