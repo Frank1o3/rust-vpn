@@ -6,10 +6,7 @@ use rtnetlink::{
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::sync::OnceCell;
-use zbus::{
-    zvariant::OwnedObjectPath,
-    Connection, Proxy,
-};
+use zbus::{Connection, Proxy, zvariant::OwnedObjectPath};
 
 use crate::linux_killswitch;
 
@@ -102,9 +99,7 @@ impl SystemNet {
         Ok(())
     }
 
-    async fn network_manager_dns_mode(
-        connection: &Connection,
-    ) -> Result<String, NetError> {
+    async fn network_manager_dns_mode(connection: &Connection) -> Result<String, NetError> {
         let proxy = Proxy::new(
             connection,
             "org.freedesktop.NetworkManager",
@@ -247,14 +242,11 @@ impl SystemNet {
         connection: &Connection,
     ) -> Result<(), NetError> {
         let proxy = self.resolve_proxy(name, connection).await?;
-        proxy
-            .call::<_, _, ()>("Revert", &())
-            .await
-            .map_err(|e| {
-                NetError::Operation(format!(
-                    "systemd-resolved Revert failed for interface {name}: {e}"
-                ))
-            })
+        proxy.call::<_, _, ()>("Revert", &()).await.map_err(|e| {
+            NetError::Operation(format!(
+                "systemd-resolved Revert failed for interface {name}: {e}"
+            ))
+        })
     }
 
     fn route_message(

@@ -1,6 +1,6 @@
-use crate::*;
+use std::time::Duration;
 
-use super::*;
+use crate::*;
 
 fn psk() -> String {
     "a".repeat(64)

@@ -1,7 +1,5 @@
 use crate::*;
 
-use super::*;
-
 #[test]
 fn peers_derive_opposite_directional_keys_and_round_trip() {
     let initiator = EphemeralKeyPair::generate().unwrap();
