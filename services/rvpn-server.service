@@ -19,6 +19,16 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_PACKET
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target
