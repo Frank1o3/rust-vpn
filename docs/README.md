@@ -6,5 +6,8 @@
 4. [Android client](android.md)
 5. [Troubleshooting](troubleshooting.md)
 
-RVPN is experimental. Test in an isolated environment before enabling default
-routing or forwarding on a host you depend on.
+RVPN is functionally complete for its supported platforms (Linux and
+Android) but has not been independently security-audited — treat it as
+pre-beta. Test in an isolated environment before enabling default routing
+or forwarding on a host you depend on, and review the crypto/handshake code
+yourself if you plan to rely on it for anything sensitive.

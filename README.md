@@ -1,9 +1,17 @@
 # RVPN
 
-RVPN is an experimental Rust VPN implementation with an authenticated,
-encrypted UDP data plane, Linux TUN/TAP support, a multi-peer server, and an
-Android client. It is a learning and development project, not an audited or
-production-ready security product.
+RVPN is a Rust VPN implementation with an authenticated, encrypted UDP data
+plane, Linux TUN/TAP support, a multi-peer server, and an Android client. It
+has moved past its original experimental/learning-project phase and is
+functionally complete for its supported platforms — handshake, data
+transport, rekeying, obfuscation, and peer roaming all work in real-world
+testing, including against networks running active VPN scanning and deep
+packet inspection.
+
+That said, RVPN has **not been independently security-audited**. Treat it as
+pre-beta: solid enough for personal and small-group use, not yet something
+to stake critical infrastructure on. Community review of the handshake and
+crypto is welcome and encouraged.
 
 ## Documentation
 
@@ -12,6 +20,13 @@ production-ready security product.
 - [Deployment and operations](docs/operations.md) — build, launch, routing, and verification.
 - [Android client](docs/android.md) — Android-specific setup and limits.
 - [Troubleshooting](docs/troubleshooting.md) — MTU, routing, firewall, and tray diagnostics.
+
+## Platform support
+
+- **Linux** — primary, fully supported target (server and client).
+- **Android** — fully supported client, TUN-only.
+- **Windows** — client build exists but is considered experimental/unofficial; not part of the current stabilization effort.
+- macOS is a possible future target given its shared Unix/Linux lineage, but is not currently worked on.
 
 ## Quick start
 
@@ -32,8 +47,18 @@ RVPN creates non-persistent interfaces and restores routes and firewall state
 on a graceful SIGINT or SIGTERM shutdown. See [operations](docs/operations.md)
 before using it on a host with important existing network configuration.
 
+## Authentication modes
+
+RVPN supports three peer authentication modes, in increasing order of
+strength: pre-shared key (PSK), pinned Ed25519 key, and certificate
+authority-issued identity. Certificate auth is the intended primary mode
+going forward; see [configuration](docs/configuration.md) for setup of each.
+
 ## Important security notes
 
+- RVPN has not undergone an independent security audit. Review the handshake
+  and crypto code yourself, or wait for community review, before relying on
+  it for anything sensitive.
 - Do not commit real `local_identity_seed`, `pre_shared_key`, or
   `obfuscation_key` values. Treat them as passwords; rotate values exposed in
   logs, chats, or screenshots.
