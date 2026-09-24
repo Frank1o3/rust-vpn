@@ -24,7 +24,6 @@ pub struct ResponderHandshake {
 
 fn tag_of(identity: &AuthIdentity) -> u8 {
     match identity {
-        AuthIdentity::Psk(_) => 0,
         AuthIdentity::PinnedKey(_) => 1,
         AuthIdentity::Certificate { .. } => 2,
     }
@@ -32,7 +31,6 @@ fn tag_of(identity: &AuthIdentity) -> u8 {
 
 fn produce_proof(identity: &AuthIdentity, data: &[u8]) -> AuthProof {
     match identity {
-        AuthIdentity::Psk(psk) => AuthProof::Psk(psk.authenticate(data)),
         AuthIdentity::PinnedKey(key) => AuthProof::PinnedKey(key.sign(data)),
         AuthIdentity::Certificate {
             local_key,
@@ -50,13 +48,6 @@ fn verify_proof(
     proof: &AuthProof,
 ) -> Result<Option<IdentityPublicKey>, HandshakeError> {
     match (verifier, proof) {
-        (AuthVerifier::Psk(psk), AuthProof::Psk(tag)) => {
-            if psk.verify(data, tag) {
-                Ok(None)
-            } else {
-                Err(HandshakeError::AuthenticationFailed)
-            }
-        }
         (AuthVerifier::PinnedKey(expected), AuthProof::PinnedKey(sig)) => {
             if expected.verify(data, sig) {
                 Ok(Some(*expected))
@@ -191,7 +182,7 @@ impl InitiatorHandshake {
             proof: produce_proof(&self.identity, &finish_data),
         };
         let keys = SessionKeys::derive(
-            self.key_pair.agree(PublicKeyBytes::new(public_key))?,
+            &self.key_pair.agree(PublicKeyBytes::new(public_key))?,
             &transcript_hash(&transcript.final_bytes(finish)?),
             SessionRole::Initiator,
         )?;
@@ -278,7 +269,7 @@ impl ResponderHandshake {
             return Err(HandshakeError::UnexpectedMessage);
         };
         let keys = SessionKeys::derive(
-            self.key_pair.agree(PublicKeyBytes::new(public_key))?,
+            &self.key_pair.agree(PublicKeyBytes::new(public_key))?,
             &transcript_hash(&self.transcript.final_bytes(finish)?),
             SessionRole::Responder,
         )?;
@@ -310,29 +301,51 @@ mod tests {
     use rvpn_crypto::{AuthConfig, IdentityKeyPair};
 
     #[test]
-    fn psk_peers_establish_compatible_sessions() {
-        let auth = AuthConfig::Psk([9; 32]);
+    fn pinned_key_peers_establish_compatible_sessions() {
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
         let (initiator, initiation) =
-            InitiatorHandshake::start(auth.identity(), auth.verifier()).unwrap();
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
         let (responder, response) =
-            ResponderHandshake::accept(auth.identity(), auth.verifier(), initiation).unwrap();
+            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
+                .unwrap();
         let (finish, mut client, remote) = initiator.finish(response).unwrap();
         let (mut server, remote2) = responder.finish(finish).unwrap();
-        assert!(remote.is_none());
-        assert!(remote2.is_none());
+        assert_eq!(remote, Some(server_key.public_key()));
+        assert_eq!(remote2, Some(client_key.public_key()));
         let packet = client.seal(PacketKind::Data, b"ip bytes").unwrap();
         assert_eq!(server.open(packet).unwrap(), b"ip bytes"[..]);
     }
 
     #[test]
-    fn rejects_response_authenticated_with_another_psk() {
-        let client_auth = AuthConfig::Psk([1; 32]);
-        let server_auth = AuthConfig::Psk([2; 32]);
+    fn rejects_response_authenticated_with_another_key() {
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let attacker_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let attacker_auth = AuthConfig::PinnedKey {
+            local_seed: attacker_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
         let (initiator, initiation) =
             InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
-        let (_, response) =
-            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
-                .unwrap();
+        let (_, response) = ResponderHandshake::accept(
+            attacker_auth.identity(),
+            attacker_auth.verifier(),
+            initiation,
+        )
+        .unwrap();
         assert!(matches!(
             initiator.finish(response),
             Err(HandshakeError::AuthenticationFailed)
@@ -380,13 +393,22 @@ mod tests {
 
     #[test]
     fn rekey_keeps_session_identity_and_advances_key_phase() {
-        let auth = AuthConfig::Psk([3; 32]);
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
         let session_id = SessionId::new([7; 16]);
         let (initiator, initiation) =
-            InitiatorHandshake::start(auth.identity(), auth.verifier()).unwrap();
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
         let (responder, response) = ResponderHandshake::accept_for_session(
-            auth.identity(),
-            auth.verifier(),
+            server_auth.identity(),
+            server_auth.verifier(),
             initiation,
             session_id,
             1,

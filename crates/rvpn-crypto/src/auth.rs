@@ -1,8 +1,7 @@
-use crate::{Certificate, HandshakePsk, IdentityKeyPair, IdentityPublicKey};
+use crate::{Certificate, IdentityKeyPair, IdentityPublicKey, Mac1Key};
 
 #[derive(Clone)]
 pub enum AuthConfig {
-    Psk([u8; 32]),
     PinnedKey {
         local_seed: [u8; 32],
         peer_public_key: [u8; 32],
@@ -17,7 +16,6 @@ pub enum AuthConfig {
 impl AuthConfig {
     pub fn identity(&self) -> AuthIdentity {
         match self {
-            Self::Psk(bytes) => AuthIdentity::Psk(HandshakePsk::from_bytes(*bytes)),
             Self::PinnedKey { local_seed, .. } => {
                 AuthIdentity::PinnedKey(IdentityKeyPair::from_seed(*local_seed))
             }
@@ -34,7 +32,6 @@ impl AuthConfig {
 
     pub fn verifier(&self) -> AuthVerifier {
         match self {
-            Self::Psk(bytes) => AuthVerifier::Psk(HandshakePsk::from_bytes(*bytes)),
             Self::PinnedKey {
                 peer_public_key, ..
             } => AuthVerifier::PinnedKey(IdentityPublicKey::new(*peer_public_key)),
@@ -43,12 +40,32 @@ impl AuthConfig {
             }
         }
     }
+
+    pub fn initiator_mac1_key(&self) -> Mac1Key {
+        match self {
+            Self::PinnedKey {
+                peer_public_key, ..
+            } => Mac1Key::from_key_material(peer_public_key),
+            Self::Certificate { ca_public_key, .. } => Mac1Key::from_key_material(ca_public_key),
+        }
+    }
+
+    pub fn responder_mac1_key(&self) -> Mac1Key {
+        match self {
+            Self::PinnedKey { local_seed, .. } => {
+                let public_key = IdentityKeyPair::from_seed(*local_seed)
+                    .public_key()
+                    .to_bytes();
+                Mac1Key::from_key_material(&public_key)
+            }
+            Self::Certificate { ca_public_key, .. } => Mac1Key::from_key_material(ca_public_key),
+        }
+    }
 }
 
 impl core::fmt::Debug for AuthConfig {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Psk(_) => f.write_str("AuthConfig::Psk([REDACTED])"),
             Self::PinnedKey { .. } => f.write_str("AuthConfig::PinnedKey([REDACTED])"),
             Self::Certificate { .. } => f.write_str("AuthConfig::Certificate([REDACTED])"),
         }
@@ -58,7 +75,6 @@ impl core::fmt::Debug for AuthConfig {
 impl zeroize::Zeroize for AuthConfig {
     fn zeroize(&mut self) {
         match self {
-            Self::Psk(bytes) => bytes.zeroize(),
             Self::PinnedKey {
                 local_seed,
                 peer_public_key,
@@ -87,7 +103,6 @@ impl Drop for AuthConfig {
 }
 
 pub enum AuthIdentity {
-    Psk(HandshakePsk),
     PinnedKey(IdentityKeyPair),
     Certificate {
         local_key: IdentityKeyPair,
@@ -96,7 +111,17 @@ pub enum AuthIdentity {
 }
 
 pub enum AuthVerifier {
-    Psk(HandshakePsk),
     PinnedKey(IdentityPublicKey),
     Certificate(IdentityPublicKey),
+}
+
+impl AuthVerifier {
+    pub fn mac1_key(&self) -> Mac1Key {
+        match self {
+            Self::PinnedKey(public_key) => Mac1Key::from_key_material(&public_key.to_bytes()),
+            Self::Certificate(ca_public_key) => {
+                Mac1Key::from_key_material(&ca_public_key.to_bytes())
+            }
+        }
+    }
 }

@@ -152,13 +152,13 @@ mod tests {
         let initiator_public = initiator.public_key();
         let responder_public = responder.public_key();
         let send = SessionKeys::derive(
-            initiator.agree(responder_public).unwrap(),
+            &initiator.agree(responder_public).unwrap(),
             &[8; 32],
             SessionRole::Initiator,
         )
         .unwrap();
         let receive = SessionKeys::derive(
-            responder.agree(initiator_public).unwrap(),
+            &responder.agree(initiator_public).unwrap(),
             &[8; 32],
             SessionRole::Responder,
         )
