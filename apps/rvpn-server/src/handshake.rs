@@ -31,6 +31,7 @@ pub async fn challenge_or_admit(
         public_key,
         random,
         cookie,
+        ..
     } = initiation
     else {
         return Ok(false);
