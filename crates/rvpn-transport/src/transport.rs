@@ -15,6 +15,7 @@ pub struct TransportTuning {
     pub minimum_mtu: Option<usize>,
     pub keepalive_interval: Duration,
     pub receive_pool_size: usize,
+    pub keepalive_jitter_pct: u8,
 }
 
 impl Default for TransportTuning {
@@ -23,6 +24,7 @@ impl Default for TransportTuning {
             minimum_mtu: None,
             keepalive_interval: Duration::from_secs(25),
             receive_pool_size: 8,
+            keepalive_jitter_pct: 20,
         }
     }
 }
@@ -68,7 +70,10 @@ impl UdpTransport {
                 recv_capacity,
                 tuning.receive_pool_size.max(1),
             )),
-            keepalive: Arc::new(KeepaliveScheduler::new(tuning.keepalive_interval)),
+            keepalive: Arc::new(KeepaliveScheduler::with_jitter(
+                tuning.keepalive_interval,
+                tuning.keepalive_jitter_pct,
+            )),
         })
     }
 
