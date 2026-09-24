@@ -71,7 +71,10 @@ mod tests {
         PeerIdentity {
             name: name.into(),
             allowed_ips: ips.iter().map(|prefix| prefix.parse().unwrap()).collect(),
-            auth: AuthConfig::Psk([1; 32]),
+            auth: AuthConfig::PinnedKey {
+                local_seed: [1; 32],
+                peer_public_key: [2; 32],
+            },
         }
     }
 

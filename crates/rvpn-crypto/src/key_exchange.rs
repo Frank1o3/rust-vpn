@@ -33,7 +33,7 @@ impl EphemeralKeyPair {
         self.public
     }
 
-    pub fn agree(self, peer: PublicKeyBytes) -> Result<SharedSecret, CryptoError> {
+    pub fn agree(&self, peer: PublicKeyBytes) -> Result<SharedSecret, CryptoError> {
         let bytes = self
             .secret
             .diffie_hellman(&PublicKey::from(peer.0))

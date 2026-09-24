@@ -1,6 +1,5 @@
 pub(crate) const KEY_LEN: usize = 32;
 pub(crate) const NONCE_LEN: usize = 12;
-pub(crate) const PSK_LEN: usize = 32;
 
 pub const AEAD_TAG_LEN: usize = 16;
 

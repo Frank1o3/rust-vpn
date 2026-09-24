@@ -16,7 +16,7 @@ pub use congestion::{OutboundQueue, OutboundQueueReceiver, QueuedDatagram};
 pub use delivery::{DeliveryMode, Ordering, Priority, Reliability, SendOptions};
 pub use error::TransportError;
 pub use events::{EventTransport, TransportEvent, TransportEvents};
-pub use keepalive::KeepaliveScheduler;
+pub use keepalive::{KeepaliveScheduler, random_keepalive_len, random_keepalive_payload};
 pub use metrics::{MetricsSnapshot, TransportMetrics};
 pub use mtu::{AdaptiveMtu, MtuChangeReason, MtuSnapshot, default_udp_payload_mtu};
 pub use packet::{PacketId, ReceivedDatagram, RecvMeta, TransportPacket};

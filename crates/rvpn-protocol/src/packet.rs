@@ -2,7 +2,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use rvpn_core::SessionId;
 use thiserror::Error;
 
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 3;
 pub const HEADER_LEN: usize = 1 + 1 + 4 + 8 + SessionId::LENGTH;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

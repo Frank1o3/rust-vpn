@@ -226,7 +226,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             }
 
             let auth_mode = read_str!(auth_mode_str, "auth mode");
-            let psk_hex = read_str!(psk_hex_str, "psk");
+            let _psk_hex = read_str!(psk_hex_str, "psk");
             let local_identity_seed_hex = read_str!(local_identity_seed_str, "local identity seed");
             let peer_public_key_hex = read_str!(peer_public_key_str, "peer public key");
             let local_certificate_hex = read_str!(local_certificate_str, "local certificate");
@@ -235,8 +235,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
 
             let auth = match auth_mode.as_str() {
                 "psk" => {
-                    let bytes = decode_hex!(psk_hex, 32, "pre-shared key");
-                    rvpn_crypto::AuthConfig::Psk(bytes)
+                    fail!("PSK authentication was removed in protocol v3; regenerate configs with the builder");
                 }
                 "pinned-key" => {
                     let local_seed =

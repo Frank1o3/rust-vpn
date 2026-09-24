@@ -1,8 +1,12 @@
-use crate::{AuthProof, HandshakeMessage, HandshakeTranscript, ProtectedSession, ProtocolError};
+use crate::{
+    AuthProof, HandshakeMessage, HandshakeTranscript, ProtectedSession, ProtocolError,
+    handshake::{COOKIE_LEN, PROOF_BODY_LEN, SEALED_PROOF_LEN},
+};
 use rvpn_core::SessionId;
 use rvpn_crypto::{
-    AuthIdentity, AuthVerifier, Certificate, CryptoError, EphemeralKeyPair, IdentityPublicKey,
-    PublicKeyBytes, SessionKeys, SessionRole, random_bytes, transcript_hash,
+    AuthIdentity, AuthVerifier, Certificate, CryptoError, EphemeralKeyPair, HandshakeKeys,
+    IdentityPublicKey, PublicKeyBytes, SessionKeys, SessionRole, handshake_salt, random_bytes,
+    transcript_hash,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -16,23 +20,15 @@ pub struct InitiatorHandshake {
 
 pub struct ResponderHandshake {
     verifier: AuthVerifier,
-    key_pair: EphemeralKeyPair,
+    shared_secret: rvpn_crypto::SharedSecret,
+    handshake_keys: HandshakeKeys,
     transcript: HandshakeTranscript,
     session_id: SessionId,
     key_phase: u32,
 }
 
-fn tag_of(identity: &AuthIdentity) -> u8 {
-    match identity {
-        AuthIdentity::Psk(_) => 0,
-        AuthIdentity::PinnedKey(_) => 1,
-        AuthIdentity::Certificate { .. } => 2,
-    }
-}
-
 fn produce_proof(identity: &AuthIdentity, data: &[u8]) -> AuthProof {
     match identity {
-        AuthIdentity::Psk(psk) => AuthProof::Psk(psk.authenticate(data)),
         AuthIdentity::PinnedKey(key) => AuthProof::PinnedKey(key.sign(data)),
         AuthIdentity::Certificate {
             local_key,
@@ -50,13 +46,6 @@ fn verify_proof(
     proof: &AuthProof,
 ) -> Result<Option<IdentityPublicKey>, HandshakeError> {
     match (verifier, proof) {
-        (AuthVerifier::Psk(psk), AuthProof::Psk(tag)) => {
-            if psk.verify(data, tag) {
-                Ok(None)
-            } else {
-                Err(HandshakeError::AuthenticationFailed)
-            }
-        }
         (AuthVerifier::PinnedKey(expected), AuthProof::PinnedKey(sig)) => {
             if expected.verify(data, sig) {
                 Ok(Some(*expected))
@@ -94,10 +83,14 @@ impl InitiatorHandshake {
         verifier: AuthVerifier,
     ) -> Result<(Self, HandshakeMessage), HandshakeError> {
         let key_pair = EphemeralKeyPair::generate()?;
+        let public_key = key_pair.public_key().to_bytes();
+        let random = random_bytes()?;
+        let mac1 = HandshakeMessage::compute_mac1(&verifier.mac1_key(), &public_key, &random, None);
         let initiation = HandshakeMessage::Initiation {
-            public_key: key_pair.public_key().to_bytes(),
-            random: random_bytes()?,
+            public_key,
+            random,
             cookie: None,
+            mac1,
         };
         Ok((
             Self {
@@ -114,15 +107,22 @@ impl InitiatorHandshake {
         self.initiation
     }
 
-    pub fn attach_cookie(&mut self, cookie: [u8; 32]) {
+    pub fn attach_cookie(&mut self, cookie: [u8; COOKIE_LEN]) {
         if let HandshakeMessage::Initiation {
             public_key, random, ..
         } = self.initiation
         {
+            let mac1 = HandshakeMessage::compute_mac1(
+                &self.verifier.mac1_key(),
+                &public_key,
+                &random,
+                Some(&cookie),
+            );
             self.initiation = HandshakeMessage::Initiation {
                 public_key,
                 random,
                 cookie: Some(cookie),
+                mac1,
             };
         }
     }
@@ -149,11 +149,36 @@ impl InitiatorHandshake {
         &self,
         response: HandshakeMessage,
     ) -> Result<bool, HandshakeError> {
-        let HandshakeMessage::Response { proof, .. } = response else {
+        let HandshakeMessage::Response {
+            public_key,
+            random,
+            session_id,
+            sealed_proof,
+        } = response
+        else {
             return Err(HandshakeError::UnexpectedMessage);
         };
+        let Ok(shared_secret) = self.key_pair.agree(PublicKeyBytes::new(public_key)) else {
+            return Ok(false);
+        };
+        let response_public =
+            HandshakeMessage::response_public_bytes(&public_key, &random, session_id);
+        let salt = handshake_salt(&self.initiation.encode(), &response_public);
+        let Ok(handshake_keys) = HandshakeKeys::derive(&shared_secret, &salt) else {
+            return Ok(false);
+        };
+        let Ok(opened) = handshake_keys.open_response(&self.initiation.encode(), &sealed_proof)
+        else {
+            return Ok(false);
+        };
+        let Ok(body_arr) = opened.as_ref().try_into() else {
+            return Ok(false);
+        };
+        let Ok(proof) = AuthProof::decode_body(body_arr) else {
+            return Ok(false);
+        };
         let transcript = HandshakeTranscript::new(self.initiation)?;
-        let data = transcript.server_authentication_input(response)?;
+        let data = transcript.server_authentication_input(public_key, random, session_id)?;
         Ok(verify_proof(&self.verifier, &data, &proof).is_ok())
     }
 
@@ -172,9 +197,9 @@ impl InitiatorHandshake {
     > {
         let HandshakeMessage::Response {
             public_key,
+            random,
             session_id,
-            proof,
-            ..
+            sealed_proof,
         } = response
         else {
             return Err(HandshakeError::UnexpectedMessage);
@@ -182,16 +207,38 @@ impl InitiatorHandshake {
         if session_id != expected_session_id {
             return Err(HandshakeError::UnexpectedSession);
         }
+        let shared_secret = self.key_pair.agree(PublicKeyBytes::new(public_key))?;
+        let response_public =
+            HandshakeMessage::response_public_bytes(&public_key, &random, session_id);
+        let salt = handshake_salt(&self.initiation.encode(), &response_public);
+        let handshake_keys = HandshakeKeys::derive(&shared_secret, &salt)?;
+
+        let opened = handshake_keys
+            .open_response(&self.initiation.encode(), &sealed_proof)
+            .map_err(|_| HandshakeError::AuthenticationFailed)?;
+        let body_arr: &[u8; PROOF_BODY_LEN] = opened
+            .as_ref()
+            .try_into()
+            .map_err(|_| HandshakeError::AuthenticationFailed)?;
+        let proof = AuthProof::decode_body(body_arr)?;
+
         let mut transcript = HandshakeTranscript::new(self.initiation)?;
-        let data = transcript.server_authentication_input(response)?;
+        let data = transcript.server_authentication_input(public_key, random, session_id)?;
         let remote_identity = verify_proof(&self.verifier, &data, &proof)?;
         transcript.set_response(response)?;
+
         let finish_data = transcript.client_authentication_input()?;
+        let client_proof = produce_proof(&self.identity, &finish_data);
+        let aad = [&self.initiation.encode()[..], &response.encode()[..]].concat();
+        let sealed_finish = handshake_keys.seal_finish(&aad, &client_proof.encode_body())?;
+        let mut sealed_finish_array = [0u8; SEALED_PROOF_LEN];
+        sealed_finish_array.copy_from_slice(&sealed_finish);
         let finish = HandshakeMessage::Finish {
-            proof: produce_proof(&self.identity, &finish_data),
+            sealed_proof: sealed_finish_array,
         };
+
         let keys = SessionKeys::derive(
-            self.key_pair.agree(PublicKeyBytes::new(public_key))?,
+            &shared_secret,
             &transcript_hash(&transcript.final_bytes(finish)?),
             SessionRole::Initiator,
         )?;
@@ -225,38 +272,40 @@ impl ResponderHandshake {
         session_id: SessionId,
         key_phase: u32,
     ) -> Result<(Self, HandshakeMessage), HandshakeError> {
-        if !matches!(initiation, HandshakeMessage::Initiation { .. }) {
+        let HandshakeMessage::Initiation { public_key, .. } = initiation else {
             return Err(HandshakeError::UnexpectedMessage);
-        }
-        let key_pair = EphemeralKeyPair::generate()?;
-        let mut transcript = HandshakeTranscript::new(initiation)?;
-        let placeholder = AuthProof::placeholder(tag_of(&identity));
-        let unsigned_response = HandshakeMessage::Response {
-            public_key: key_pair.public_key().to_bytes(),
-            random: random_bytes()?,
-            session_id,
-            proof: placeholder,
         };
-        let data = transcript.server_authentication_input(unsigned_response)?;
-        let response = match unsigned_response {
-            HandshakeMessage::Response {
-                public_key,
-                random,
-                session_id,
-                ..
-            } => HandshakeMessage::Response {
-                public_key,
-                random,
-                session_id,
-                proof: produce_proof(&identity, &data),
-            },
-            _ => unreachable!(),
+        let key_pair = EphemeralKeyPair::generate()?;
+        let shared_secret = key_pair.agree(PublicKeyBytes::new(public_key))?;
+        let eph_pub = key_pair.public_key().to_bytes();
+        let random = random_bytes()?;
+
+        let response_public =
+            HandshakeMessage::response_public_bytes(&eph_pub, &random, session_id);
+        let salt = handshake_salt(&initiation.encode(), &response_public);
+        let handshake_keys = HandshakeKeys::derive(&shared_secret, &salt)?;
+
+        let mut transcript = HandshakeTranscript::new(initiation)?;
+        let data = transcript.server_authentication_input(eph_pub, random, session_id)?;
+        let proof = produce_proof(&identity, &data);
+
+        let sealed = handshake_keys.seal_response(&initiation.encode(), &proof.encode_body())?;
+        let mut sealed_proof = [0u8; SEALED_PROOF_LEN];
+        sealed_proof.copy_from_slice(&sealed);
+
+        let response = HandshakeMessage::Response {
+            public_key: eph_pub,
+            random,
+            session_id,
+            sealed_proof,
         };
         transcript.set_response(response)?;
+
         Ok((
             Self {
                 verifier,
-                key_pair,
+                shared_secret,
+                handshake_keys,
                 transcript,
                 session_id,
                 key_phase,
@@ -269,16 +318,33 @@ impl ResponderHandshake {
         self,
         finish: HandshakeMessage,
     ) -> Result<(ProtectedSession, Option<IdentityPublicKey>), HandshakeError> {
-        let HandshakeMessage::Finish { proof } = finish else {
+        let HandshakeMessage::Finish { sealed_proof } = finish else {
             return Err(HandshakeError::UnexpectedMessage);
         };
+        let response = self
+            .transcript
+            .response()
+            .ok_or(HandshakeError::UnexpectedMessage)?;
+        let aad = [
+            &self.transcript.initiation().encode()[..],
+            &response.encode()[..],
+        ]
+        .concat();
+        let opened = self
+            .handshake_keys
+            .open_finish(&aad, &sealed_proof)
+            .map_err(|_| HandshakeError::AuthenticationFailed)?;
+        let body_arr: &[u8; PROOF_BODY_LEN] = opened
+            .as_ref()
+            .try_into()
+            .map_err(|_| HandshakeError::AuthenticationFailed)?;
+        let proof = AuthProof::decode_body(body_arr)?;
+
         let data = self.transcript.client_authentication_input()?;
         let remote_identity = verify_proof(&self.verifier, &data, &proof)?;
-        let HandshakeMessage::Initiation { public_key, .. } = self.transcript.initiation() else {
-            return Err(HandshakeError::UnexpectedMessage);
-        };
+
         let keys = SessionKeys::derive(
-            self.key_pair.agree(PublicKeyBytes::new(public_key))?,
+            &self.shared_secret,
             &transcript_hash(&self.transcript.final_bytes(finish)?),
             SessionRole::Responder,
         )?;
@@ -291,102 +357,294 @@ impl ResponderHandshake {
 
 #[derive(Debug, Error)]
 pub enum HandshakeError {
-    #[error("unexpected handshake message for the current role")]
+    #[error("crypto error: {0}")]
+    Crypto(#[from] CryptoError),
+    #[error("protocol error: {0}")]
+    Protocol(#[from] ProtocolError),
+    #[error("unexpected handshake message")]
     UnexpectedMessage,
+    #[error("unexpected session id")]
+    UnexpectedSession,
     #[error("handshake authentication failed")]
     AuthenticationFailed,
-    #[error("handshake response belongs to an unexpected session")]
-    UnexpectedSession,
-    #[error(transparent)]
-    Crypto(#[from] CryptoError),
-    #[error(transparent)]
-    Protocol(#[from] ProtocolError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::PacketKind;
-    use rvpn_crypto::{AuthConfig, IdentityKeyPair};
+    use crate::handshake::{FINISH_LEN, INITIATION_LEN, RESPONSE_LEN};
+    use rvpn_crypto::{AuthConfig, IdentityKeyPair, Mac1Key};
 
     #[test]
-    fn psk_peers_establish_compatible_sessions() {
-        let auth = AuthConfig::Psk([9; 32]);
-        let (initiator, initiation) =
-            InitiatorHandshake::start(auth.identity(), auth.verifier()).unwrap();
-        let (responder, response) =
-            ResponderHandshake::accept(auth.identity(), auth.verifier(), initiation).unwrap();
-        let (finish, mut client, remote) = initiator.finish(response).unwrap();
-        let (mut server, remote2) = responder.finish(finish).unwrap();
-        assert!(remote.is_none());
-        assert!(remote2.is_none());
-        let packet = client.seal(PacketKind::Data, b"ip bytes").unwrap();
-        assert_eq!(server.open(packet).unwrap(), b"ip bytes"[..]);
-    }
-
-    #[test]
-    fn rejects_response_authenticated_with_another_psk() {
-        let client_auth = AuthConfig::Psk([1; 32]);
-        let server_auth = AuthConfig::Psk([2; 32]);
-        let (initiator, initiation) =
-            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
-        let (_, response) =
-            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
-                .unwrap();
-        assert!(matches!(
-            initiator.finish(response),
-            Err(HandshakeError::AuthenticationFailed)
-        ));
-    }
-
-    #[test]
-    fn certificate_peers_establish_sessions_and_reveal_subject_identity() {
-        let ca = IdentityKeyPair::generate().unwrap();
+    fn certificate_and_pinned_key_round_trips_through_sealing() {
+        // Pinned key round trip
         let client_key = IdentityKeyPair::generate().unwrap();
         let server_key = IdentityKeyPair::generate().unwrap();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
+
+        let (initiator, initiation) =
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
+        assert!(initiation.verify_mac1(&server_auth.responder_mac1_key()));
+
+        let (responder, response) =
+            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
+                .unwrap();
+        assert!(initiator.authenticates_response(response).unwrap());
+
+        let (finish, mut client, server_id) = initiator.finish(response).unwrap();
+        let (mut server, client_id) = responder.finish(finish).unwrap();
+
+        assert_eq!(server_id, Some(server_key.public_key()));
+        assert_eq!(client_id, Some(client_key.public_key()));
+
+        let pkt = client
+            .seal(PacketKind::Data, b"pinned-secret-data")
+            .unwrap();
+        assert_eq!(server.open(pkt).unwrap(), b"pinned-secret-data"[..]);
+
+        // Certificate round trip
+        let ca = IdentityKeyPair::generate().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let client_cert = ca.issue_certificate(client_key.public_key(), now - 60, now + 3600);
         let server_cert = ca.issue_certificate(server_key.public_key(), now - 60, now + 3600);
 
-        let client_auth = AuthConfig::Certificate {
+        let cert_client_auth = AuthConfig::Certificate {
             local_seed: client_key.to_seed_bytes(),
             local_certificate: client_cert.encode(),
             ca_public_key: ca.public_key().to_bytes(),
         };
-        let server_auth = AuthConfig::Certificate {
+        let cert_server_auth = AuthConfig::Certificate {
             local_seed: server_key.to_seed_bytes(),
             local_certificate: server_cert.encode(),
             ca_public_key: ca.public_key().to_bytes(),
         };
 
         let (initiator, initiation) =
-            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
-        let (responder, response) =
-            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
+            InitiatorHandshake::start(cert_client_auth.identity(), cert_client_auth.verifier())
                 .unwrap();
-        let (finish, mut client, server_identity) = initiator.finish(response).unwrap();
-        let (mut server, client_identity) = responder.finish(finish).unwrap();
+        assert!(initiation.verify_mac1(&cert_server_auth.responder_mac1_key()));
 
-        assert_eq!(server_identity, Some(server_key.public_key()));
-        assert_eq!(client_identity, Some(client_key.public_key()));
-        let packet = client
-            .seal(PacketKind::Data, b"cert-authenticated")
-            .unwrap();
-        assert_eq!(server.open(packet).unwrap(), b"cert-authenticated"[..]);
+        let (responder, response) = ResponderHandshake::accept(
+            cert_server_auth.identity(),
+            cert_server_auth.verifier(),
+            initiation,
+        )
+        .unwrap();
+        assert!(initiator.authenticates_response(response).unwrap());
+
+        let (finish, mut client, server_id) = initiator.finish(response).unwrap();
+        let (mut server, client_id) = responder.finish(finish).unwrap();
+
+        assert_eq!(server_id, Some(server_key.public_key()));
+        assert_eq!(client_id, Some(client_key.public_key()));
+
+        let pkt = client.seal(PacketKind::Data, b"cert-secret-data").unwrap();
+        assert_eq!(server.open(pkt).unwrap(), b"cert-secret-data"[..]);
     }
 
     #[test]
-    fn rekey_keeps_session_identity_and_advances_key_phase() {
-        let auth = AuthConfig::Psk([3; 32]);
+    fn exact_wire_lengths_from_d5_for_both_modes() {
+        // Pinned key wire lengths
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
+
+        let (initiator, initiation) =
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
+        let (_responder, response) =
+            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
+                .unwrap();
+        let (finish, _, _) = initiator.finish(response).unwrap();
+
+        assert_eq!(initiation.encode().len(), INITIATION_LEN);
+        assert_eq!(initiation.encode().len(), 114);
+        assert_eq!(response.encode().len(), RESPONSE_LEN);
+        assert_eq!(response.encode().len(), 274);
+        assert_eq!(finish.encode().len(), FINISH_LEN);
+        assert_eq!(finish.encode().len(), 194);
+
+        // Certificate wire lengths
+        let ca = IdentityKeyPair::generate().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let client_cert = ca.issue_certificate(client_key.public_key(), now - 60, now + 3600);
+        let server_cert = ca.issue_certificate(server_key.public_key(), now - 60, now + 3600);
+        let cert_client_auth = AuthConfig::Certificate {
+            local_seed: client_key.to_seed_bytes(),
+            local_certificate: client_cert.encode(),
+            ca_public_key: ca.public_key().to_bytes(),
+        };
+        let cert_server_auth = AuthConfig::Certificate {
+            local_seed: server_key.to_seed_bytes(),
+            local_certificate: server_cert.encode(),
+            ca_public_key: ca.public_key().to_bytes(),
+        };
+
+        let (initiator, initiation) =
+            InitiatorHandshake::start(cert_client_auth.identity(), cert_client_auth.verifier())
+                .unwrap();
+        let (_responder, response) = ResponderHandshake::accept(
+            cert_server_auth.identity(),
+            cert_server_auth.verifier(),
+            initiation,
+        )
+        .unwrap();
+        let (finish, _, _) = initiator.finish(response).unwrap();
+
+        assert_eq!(initiation.encode().len(), 114);
+        assert_eq!(response.encode().len(), 274);
+        assert_eq!(finish.encode().len(), 194);
+    }
+
+    #[test]
+    fn tampered_sealed_proof_rejected() {
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
+
+        // Tampered Response proof
+        let (initiator, initiation) =
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
+        let (_responder, response) =
+            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation)
+                .unwrap();
+
+        let HandshakeMessage::Response {
+            public_key,
+            random,
+            session_id,
+            mut sealed_proof,
+        } = response
+        else {
+            panic!("expected response");
+        };
+        sealed_proof[0] ^= 0x01;
+        let tampered_response = HandshakeMessage::Response {
+            public_key,
+            random,
+            session_id,
+            sealed_proof,
+        };
+
+        assert!(!initiator.authenticates_response(tampered_response).unwrap());
+        assert!(matches!(
+            initiator.finish(tampered_response),
+            Err(HandshakeError::AuthenticationFailed)
+        ));
+
+        // Tampered Finish proof
+        let (initiator2, initiation2) =
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
+        let (responder2, response2) =
+            ResponderHandshake::accept(server_auth.identity(), server_auth.verifier(), initiation2)
+                .unwrap();
+        let (finish2, _, _) = initiator2.finish(response2).unwrap();
+
+        let HandshakeMessage::Finish { mut sealed_proof } = finish2 else {
+            panic!("expected finish");
+        };
+        sealed_proof[10] ^= 0x01;
+        let tampered_finish = HandshakeMessage::Finish { sealed_proof };
+
+        assert!(matches!(
+            responder2.finish(tampered_finish),
+            Err(HandshakeError::AuthenticationFailed)
+        ));
+    }
+
+    #[test]
+    fn wrong_mac1_detected() {
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
+
+        let (mut initiator, initiation) =
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
+        let correct_mac1_key = server_auth.responder_mac1_key();
+        let wrong_mac1_key = Mac1Key::from_key_material(&[99; 32]);
+
+        assert!(initiation.verify_mac1(&correct_mac1_key));
+        assert!(!initiation.verify_mac1(&wrong_mac1_key));
+
+        // Tampered mac1 in initiation
+        let HandshakeMessage::Initiation {
+            public_key,
+            random,
+            cookie,
+            mut mac1,
+        } = initiation
+        else {
+            panic!("expected initiation");
+        };
+        mac1[0] ^= 0x01;
+        let tampered_initiation = HandshakeMessage::Initiation {
+            public_key,
+            random,
+            cookie,
+            mac1,
+        };
+        assert!(!tampered_initiation.verify_mac1(&correct_mac1_key));
+
+        // Attaching a cookie recomputes mac1
+        initiator.attach_cookie([7; 32]);
+        let cookie_initiation = initiator.initiation();
+        assert!(cookie_initiation.verify_mac1(&correct_mac1_key));
+        assert!(!cookie_initiation.verify_mac1(&wrong_mac1_key));
+    }
+
+    #[test]
+    fn rekey_path_still_works() {
+        let client_key = IdentityKeyPair::generate().unwrap();
+        let server_key = IdentityKeyPair::generate().unwrap();
+        let client_auth = AuthConfig::PinnedKey {
+            local_seed: client_key.to_seed_bytes(),
+            peer_public_key: server_key.public_key().to_bytes(),
+        };
+        let server_auth = AuthConfig::PinnedKey {
+            local_seed: server_key.to_seed_bytes(),
+            peer_public_key: client_key.public_key().to_bytes(),
+        };
+
         let session_id = SessionId::new([7; 16]);
         let (initiator, initiation) =
-            InitiatorHandshake::start(auth.identity(), auth.verifier()).unwrap();
+            InitiatorHandshake::start(client_auth.identity(), client_auth.verifier()).unwrap();
         let (responder, response) = ResponderHandshake::accept_for_session(
-            auth.identity(),
-            auth.verifier(),
+            server_auth.identity(),
+            server_auth.verifier(),
             initiation,
             session_id,
             1,
@@ -396,6 +654,7 @@ mod tests {
             .finish_for_session(response, session_id, 1)
             .unwrap();
         let (mut server, _) = responder.finish(finish).unwrap();
+
         assert_eq!(client.session_id(), session_id);
         assert_eq!(client.key_phase(), 1);
         assert_eq!(

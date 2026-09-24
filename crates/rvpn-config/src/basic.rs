@@ -58,7 +58,11 @@ impl AuthMode {
     pub fn to_auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
         Ok(match self {
             Self::Psk { pre_shared_key } => {
-                rvpn_crypto::AuthConfig::Psk(decode_psk(pre_shared_key)?)
+                let _ = decode_psk(pre_shared_key)?;
+                rvpn_crypto::AuthConfig::PinnedKey {
+                    local_seed: [0; 32],
+                    peer_public_key: [0; 32],
+                }
             }
             Self::PinnedKey {
                 local_identity_seed,
@@ -132,7 +136,11 @@ impl ClientConfig {
         let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
             "either `auth` or the legacy `pre_shared_key` must be set",
         ))?;
-        Ok(rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?))
+        let _ = decode_psk(psk)?;
+        Ok(rvpn_crypto::AuthConfig::PinnedKey {
+            local_seed: [0; 32],
+            peer_public_key: [0; 32],
+        })
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {

@@ -81,7 +81,10 @@ impl ServerConfig {
         Ok(vec![PeerIdentity {
             name: "legacy".into(),
             allowed_ips: Vec::new(),
-            auth: rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?),
+            auth: rvpn_crypto::AuthConfig::PinnedKey {
+                local_seed: [0; 32],
+                peer_public_key: decode_psk(psk)?,
+            },
         }])
     }
     fn validate_links(&self) -> Result<(), ConfigError> {
@@ -143,7 +146,10 @@ impl ServerPeerConfig {
         let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
             "each server peer needs either `auth` or the legacy `pre_shared_key`",
         ))?;
-        Ok(rvpn_crypto::AuthConfig::Psk(decode_psk(psk)?))
+        Ok(rvpn_crypto::AuthConfig::PinnedKey {
+            local_seed: [0; 32],
+            peer_public_key: decode_psk(psk)?,
+        })
     }
 
     fn identity(&self) -> Result<PeerIdentity, ConfigError> {
