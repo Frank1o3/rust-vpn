@@ -1,6 +1,6 @@
 use crate::ProtocolError;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use rvpn_core::SessionId;
+use rvpn_core::{SessionId, domain};
 use rvpn_crypto::Mac1Key;
 
 pub const PUBLIC_KEY_LEN: usize = 32;
@@ -19,9 +19,9 @@ pub const RESPONSE_LEN: usize = RESPONSE_PUBLIC_LEN + SEALED_PROOF_LEN; // 274
 pub const FINISH_LEN: usize = 1 + SEALED_PROOF_LEN; // 194
 pub const COOKIE_REPLY_LEN: usize = 1 + COOKIE_LEN; // 33
 
-pub const SERVER_AUTH_DOMAIN: &[u8] = b"rvpn-v3/handshake/server";
-pub const CLIENT_AUTH_DOMAIN: &[u8] = b"rvpn-v3/handshake/client";
-pub const TRANSCRIPT_DOMAIN: &[u8] = b"rvpn-v3/handshake/transcript";
+pub const SERVER_AUTH_DOMAIN: &[u8] = b"/handshake/server";
+pub const CLIENT_AUTH_DOMAIN: &[u8] = b"/handshake/client";
+pub const TRANSCRIPT_DOMAIN: &[u8] = b"/handshake/transcript";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthProof {
@@ -321,7 +321,7 @@ impl HandshakeTranscript {
         let response_public =
             HandshakeMessage::response_public_bytes(&public_key, &random, session_id);
         Ok(join(
-            SERVER_AUTH_DOMAIN,
+            &domain(SERVER_AUTH_DOMAIN),
             &[
                 self.initiation.encode(),
                 Bytes::copy_from_slice(&response_public),
@@ -343,7 +343,7 @@ impl HandshakeTranscript {
             .as_ref()
             .ok_or(ProtocolError::InvalidHandshake)?;
         Ok(join(
-            CLIENT_AUTH_DOMAIN,
+            &domain(CLIENT_AUTH_DOMAIN),
             &[self.initiation.encode(), response.encode()],
         ))
     }
@@ -357,7 +357,7 @@ impl HandshakeTranscript {
             .as_ref()
             .ok_or(ProtocolError::InvalidHandshake)?;
         Ok(join(
-            TRANSCRIPT_DOMAIN,
+            &domain(TRANSCRIPT_DOMAIN),
             &[self.initiation.encode(), response.encode(), finish.encode()],
         ))
     }

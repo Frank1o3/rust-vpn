@@ -1,11 +1,12 @@
 use crate::{CryptoError, Secret};
 use hmac::{Hmac, KeyInit, Mac};
+use rvpn_core::domain;
 use sha2::Sha256;
 use std::net::SocketAddr;
 
 const COOKIE_LEN: usize = 32;
 const COOKIE_BUCKET_SECONDS: u64 = 60;
-const DOMAIN: &[u8] = b"rvpn-v1/handshake/cookie";
+const DOMAIN: &[u8] = b"/handshake/cookie";
 
 pub struct CookieKey {
     secret: Secret<32>,
@@ -64,7 +65,7 @@ impl CookieKey {
         bucket: u64,
     ) -> [u8; COOKIE_LEN] {
         let mut input = Vec::with_capacity(128);
-        input.extend_from_slice(DOMAIN);
+        input.extend_from_slice(&domain(DOMAIN));
         input.extend_from_slice(&bucket.to_be_bytes());
 
         match endpoint {

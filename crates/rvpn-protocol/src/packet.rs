@@ -1,5 +1,5 @@
 use bytes::{Buf, Bytes, BytesMut};
-use rvpn_core::SessionId;
+use rvpn_core::{PROTOCOL_VERSION, ProtocolVersion, SessionId};
 use thiserror::Error;
 
 pub const VERSION: u8 = 3;
@@ -43,7 +43,7 @@ pub struct Header {
 impl Header {
     pub fn encode(self) -> [u8; HEADER_LEN] {
         let mut bytes = [0; HEADER_LEN];
-        bytes[0] = VERSION;
+        bytes[0] = PROTOCOL_VERSION.encoded();
         bytes[1] = self.kind as u8;
         bytes[2..6].copy_from_slice(&self.key_phase.to_be_bytes());
         bytes[6..14].copy_from_slice(&self.sequence.to_be_bytes());
@@ -70,9 +70,12 @@ impl Packet {
         if input.remaining() < HEADER_LEN {
             return Err(ProtocolError::TruncatedHeader);
         }
-        let version = input.get_u8();
-        if version != VERSION {
-            return Err(ProtocolError::UnsupportedVersion(version));
+        let version = ProtocolVersion::new(input.get_u8(), PROTOCOL_VERSION.minor_digits());
+        if version.encoded() != PROTOCOL_VERSION.encoded() {
+            return Err(ProtocolError::UnsupportedVersion(
+                version.major,
+                version.minor,
+            ));
         }
         let kind = PacketKind::try_from(input.get_u8())?;
         let key_phase = input.get_u32();
@@ -95,8 +98,8 @@ impl Packet {
 pub enum ProtocolError {
     #[error("packet header is truncated")]
     TruncatedHeader,
-    #[error("unsupported protocol version {0}")]
-    UnsupportedVersion(u8),
+    #[error("unsupported protocol version {0}.{1}")]
+    UnsupportedVersion(u8, u8),
     #[error("unknown packet kind {0}")]
     UnknownPacketKind(u8),
     #[error("invalid handshake message")]
