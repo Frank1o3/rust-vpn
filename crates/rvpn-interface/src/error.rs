@@ -23,3 +23,40 @@ pub enum InterfaceError {
     #[error("virtual device operation failed: {0}")]
     Io(#[from] std::io::Error),
 }
+
+impl InterfaceError {
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::UnsupportedPlatform)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fatality_classification() {
+        assert!(InterfaceError::UnsupportedPlatform.is_fatal());
+        assert!(InterfaceError::Io(std::io::Error::other("disk error")).is_fatal());
+
+        assert!(!InterfaceError::UnsupportedMode(DeviceMode::Tun).is_fatal());
+        assert!(!InterfaceError::InvalidInterfaceName.is_fatal());
+        assert!(!InterfaceError::InvalidMtu(100).is_fatal());
+        assert!(!InterfaceError::InvalidIpPacket.is_fatal());
+        assert!(!InterfaceError::InvalidEthernetFrame.is_fatal());
+        assert!(
+            !InterfaceError::PacketTooLarge {
+                size: 2000,
+                mtu: 1500
+            }
+            .is_fatal()
+        );
+        assert!(
+            !InterfaceError::PartialWrite {
+                written: 10,
+                expected: 20
+            }
+            .is_fatal()
+        );
+    }
+}
