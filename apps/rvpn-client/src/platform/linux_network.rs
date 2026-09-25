@@ -112,23 +112,8 @@ pub async fn configure_client_network(
     if let Ok(dns_servers) = config.interface.dns_server_list()
         && !dns_servers.is_empty()
     {
-        let tunnel_addresses: Vec<IpNet> = config
-            .interface
-            .address
-            .iter()
-            .chain(&config.interface.addresses)
-            .map(|address| {
-                address
-                    .parse()
-                    .with_context(|| format!("invalid configured interface address: {address}"))
-            })
-            .collect::<Result<_>>()?;
-
-        if let Err(error) = net
-            .set_dns_with_addresses(dev.name(), &dns_servers, &tunnel_addresses)
-            .await
-        {
-            tracing::warn!(
+        if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
+                        tracing::warn!(
                 %error,
                 "native Linux DNS backend rejected RVPN DNS configuration"
             );
