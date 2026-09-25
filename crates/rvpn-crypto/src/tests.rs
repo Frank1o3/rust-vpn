@@ -147,11 +147,14 @@ fn seal_response_and_seal_finish_use_independent_keys_so_nonce_zero_does_not_col
 
     // Same nonce (0) under r2i and i2r for different plaintexts must not
     // decrypt cross-key: each direction's single use is isolated.
-    let sealed_response = keys.seal_response(b"aad-response", b"response-proof").unwrap();
+    let sealed_response = keys
+        .seal_response(b"aad-response", b"response-proof")
+        .unwrap();
     let sealed_finish = keys.seal_finish(b"aad-finish", b"finish-proof").unwrap();
 
     assert_eq!(
-        keys.open_response(b"aad-response", &sealed_response).unwrap(),
+        keys.open_response(b"aad-response", &sealed_response)
+            .unwrap(),
         b"response-proof"[..]
     );
     assert_eq!(

@@ -2,7 +2,10 @@ use crate::{BestRoute, IpAddr, IpNet, KillSwitchSpec, NetConfigurator, NetError,
 use futures_util::stream::TryStreamExt;
 use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
-    packet_route::{address::AddressAttribute, route::{RouteAddress, RouteAttribute}},
+    packet_route::{
+        address::AddressAttribute,
+        route::{RouteAddress, RouteAttribute},
+    },
 };
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -192,14 +195,15 @@ impl SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?
         {
-            let address = message.attributes.into_iter().find_map(|attribute| {
-                match attribute {
+            let address = message
+                .attributes
+                .into_iter()
+                .find_map(|attribute| match attribute {
                     AddressAttribute::Local(address) | AddressAttribute::Address(address) => {
                         Some(address)
                     }
                     _ => None,
-                }
-            });
+                });
             if let Some(address) = address {
                 tunnel_addresses.push(IpNet::new(address, message.header.prefix_len).map_err(
                     |e| NetError::Operation(format!("invalid address on interface {name}: {e}")),
@@ -271,7 +275,16 @@ impl SystemNet {
             let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
             ipv4_settings.insert("method", Value::from("manual"));
             ipv4_settings.insert("address-data", Value::from(v4_addresses));
-            ipv4_settings.insert("dns-data", Value::from(servers.iter().filter(|a| a.is_ipv4()).map(IpAddr::to_string).collect::<Vec<_>>()));
+            ipv4_settings.insert(
+                "dns-data",
+                Value::from(
+                    servers
+                        .iter()
+                        .filter(|a| a.is_ipv4())
+                        .map(IpAddr::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+            );
             ipv4_settings.insert("dns-priority", Value::from(-1_i32));
             ipv4_settings.insert("ignore-auto-dns", Value::from(true));
             settings.insert("ipv4", ipv4_settings);
@@ -281,7 +294,16 @@ impl SystemNet {
             let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
             ipv6_settings.insert("method", Value::from("manual"));
             ipv6_settings.insert("address-data", Value::from(v6_addresses));
-            ipv6_settings.insert("dns-data", Value::from(servers.iter().filter(|a| a.is_ipv6()).map(IpAddr::to_string).collect::<Vec<_>>()));
+            ipv6_settings.insert(
+                "dns-data",
+                Value::from(
+                    servers
+                        .iter()
+                        .filter(|a| a.is_ipv6())
+                        .map(IpAddr::to_string)
+                        .collect::<Vec<_>>(),
+                ),
+            );
             ipv6_settings.insert("dns-priority", Value::from(-1_i32));
             ipv6_settings.insert("ignore-auto-dns", Value::from(true));
             settings.insert("ipv6", ipv6_settings);

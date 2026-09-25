@@ -194,7 +194,10 @@ mod tests {
         }
         assert!(window.test_bit(WINDOW - 1));
         assert_eq!(window.check_and_record(0), Err(ReplayError::Duplicate));
-        assert_eq!(window.check_and_record(WINDOW - 1), Err(ReplayError::Duplicate));
+        assert_eq!(
+            window.check_and_record(WINDOW - 1),
+            Err(ReplayError::Duplicate)
+        );
     }
 
     #[test]

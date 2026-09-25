@@ -113,7 +113,7 @@ pub async fn configure_client_network(
         && !dns_servers.is_empty()
     {
         if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
-                        tracing::warn!(
+            tracing::warn!(
                 %error,
                 "native Linux DNS backend rejected RVPN DNS configuration"
             );

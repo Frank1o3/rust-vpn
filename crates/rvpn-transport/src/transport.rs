@@ -333,11 +333,7 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
         let (level, optname, val): (libc::c_int, libc::c_int, libc::c_int) = if local.is_ipv6() {
             (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 1)
         } else {
-            (
-                libc::IPPROTO_IP,
-                libc::IP_MTU_DISCOVER,
-                2,
-            )
+            (libc::IPPROTO_IP, libc::IP_MTU_DISCOVER, 2)
         };
         let ret = unsafe {
             libc::setsockopt(
@@ -447,7 +443,10 @@ mod effective_mtu_tests {
             .send_to(receiver_addr, over_limit, SendOptions::default())
             .await
             .unwrap();
-        assert_eq!(sent, 0, "payload over effective_mtu must be dropped, not sent");
+        assert_eq!(
+            sent, 0,
+            "payload over effective_mtu must be dropped, not sent"
+        );
         assert_eq!(transport.metrics_snapshot().packets_dropped_oversized, 1);
     }
 
