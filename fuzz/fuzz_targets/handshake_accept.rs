@@ -6,9 +6,11 @@ use rvpn_crypto::{AuthConfig, IdentityKeyPair};
 use rvpn_protocol::{HandshakeMessage, ResponderHandshake};
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(HandshakeMessage::Initiation { .. }) =
-        HandshakeMessage::decode(Bytes::copy_from_slice(data))
-    else {
+    let Ok(message) = HandshakeMessage::decode(Bytes::copy_from_slice(data)) else {
+        return;
+    };
+
+    let HandshakeMessage::Initiation { .. } = message else {
         return;
     };
 
@@ -20,11 +22,9 @@ fuzz_target!(|data: &[u8]| {
         peer_public_key: client_key.public_key().to_bytes(),
     };
 
-    let initiation = HandshakeMessage::decode(Bytes::copy_from_slice(data)).unwrap();
-
     let _ = ResponderHandshake::accept(
         server_auth.identity(),
         server_auth.verifier(),
-        initiation,
+        message,
     );
 });
