@@ -59,10 +59,10 @@ jobs:
         run: cargo install --locked cargo-fuzz --version "${CARGO_FUZZ_VERSION}"
 
       - name: Build fuzz target
-        run: cargo fuzz build "${{ matrix.target }}"
+        run: cargo +nightly fuzz build "${{ matrix.target }}"
 
       - name: Run fuzz smoke test
-        run: cargo fuzz run "${{ matrix.target }}" -- -max_total_time="${FUZZ_TIME}"
+        run: cargo +nightly fuzz run "${{ matrix.target }}" -- -max_total_time="${FUZZ_TIME}"
 
       - name: Upload fuzz artifacts
         if: failure()
