@@ -48,6 +48,7 @@ run:
     cargo fuzz run handshake_accept
     cargo fuzz run obfuscation_unwrap
     cargo fuzz run certificate_decode_verify
+    cargo fuzz run session_aead_open
 
 ## Quick start
 
