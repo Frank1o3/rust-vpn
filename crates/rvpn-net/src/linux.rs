@@ -202,12 +202,16 @@ impl SystemNet {
 
         let mut connection_settings: HashMap<&str, Value<'static>> = HashMap::new();
         connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
-        connection_settings.insert("type", Value::from("generic"));
+        connection_settings.insert("type", Value::from("tun"));
         connection_settings.insert("interface-name", Value::from(name.to_owned()));
         connection_settings.insert("autoconnect", Value::from(false));
 
         let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
         settings.insert("connection", connection_settings);
+
+        let mut tun_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        tun_settings.insert("mode", Value::from(1_u32));
+        settings.insert("tun", tun_settings);
 
         if !v4_dns.is_empty() {
             let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
