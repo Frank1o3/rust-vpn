@@ -29,13 +29,13 @@ arbitrary nonce, AAD, and ciphertext inputs.
 
 ## Commands
 
-    cargo fuzz list
+    cargo +nightly fuzz list
 
-    cargo fuzz run packet_decode
+    cargo +nightly fuzz run packet_decode
 
-    cargo fuzz run packet_decode -- -max_total_time=30
+    cargo +nightly fuzz run packet_decode -- -max_total_time=30
 
-    for target in $(cargo fuzz list); do cargo fuzz build "$target"; done
+    for target in $(cargo +nightly fuzz list); do cargo fuzz build "$target"; done
 
 ## Normal workspace validation
 
