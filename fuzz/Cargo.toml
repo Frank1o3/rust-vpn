@@ -12,6 +12,7 @@ cargo-fuzz=true
 
 [dependencies]
 arbitrary={version="1.4.2"}
+bytes={version="1.12.1"}
 libfuzzer-sys={version="0.4.13"}
 
 [dependencies.rvpn-crypto]
