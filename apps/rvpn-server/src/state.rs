@@ -90,12 +90,10 @@ impl PendingHandshakes {
         let per_source = &mut self.per_source;
         self.entries.retain(|_, state| {
             let keep = keep(state);
-            if !keep {
-                if let Some(count) = per_source.get_mut(&state.endpoint) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        per_source.remove(&state.endpoint);
-                    }
+            if !keep && let Some(count) = per_source.get_mut(&state.endpoint) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    per_source.remove(&state.endpoint);
                 }
             }
             keep
