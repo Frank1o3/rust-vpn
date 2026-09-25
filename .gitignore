@@ -7,3 +7,5 @@ local.properties
 rvpn-setup/
 .venv/
 __pycache__
+/fuzz/artifacts/
+/fuzz/target/
