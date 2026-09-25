@@ -1,0 +1,64 @@
+name: RVPN Fuzzing
+
+on:
+  push:
+    branches: ["clippy-hardening"]
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "crates/rvpn-crypto/**"
+      - "crates/rvpn-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_FUZZ_VERSION: 0.13.2
+  FUZZ_TIME: 20
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - packet_decode
+          - handshake_decode
+          - handshake_accept
+          - obfuscation_unwrap
+          - certificate_decode_verify
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install native networking dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmnl-dev libnftnl-dev pkg-config libdbus-1-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz --version "${CARGO_FUZZ_VERSION}"
+
+      - name: Build fuzz target
+        run: cargo fuzz build "${{ matrix.target }}"
+
+      - name: Run fuzz smoke test
+        run: cargo fuzz run "${{ matrix.target }}" -- -max_total_time="${FUZZ_TIME}"
+
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.sha }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 7
