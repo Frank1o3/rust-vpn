@@ -137,13 +137,23 @@ mod tests {
     }
 
     #[test]
-    fn shift_smaller_than_one_word() {
+    fn shift_smaller_than_one_word_clears_only_the_entering_bits() {
         let mut window = ReplayWindow::default();
         window.check_and_record(100).unwrap();
+
+        // Simulate stale ring-buffer bits occupying the slots that are about
+        // to be reused by the small forward shift.
+        for sequence in 101..=105 {
+            window.set_bit(sequence);
+        }
+
         window.check_and_record(105).unwrap();
-        window.check_and_record(100).unwrap();
+
         assert_eq!(window.check_and_record(100), Err(ReplayError::Duplicate));
-        assert_eq!(window.check_and_record(105), Err(ReplayError::Duplicate));
+        for sequence in 101..105 {
+            assert!(!window.test_bit(sequence));
+        }
+        assert!(window.test_bit(105));
     }
 
     #[test]
@@ -171,9 +181,20 @@ mod tests {
     fn shift_just_under_window_width_clears_almost_everything_in_bounded_time() {
         let mut window = ReplayWindow::default();
         window.check_and_record(0).unwrap();
+
+        // Fill every ring slot to verify that a near-window-width shift
+        // clears exactly the entering range while preserving the old edge.
+        window.seen.fill(u64::MAX);
+
         window.check_and_record(WINDOW - 1).unwrap();
-        assert_eq!(window.check_and_record(0), Err(ReplayError::TooOld));
-        window.check_and_record(WINDOW - 1).unwrap_err();
+
+        assert!(window.test_bit(0));
+        for sequence in 1..WINDOW - 1 {
+            assert!(!window.test_bit(sequence));
+        }
+        assert!(window.test_bit(WINDOW - 1));
+        assert_eq!(window.check_and_record(0), Err(ReplayError::Duplicate));
+        assert_eq!(window.check_and_record(WINDOW - 1), Err(ReplayError::Duplicate));
     }
 
     #[test]
