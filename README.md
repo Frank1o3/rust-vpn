@@ -28,6 +28,27 @@ crypto is welcome and encouraged.
 - **Windows** — client build exists but is considered experimental/unofficial; not part of the current stabilization effort.
 - macOS is a possible future target given its shared Unix/Linux lineage, but is not currently worked on.
 
+## Validation
+
+The repository supports stable checks, unit/integration tests, Clippy, Criterion
+benchmarks, and coverage-guided fuzzing.
+
+    cargo check --workspace --all-targets
+    cargo test --workspace
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo bench --workspace
+
+Fuzz targets live in the detached fuzz workspace. Install nightly and the
+pinned cargo-fuzz version described in [fuzz/README.md](fuzz/README.md), then
+run:
+
+    cargo fuzz list
+    cargo fuzz run packet_decode
+    cargo fuzz run handshake_decode
+    cargo fuzz run handshake_accept
+    cargo fuzz run obfuscation_unwrap
+    cargo fuzz run certificate_decode_verify
+
 ## Quick start
 
 ```sh
