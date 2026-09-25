@@ -215,8 +215,8 @@ impl SystemNet {
 
         if !v4_dns.is_empty() {
             let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
-            ipv4_settings.insert("method", Value::from("link-local"));
-            ipv4_settings.insert("dns", Value::from(v4_dns));
+            ipv4_settings.insert("method", Value::from("manual"));
+            ipv4_settings.insert("dns-data", Value::from(servers.iter().filter(|a| a.is_ipv4()).map(IpAddr::to_string).collect::<Vec<_>>()));
             ipv4_settings.insert("dns-priority", Value::from(-1_i32));
             ipv4_settings.insert("ignore-auto-dns", Value::from(true));
             settings.insert("ipv4", ipv4_settings);
@@ -224,8 +224,8 @@ impl SystemNet {
 
         if !v6_dns.is_empty() {
             let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
-            ipv6_settings.insert("method", Value::from("link-local"));
-            ipv6_settings.insert("dns", Value::from(v6_dns));
+            ipv6_settings.insert("method", Value::from("manual"));
+            ipv6_settings.insert("dns-data", Value::from(servers.iter().filter(|a| a.is_ipv6()).map(IpAddr::to_string).collect::<Vec<_>>()));
             ipv6_settings.insert("dns-priority", Value::from(-1_i32));
             ipv6_settings.insert("ignore-auto-dns", Value::from(true));
             settings.insert("ipv6", ipv6_settings);
