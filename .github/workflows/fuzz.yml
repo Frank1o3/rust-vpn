@@ -2,7 +2,16 @@ name: RVPN Fuzzing
 
 on:
   push:
-    branches: ["clippy-hardening"]
+    branches:
+      - "main"
+      - "clippy-hardening"
+    paths:
+      - "fuzz/**"
+      - "crates/rvpn-crypto/**"
+      - "crates/rvpn-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
   pull_request:
     paths:
       - "fuzz/**"
