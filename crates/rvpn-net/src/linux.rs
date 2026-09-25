@@ -4,14 +4,19 @@ use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
     packet_route::route::{RouteAddress, RouteAttribute},
 };
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::sync::OnceCell;
-use zbus::{Connection, Proxy, zvariant::OwnedObjectPath};
+use zbus::{
+    Connection, Proxy,
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
+};
 
 use crate::linux_killswitch;
 
 const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
 const RESOLV_CONF_BACKUP_PATH: &str = "/etc/resolv.conf.rvpn-backup";
+const NETWORKMANAGER_CONF_PATH: &str = "/etc/NetworkManager/NetworkManager.conf";
 
 #[derive(Clone)]
 pub struct SystemNet {
@@ -70,6 +75,34 @@ impl SystemNet {
         Ok(names.iter().any(|n| n == "org.freedesktop.resolve1"))
     }
 
+    async fn network_manager_manages_dns() -> bool {
+        let Ok(contents) = tokio::fs::read_to_string(NETWORKMANAGER_CONF_PATH).await else {
+            return false;
+        };
+
+        let mut in_main_section = false;
+        for raw_line in contents.lines() {
+            let line = raw_line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_main_section = line.eq_ignore_ascii_case("[main]");
+                continue;
+            }
+            if !in_main_section {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=')
+                && key.trim().eq_ignore_ascii_case("dns")
+                && value.trim().eq_ignore_ascii_case("default")
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     async fn set_dns_resolv_conf_fallback(servers: &[IpAddr]) -> Result<(), NetError> {
         if tokio::fs::metadata(RESOLV_CONF_BACKUP_PATH).await.is_err()
             && let Ok(current) = tokio::fs::read(RESOLV_CONF_PATH).await
@@ -112,6 +145,110 @@ impl SystemNet {
             .get_property::<String>("Mode")
             .await
             .map_err(|e| NetError::Operation(e.to_string()))
+    }
+
+    async fn set_dns_networkmanager(
+        &self,
+        name: &str,
+        servers: &[IpAddr],
+        connection: &Connection,
+    ) -> Result<(), NetError> {
+        if let Err(e) = Self::revert_dns_networkmanager(connection, name).await {
+            tracing::debug!(
+                interface = name,
+                %e,
+                "no stale NetworkManager RVPN DNS profile to clean up before (re)configuring"
+            );
+        }
+
+        let manager = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+
+        let device_path: OwnedObjectPath = manager
+            .call("GetDeviceByIpIface", &name)
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager does not know about interface {name} yet: {e}"
+                ))
+            })?;
+
+        let v4_dns: Vec<u32> = servers
+            .iter()
+            .filter_map(|addr| match addr {
+                IpAddr::V4(v4) => Some(u32::from_be_bytes(v4.octets())),
+                IpAddr::V6(_) => None,
+            })
+            .collect();
+        let v6_dns: Vec<Vec<u8>> = servers
+            .iter()
+            .filter_map(|addr| match addr {
+                IpAddr::V6(v6) => Some(v6.octets().to_vec()),
+                IpAddr::V4(_) => None,
+            })
+            .collect();
+
+        if v4_dns.is_empty() && v6_dns.is_empty() {
+            return Err(NetError::Operation(
+                "no DNS servers to configure via NetworkManager".into(),
+            ));
+        }
+
+        let mut connection_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
+        connection_settings.insert("type", Value::from("generic"));
+        connection_settings.insert("interface-name", Value::from(name.to_owned()));
+        connection_settings.insert("autoconnect", Value::from(false));
+
+        let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
+        settings.insert("connection", connection_settings);
+
+        if !v4_dns.is_empty() {
+            let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
+            ipv4_settings.insert("method", Value::from("link-local"));
+            ipv4_settings.insert("dns", Value::from(v4_dns));
+            ipv4_settings.insert("dns-priority", Value::from(-1_i32));
+            ipv4_settings.insert("ignore-auto-dns", Value::from(true));
+            settings.insert("ipv4", ipv4_settings);
+        }
+
+        if !v6_dns.is_empty() {
+            let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
+            ipv6_settings.insert("method", Value::from("link-local"));
+            ipv6_settings.insert("dns", Value::from(v6_dns));
+            ipv6_settings.insert("dns-priority", Value::from(-1_i32));
+            ipv6_settings.insert("ignore-auto-dns", Value::from(true));
+            settings.insert("ipv6", ipv6_settings);
+        }
+
+        let specific_object = ObjectPath::try_from("/")
+            .map_err(|e| NetError::Operation(format!("invalid NetworkManager object path: {e}")))?;
+        let options: HashMap<&str, Value<'static>> = HashMap::new();
+
+        manager
+            .call::<_, _, (OwnedObjectPath, OwnedObjectPath, HashMap<String, OwnedValue>)>(
+                "AddAndActivateConnection2",
+                &(settings, device_path, specific_object, options),
+            )
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager AddAndActivateConnection2 failed for RVPN DNS profile on {name}: {e}"
+                ))
+            })?;
+
+        tracing::info!(
+            interface = name,
+            dns = ?servers,
+            "configured DNS via NetworkManager (NetworkManager.conf sets dns=default)"
+        );
+        Ok(())
     }
 
     async fn revert_dns_networkmanager(
@@ -235,7 +372,6 @@ impl SystemNet {
         Ok(())
     }
 
-    /// Revert per-link DNS on `name` through `org.freedesktop.resolve1`.
     async fn revert_dns_resolved(
         &self,
         name: &str,
@@ -407,6 +543,17 @@ impl NetConfigurator for SystemNet {
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
 
+        if Self::network_manager_manages_dns().await {
+            tracing::info!(
+                interface = name,
+                "NetworkManager.conf sets `dns=default` under [main]; \
+                 configuring RVPN DNS via NetworkManager instead of systemd-resolved"
+            );
+            return self
+                .set_dns_networkmanager(name, servers, &connection)
+                .await;
+        }
+
         if !Self::resolved_service_available(&connection)
             .await
             .unwrap_or(false)
@@ -427,8 +574,6 @@ impl NetConfigurator for SystemNet {
                     nm_dns_mode = %mode,
                     "configuring RVPN DNS via systemd-resolved per-link API"
                 );
-                // Clean up any stale NM DNS profile from a previous RVPN
-                // version that used AddAndActivateConnection2.
                 if let Err(e) = Self::revert_dns_networkmanager(&connection, name).await {
                     tracing::debug!(
                         interface = name,
@@ -451,6 +596,10 @@ impl NetConfigurator for SystemNet {
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
         let connection = Self::system_bus().await?;
 
+        if Self::network_manager_manages_dns().await {
+            return Self::revert_dns_networkmanager(&connection, name).await;
+        }
+
         if !Self::resolved_service_available(&connection)
             .await
             .unwrap_or(false)
@@ -458,9 +607,6 @@ impl NetConfigurator for SystemNet {
             return Self::revert_dns_resolv_conf_fallback().await;
         }
 
-        // Clean up any stale NetworkManager RVPN DNS profile (from a previous
-        // version that used AddAndActivateConnection2).  Safe to call even
-        // when no such profile exists.
         if let Err(e) = Self::revert_dns_networkmanager(&connection, name).await {
             tracing::debug!(
                 interface = name,
