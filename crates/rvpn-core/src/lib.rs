@@ -115,7 +115,7 @@ fn protocol_version_handles_minor_revision() {
 
 #[test]
 fn domain_uses_current_protocol_version() {
-    assert_eq!(domain(b"/handshake/cookie"), b"rvpn-v3.0/handshake/cookie");
+    assert_eq!(domain(b"/handshake/cookie"), b"rvpn-v3.1/handshake/cookie");
 }
 
 #[test]

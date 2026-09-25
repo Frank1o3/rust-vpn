@@ -11,7 +11,9 @@ fn pubkey() -> String {
 }
 
 fn pinned_auth_toml(seed_hex: &str, pub_hex: &str) -> String {
-    format!("[auth]\nmode = 'pinned-key'\nlocal_identity_seed = '{seed_hex}'\npeer_public_key = '{pub_hex}'\n")
+    format!(
+        "[auth]\nmode = 'pinned-key'\nlocal_identity_seed = '{seed_hex}'\npeer_public_key = '{pub_hex}'\n"
+    )
 }
 
 #[test]
@@ -22,7 +24,10 @@ fn parses_toml() {
 
 #[test]
 fn validates_client_pinned_key_auth() {
-    let toml = format!("server = '127.0.0.1:9000'\n{}", pinned_auth_toml(&seed(), &pubkey()));
+    let toml = format!(
+        "server = '127.0.0.1:9000'\n{}",
+        pinned_auth_toml(&seed(), &pubkey())
+    );
     let config = ClientConfig::from_toml(&toml).unwrap();
     assert!(config.auth_config().is_ok());
 }
@@ -40,7 +45,10 @@ fn legacy_pre_shared_key_configuration_is_rejected() {
     );
     assert!(ClientConfig::from_toml(&client_toml).is_err());
 
-    let server_toml = format!("bind = '0.0.0.0:9000'\npre_shared_key = '{}'", "a".repeat(64));
+    let server_toml = format!(
+        "bind = '0.0.0.0:9000'\npre_shared_key = '{}'",
+        "a".repeat(64)
+    );
     assert!(ServerConfig::from_toml(&server_toml).is_err());
 
     let peer_psk_toml = format!(
@@ -193,7 +201,10 @@ fn parses_dns_server_lists_and_rejects_garbage() {
 
 #[test]
 fn liveness_defaults_and_bounds() {
-    let base = format!("server = '127.0.0.1:9000'\n{}", pinned_auth_toml(&seed(), &pubkey()));
+    let base = format!(
+        "server = '127.0.0.1:9000'\n{}",
+        pinned_auth_toml(&seed(), &pubkey())
+    );
     let default = ClientConfig::from_toml(&base).unwrap();
     assert_eq!(default.liveness.timeout(), Some(Duration::from_secs(90)));
 
@@ -205,7 +216,10 @@ fn liveness_defaults_and_bounds() {
 
 #[test]
 fn rekey_grace_period_defaults_and_is_configurable() {
-    let base = format!("server = '127.0.0.1:9000'\n{}", pinned_auth_toml(&seed(), &pubkey()));
+    let base = format!(
+        "server = '127.0.0.1:9000'\n{}",
+        pinned_auth_toml(&seed(), &pubkey())
+    );
 
     let default = ClientConfig::from_toml(&base).unwrap();
     assert_eq!(default.rekey.grace_period(), Duration::from_secs(15));

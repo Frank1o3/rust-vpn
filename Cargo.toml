@@ -30,6 +30,9 @@
     ]
     resolver="3"
 
+    [workspace.metadata]
+        cargo-fuzz=true
+
     [workspace.package]
         authors=["Frank1o3"]
         edition="2024"

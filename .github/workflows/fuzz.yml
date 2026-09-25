@@ -1,0 +1,101 @@
+name: RVPN Fuzzing
+
+on:
+  push:
+    branches:
+      - "main"
+      - "clippy-hardening"
+    paths:
+      - "fuzz/**"
+      - "crates/rvpn-crypto/**"
+      - "crates/rvpn-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "crates/rvpn-crypto/**"
+      - "crates/rvpn-protocol/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_FUZZ_VERSION: 0.13.2
+  FUZZ_TIME: 20
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - packet_decode
+          - handshake_decode
+          - handshake_accept
+          - obfuscation_unwrap
+          - certificate_decode_verify
+          - session_aead_open
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Capture Rust compiler version
+        id: rust-version
+        shell: bash
+        run: echo "hash=$(rustc -Vv | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-fuzz-cargo-deps-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-cargo-deps-
+      - name: Cache cargo-fuzz
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-fuzz-${{ env.CARGO_FUZZ_VERSION }}
+      - name: Cache fuzz build artifacts
+        uses: actions/cache@v6
+        with:
+          path: fuzz/target
+          key: ${{ runner.os }}-fuzz-target-${{ matrix.target }}-${{ steps.rust-version.outputs.hash }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-fuzz-target-${{ matrix.target }}-${{ steps.rust-version.outputs.hash }}-
+            ${{ runner.os }}-fuzz-target-${{ matrix.target }}-
+      - name: Install native networking dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmnl-dev libnftnl-dev pkg-config libdbus-1-dev
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz --version "${CARGO_FUZZ_VERSION}"
+
+      - name: Build fuzz target
+        run: cargo +nightly fuzz build "${{ matrix.target }}"
+
+      - name: Run fuzz smoke test
+        run: cargo +nightly fuzz run "${{ matrix.target }}" -- -max_total_time="${FUZZ_TIME}"
+
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.sha }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 7
