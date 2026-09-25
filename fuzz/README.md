@@ -24,6 +24,9 @@ arbitrary datagrams.
 certificate_decode_verify exercises fixed-width certificate decoding and
 Ed25519 verification against arbitrary certificate bytes.
 
+session_aead_open exercises the ChaCha20-Poly1305 session decryption path with
+arbitrary nonce, AAD, and ciphertext inputs.
+
 ## Commands
 
     cargo fuzz list
