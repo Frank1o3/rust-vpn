@@ -6,10 +6,6 @@ use rvpn_crypto::{AuthConfig, IdentityKeyPair};
 use rvpn_protocol::{HandshakeMessage, ResponderHandshake};
 
 fuzz_target!(|data: &[u8]| {
-    if data.len() != rvpn_protocol::handshake::INITIATION_LEN {
-        return;
-    }
-
     let Ok(HandshakeMessage::Initiation { .. }) =
         HandshakeMessage::decode(Bytes::copy_from_slice(data))
     else {
