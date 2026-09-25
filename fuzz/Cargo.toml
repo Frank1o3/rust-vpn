@@ -55,3 +55,10 @@ path="fuzz_targets/certificate_decode_verify.rs"
 test=false
 doc=false
 bench=false
+
+[[bin]]
+name="session_aead_open"
+path="fuzz_targets/session_aead_open.rs"
+test=false
+doc=false
+bench=false
