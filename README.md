@@ -42,13 +42,13 @@ Fuzz targets live in the detached fuzz workspace. Install nightly and the
 pinned cargo-fuzz version described in [fuzz/README.md](fuzz/README.md), then
 run:
 
-    cargo fuzz list
-    cargo fuzz run packet_decode
-    cargo fuzz run handshake_decode
-    cargo fuzz run handshake_accept
-    cargo fuzz run obfuscation_unwrap
-    cargo fuzz run certificate_decode_verify
-    cargo fuzz run session_aead_open
+    cargo +nightly fuzz list
+    cargo +nightly fuzz run packet_decode
+    cargo +nightly fuzz run handshake_decode
+    cargo +nightly fuzz run handshake_accept
+    cargo +nightly fuzz run obfuscation_unwrap
+    cargo +nightly fuzz run certificate_decode_verify
+    cargo +nightly fuzz run session_aead_open
 
 ## Quick start
 
