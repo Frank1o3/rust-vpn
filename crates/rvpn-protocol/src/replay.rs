@@ -31,7 +31,7 @@ impl ReplayWindow {
             if shift >= WINDOW {
                 self.seen = [0; WORDS];
             } else {
-                self.shift_window(shift);
+                self.clear_range(highest, shift);
             }
             self.highest = Some(sequence);
             self.set_bit(sequence);
@@ -59,12 +59,29 @@ impl ReplayWindow {
         self.seen[idx / 64] & (1_u64 << (idx % 64)) != 0
     }
 
-    fn shift_window(&mut self, shift: u64) {
-        let highest = self.highest.expect("called only when highest is Some");
-        for s in 1..=shift {
-            let seq = highest + s;
-            let idx = (seq % WINDOW) as usize;
-            self.seen[idx / 64] &= !(1_u64 << (idx % 64));
+    fn clear_range(&mut self, highest: u64, shift: u64) {
+        debug_assert!(shift < WINDOW);
+        if shift == 0 {
+            return;
+        }
+
+        let start = ((highest + 1) % WINDOW) as usize;
+        let mut word = start / 64;
+        let mut bit_offset = start % 64;
+        let mut remaining = shift;
+
+        while remaining > 0 {
+            let bits_here = remaining.min(64 - bit_offset as u64) as u32;
+            let mask: u64 = if bits_here == 64 {
+                u64::MAX
+            } else {
+                ((1_u64 << bits_here) - 1) << bit_offset
+            };
+            self.seen[word] &= !mask;
+
+            remaining -= u64::from(bits_here);
+            word = (word + 1) % WORDS;
+            bit_offset = 0;
         }
     }
 }
@@ -96,11 +113,8 @@ mod tests {
     #[test]
     fn window_width_is_2048() {
         let mut window = ReplayWindow::default();
-        // Establish highest at 2047.
         window.check_and_record(2047).unwrap();
-        // Sequence 0 is exactly at the edge of the window (offset = 2047 < 2048).
         window.check_and_record(0).unwrap();
-        // Advance to 2048; now sequence 0 falls outside (offset = 2048 >= 2048).
         window.check_and_record(2048).unwrap();
         assert_eq!(window.check_and_record(0), Err(ReplayError::TooOld));
     }
@@ -110,7 +124,6 @@ mod tests {
         let mut window = ReplayWindow::default();
         window.check_and_record(1000).unwrap();
         window.check_and_record(1500).unwrap();
-        // 1000 is within 2048 of 1500; must be detected as duplicate.
         assert_eq!(window.check_and_record(1000), Err(ReplayError::Duplicate));
     }
 
@@ -118,11 +131,69 @@ mod tests {
     fn full_reset_when_advance_exceeds_window() {
         let mut window = ReplayWindow::default();
         window.check_and_record(0).unwrap();
-        // Jump well beyond the window.
         window.check_and_record(9999).unwrap();
-        // Old sequence 0 is now too old.
         assert_eq!(window.check_and_record(0), Err(ReplayError::TooOld));
-        // New sequence just behind highest must be accepted.
         window.check_and_record(9998).unwrap();
+    }
+
+    #[test]
+    fn shift_smaller_than_one_word() {
+        let mut window = ReplayWindow::default();
+        window.check_and_record(100).unwrap();
+        window.check_and_record(105).unwrap();
+        window.check_and_record(100).unwrap();
+        assert_eq!(window.check_and_record(100), Err(ReplayError::Duplicate));
+        assert_eq!(window.check_and_record(105), Err(ReplayError::Duplicate));
+    }
+
+    #[test]
+    fn shift_exactly_divisible_by_word_size() {
+        let mut window = ReplayWindow::default();
+        window.check_and_record(0).unwrap();
+        window.check_and_record(128).unwrap();
+        window.check_and_record(1).unwrap();
+        assert_eq!(window.check_and_record(1), Err(ReplayError::Duplicate));
+        assert_eq!(window.check_and_record(128), Err(ReplayError::Duplicate));
+    }
+
+    #[test]
+    fn shift_crossing_a_word_boundary_clears_only_the_right_bits() {
+        let mut window = ReplayWindow::default();
+        window.check_and_record(60).unwrap();
+        window.check_and_record(70).unwrap();
+        for seq in 61..70 {
+            window.check_and_record(seq).unwrap();
+        }
+        assert_eq!(window.check_and_record(70), Err(ReplayError::Duplicate));
+    }
+
+    #[test]
+    fn shift_just_under_window_width_clears_almost_everything_in_bounded_time() {
+        let mut window = ReplayWindow::default();
+        window.check_and_record(0).unwrap();
+        window.check_and_record(WINDOW - 1).unwrap();
+        assert_eq!(window.check_and_record(0), Err(ReplayError::TooOld));
+        window.check_and_record(WINDOW - 1).unwrap_err();
+    }
+
+    #[test]
+    fn shift_at_or_beyond_window_width_still_resets_fully() {
+        let mut window = ReplayWindow::default();
+        window.check_and_record(5).unwrap();
+        window.check_and_record(5 + WINDOW).unwrap();
+        assert_eq!(window.check_and_record(5), Err(ReplayError::TooOld));
+        window.check_and_record(5 + WINDOW).unwrap_err();
+    }
+
+    #[test]
+    fn sequence_values_near_u64_max_do_not_overflow() {
+        let mut window = ReplayWindow::default();
+        let near_max = u64::MAX - 5;
+        window.check_and_record(near_max).unwrap();
+        window.check_and_record(u64::MAX).unwrap();
+        assert_eq!(
+            window.check_and_record(near_max),
+            Err(ReplayError::Duplicate)
+        );
     }
 }

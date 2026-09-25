@@ -49,10 +49,11 @@ before using it on a host with important existing network configuration.
 
 ## Authentication modes
 
-RVPN supports three peer authentication modes, in increasing order of
-strength: pre-shared key (PSK), pinned Ed25519 key, and certificate
-authority-issued identity. Certificate auth is the intended primary mode
-going forward; see [configuration](docs/configuration.md) for setup of each.
+RVPN supports two peer authentication modes, in increasing order of
+strength: pinned Ed25519 key and certificate authority-issued identity.
+Certificate auth is the intended primary mode going forward; see
+[configuration](docs/configuration.md) for setup of each. (Pre-shared-key
+"psk" mode was removed in v3.1)
 
 ## Important security notes
 

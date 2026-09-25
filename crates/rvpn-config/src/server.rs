@@ -8,13 +8,12 @@ use crate::network::{
     ConfigValidation, ForwardingConfig, HandshakeConfig, InterfaceConfig, LivenessConfig,
     RekeyConfig,
 };
-use crate::util::{decode_certificate, decode_psk, validate_endpoint, validate_psk};
+use crate::util::{decode_certificate, decode_psk, validate_endpoint};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: SocketAddr,
-    pub pre_shared_key: Option<String>,
     #[serde(default)]
     pub peers: Vec<ServerPeerConfig>,
     #[serde(default)]
@@ -43,17 +42,15 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint(self.bind)?;
         if self.peers.is_empty() && self.certificate_authority.is_none() {
-            let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
-                "server needs `peers`, `certificate_authority`, or the legacy `pre_shared_key`",
-            ))?;
-            validate_psk(psk)?;
-        } else {
-            for peer in &self.peers {
-                peer.validate()?;
-            }
-            if let Some(ca) = &self.certificate_authority {
-                ca.validate()?;
-            }
+            return Err(ConfigError::Invalid(
+                "server needs `peers` (pinned-key) or `certificate_authority`",
+            ));
+        }
+        for peer in &self.peers {
+            peer.validate()?;
+        }
+        if let Some(ca) = &self.certificate_authority {
+            ca.validate()?;
         }
         self.validate_links()?;
         self.interface
@@ -72,21 +69,9 @@ impl ServerConfig {
         if !self.peers.is_empty() {
             return self.peers.iter().map(ServerPeerConfig::identity).collect();
         }
-        if self.certificate_authority.is_some() {
-            return Ok(Vec::new());
-        }
-        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
-            "server needs `peers`, `certificate_authority`, or the legacy `pre_shared_key`",
-        ))?;
-        Ok(vec![PeerIdentity {
-            name: "legacy".into(),
-            allowed_ips: Vec::new(),
-            auth: rvpn_crypto::AuthConfig::PinnedKey {
-                local_seed: [0; 32],
-                peer_public_key: decode_psk(psk)?,
-            },
-        }])
+        Ok(Vec::new())
     }
+
     fn validate_links(&self) -> Result<(), ConfigError> {
         let mut names = std::collections::HashSet::new();
         for peer in &self.peers {
@@ -118,8 +103,7 @@ impl ServerConfig {
 #[serde(deny_unknown_fields)]
 pub struct ServerPeerConfig {
     pub name: String,
-    pub pre_shared_key: Option<String>,
-    pub auth: Option<AuthMode>,
+    pub auth: AuthMode,
     pub allowed_ips: Vec<String>,
 }
 
@@ -130,26 +114,13 @@ impl ServerPeerConfig {
                 "each server peer needs a name and at least one allowed_ips prefix",
             ));
         }
-        self.auth_mode_config()?;
+        self.auth.to_auth_config()?;
         for prefix in &self.allowed_ips {
             prefix.parse::<IpNet>().map_err(|_| {
                 ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
             })?;
         }
         Ok(())
-    }
-
-    fn auth_mode_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
-        if let Some(auth) = &self.auth {
-            return auth.to_auth_config();
-        }
-        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
-            "each server peer needs either `auth` or the legacy `pre_shared_key`",
-        ))?;
-        Ok(rvpn_crypto::AuthConfig::PinnedKey {
-            local_seed: [0; 32],
-            peer_public_key: decode_psk(psk)?,
-        })
     }
 
     fn identity(&self) -> Result<PeerIdentity, ConfigError> {
@@ -163,7 +134,7 @@ impl ServerPeerConfig {
                 .map_err(|_| {
                     ConfigError::Invalid("peer allowed_ips must contain valid CIDR prefixes")
                 })?,
-            auth: self.auth_mode_config()?,
+            auth: self.auth.to_auth_config()?,
         })
     }
 }

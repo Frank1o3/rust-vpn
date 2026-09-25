@@ -9,10 +9,6 @@ pub(crate) fn validate_endpoint(endpoint: SocketAddr) -> Result<(), ConfigError>
     Ok(())
 }
 
-pub(crate) fn validate_psk(value: &str) -> Result<(), ConfigError> {
-    decode_psk(value).map(|_| ())
-}
-
 pub(crate) fn decode_psk(value: &str) -> Result<[u8; 32], ConfigError> {
     if value.len() != 64 {
         return Err(ConfigError::InvalidPreSharedKey);

@@ -14,8 +14,6 @@ pub struct Config {
     pub identity_file: Option<PathBuf>,
 }
 
-/// A peer-to-peer link group: every peer named in `between` may exchange
-/// traffic with every other peer in the same group. Symmetric by construction.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkConfig {
@@ -40,9 +38,6 @@ impl Config {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum AuthMode {
-    Psk {
-        pre_shared_key: String,
-    },
     PinnedKey {
         local_identity_seed: String,
         peer_public_key: String,
@@ -57,13 +52,6 @@ pub enum AuthMode {
 impl AuthMode {
     pub fn to_auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
         Ok(match self {
-            Self::Psk { pre_shared_key } => {
-                let _ = decode_psk(pre_shared_key)?;
-                rvpn_crypto::AuthConfig::PinnedKey {
-                    local_seed: [0; 32],
-                    peer_public_key: [0; 32],
-                }
-            }
             Self::PinnedKey {
                 local_identity_seed,
                 peer_public_key,
@@ -88,7 +76,6 @@ impl AuthMode {
 #[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     pub server: String,
-    pub pre_shared_key: Option<String>,
     pub auth: Option<AuthMode>,
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -122,25 +109,15 @@ impl ClientConfig {
         Ok(())
     }
 
-    /// Kept for API compatibility. The server's physical route is discovered
-    /// from the OS routing table at connect time, so `routing.endpoint_gateway`
-    /// is no longer required (it is still accepted and ignored).
     pub fn validate_resolved(&self, _resolved: SocketAddr) -> Result<(), ConfigError> {
         Ok(())
     }
 
     pub fn auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
-        if let Some(auth) = &self.auth {
-            return auth.to_auth_config();
-        }
-        let psk = self.pre_shared_key.as_deref().ok_or(ConfigError::Invalid(
-            "either `auth` or the legacy `pre_shared_key` must be set",
+        let auth = self.auth.as_ref().ok_or(ConfigError::Invalid(
+            "`auth` is required (mode = \"pinned-key\" or mode = \"certificate\")",
         ))?;
-        let _ = decode_psk(psk)?;
-        Ok(rvpn_crypto::AuthConfig::PinnedKey {
-            local_seed: [0; 32],
-            peer_public_key: [0; 32],
-        })
+        auth.to_auth_config()
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {

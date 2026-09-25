@@ -116,3 +116,49 @@ fn handshake_keys_are_direction_separated() {
         Err(CryptoError::AuthenticationFailed)
     ));
 }
+
+#[test]
+fn independent_handshake_attempts_derive_independent_handshake_keys() {
+    // Regression test for the nonce-reuse invariant documented on
+    // `HandshakeKeys`: two different handshake attempts (fresh ephemeral
+    // DH each time) must not derive colliding r2i/i2r keys, since both
+    // use nonce 0 under crypt_fixed_nonce.
+    fn derive_once() -> HandshakeKeys {
+        let initiator = EphemeralKeyPair::generate().unwrap();
+        let responder = EphemeralKeyPair::generate().unwrap();
+        let shared = initiator.agree(responder.public_key()).unwrap();
+        let salt = handshake_salt(b"initiation", b"response-public");
+        HandshakeKeys::derive(&shared, &salt).unwrap()
+    }
+
+    let a = derive_once();
+    let b = derive_once();
+    assert_ne!(a.r2i_key(), b.r2i_key());
+    assert_ne!(a.i2r_key(), b.i2r_key());
+}
+
+#[test]
+fn seal_response_and_seal_finish_use_independent_keys_so_nonce_zero_does_not_collide() {
+    let initiator = EphemeralKeyPair::generate().unwrap();
+    let responder = EphemeralKeyPair::generate().unwrap();
+    let shared = initiator.agree(responder.public_key()).unwrap();
+    let salt = handshake_salt(b"initiation", b"response-public");
+    let keys = HandshakeKeys::derive(&shared, &salt).unwrap();
+
+    // Same nonce (0) under r2i and i2r for different plaintexts must not
+    // decrypt cross-key: each direction's single use is isolated.
+    let sealed_response = keys.seal_response(b"aad-response", b"response-proof").unwrap();
+    let sealed_finish = keys.seal_finish(b"aad-finish", b"finish-proof").unwrap();
+
+    assert_eq!(
+        keys.open_response(b"aad-response", &sealed_response).unwrap(),
+        b"response-proof"[..]
+    );
+    assert_eq!(
+        keys.open_finish(b"aad-finish", &sealed_finish).unwrap(),
+        b"finish-proof"[..]
+    );
+    // Wrong-direction key must fail even with matching AAD/nonce.
+    assert!(keys.open_finish(b"aad-response", &sealed_response).is_err());
+    assert!(keys.open_response(b"aad-finish", &sealed_finish).is_err());
+}

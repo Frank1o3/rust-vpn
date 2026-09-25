@@ -35,13 +35,16 @@ impl ProtectedSession {
         }
     }
 
-    pub fn inherit_previous(&mut self, previous: &ProtectedSession) {
+    pub fn inherit_previous(&mut self, previous: &ProtectedSession, grace_period: Duration) {
+        if grace_period.is_zero() {
+            return;
+        }
         if previous.session_id == self.session_id && previous.key_phase < self.key_phase {
             self.previous = Some(PreviousPhase {
                 key_phase: previous.key_phase,
                 keys: previous.keys.clone(),
                 replay: previous.receive_replay.clone(),
-                expires_at: Instant::now() + Duration::from_secs(15),
+                expires_at: Instant::now() + grace_period,
             });
         }
     }
@@ -209,5 +212,61 @@ mod tests {
             Err(SessionError::Crypto(CryptoError::AuthenticationFailed))
         ));
         assert_eq!(receiver.open(packet).unwrap(), b"packet"[..]);
+    }
+
+    fn keys_for(previous: &ProtectedSession, new_id: SessionId) -> ProtectedSession {
+        let _ = previous;
+        let initiator = EphemeralKeyPair::generate().unwrap();
+        let responder = EphemeralKeyPair::generate().unwrap();
+        let send = SessionKeys::derive(
+            &initiator.agree(responder.public_key()).unwrap(),
+            &[9; 32],
+            SessionRole::Initiator,
+        )
+        .unwrap();
+        ProtectedSession::new(new_id, 1, send)
+    }
+
+    #[test]
+    fn zero_grace_period_disables_previous_phase_immediately() {
+        let (mut old_sender, old_receiver) = pair();
+        let old_packet = old_sender.seal(PacketKind::Data, b"before rekey").unwrap();
+
+        let id = old_receiver.session_id();
+        let mut new_receiver = keys_for(&old_receiver, id);
+        new_receiver.inherit_previous(&old_receiver, Duration::ZERO);
+
+        assert!(matches!(
+            new_receiver.open(old_packet),
+            Err(SessionError::UnexpectedKeyPhase(0))
+        ));
+    }
+
+    #[test]
+    fn old_phase_accepted_only_within_the_configured_grace_period() {
+        let (mut old_sender, old_receiver) = pair();
+        let old_packet = old_sender.seal(PacketKind::Data, b"in flight").unwrap();
+
+        let id = old_receiver.session_id();
+        let mut new_receiver = keys_for(&old_receiver, id);
+        new_receiver.inherit_previous(&old_receiver, Duration::from_secs(30));
+
+        assert_eq!(new_receiver.open(old_packet).unwrap(), b"in flight"[..]);
+    }
+
+    #[test]
+    fn previous_phase_replay_window_is_independent_of_current_phase() {
+        let (mut old_sender, old_receiver) = pair();
+        let old_packet = old_sender.seal(PacketKind::Data, b"a").unwrap();
+
+        let id = old_receiver.session_id();
+        let mut new_receiver = keys_for(&old_receiver, id);
+        new_receiver.inherit_previous(&old_receiver, Duration::from_secs(30));
+
+        assert_eq!(new_receiver.open(old_packet.clone()).unwrap(), b"a"[..]);
+        assert!(matches!(
+            new_receiver.open(old_packet),
+            Err(SessionError::Replay(ReplayError::Duplicate))
+        ));
     }
 }

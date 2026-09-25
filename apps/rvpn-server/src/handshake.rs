@@ -6,18 +6,29 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rvpn_protocol::{HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
-use std::{collections::HashMap, net::SocketAddr};
+use std::net::SocketAddr;
 
-use crate::state::{ActivePeer, PendingHandshake, PendingSource, same_peer};
+use crate::state::{ActivePeer, PendingHandshakes, PendingSource, same_peer};
 
 const MAX_PENDING_HANDSHAKES: usize = 4096;
 const REKEY_REQUEST_INTERVAL: Duration = Duration::from_secs(5);
+const MIN_PENDING_HANDSHAKES_PER_SOURCE: usize = 8;
 
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+pub fn per_source_pending_limit(
+    identities: &[PeerIdentity],
+    certificate_authority: Option<&CertificateAuthorityConfig>,
+) -> usize {
+    let burst = identities.len() + usize::from(certificate_authority.is_some());
+    burst
+        .saturating_mul(2)
+        .max(MIN_PENDING_HANDSHAKES_PER_SOURCE)
 }
 
 pub async fn challenge_or_admit(
@@ -94,7 +105,7 @@ async fn send_wire(
 async fn respond_initial(
     transport: &UdpTransport,
     obfuscation: Option<&ObfuscationKey>,
-    pending: &mut HashMap<SessionId, PendingHandshake>,
+    pending: &mut PendingHandshakes,
     endpoint: SocketAddr,
     initiation: HandshakeMessage,
     source: PendingSource,
@@ -129,21 +140,42 @@ async fn respond_initial(
     Ok(())
 }
 
+use crate::state::PendingHandshake;
+
+#[allow(clippy::too_many_arguments)]
 pub async fn begin_initial(
     transport: &UdpTransport,
     identities: &[PeerIdentity],
     certificate_authority: Option<&CertificateAuthorityConfig>,
     obfuscation: Option<&ObfuscationKey>,
-    pending: &mut HashMap<SessionId, PendingHandshake>,
+    pending: &mut PendingHandshakes,
     endpoint: SocketAddr,
     initiation: HandshakeMessage,
+    per_source_limit: usize,
 ) -> Result<()> {
     if pending.len() >= MAX_PENDING_HANDSHAKES {
-        tracing::warn!(%endpoint, "too many pending handshakes; ignoring initiation");
+        tracing::warn!(%endpoint, "too many pending handshakes globally; ignoring initiation");
+        return Ok(());
+    }
+
+    if pending.count_for(endpoint) >= per_source_limit {
+        tracing::warn!(
+            %endpoint,
+            limit = per_source_limit,
+            "source exceeded its pending-handshake limit; ignoring initiation"
+        );
         return Ok(());
     }
 
     for identity in identities {
+        if pending.count_for(endpoint) >= per_source_limit {
+            tracing::debug!(
+                %endpoint,
+                limit = per_source_limit,
+                "per-source pending-handshake limit reached mid-trial; stopping early"
+            );
+            break;
+        }
         if let Err(error) = respond_initial(
             transport,
             obfuscation,
@@ -159,7 +191,9 @@ pub async fn begin_initial(
         }
     }
 
-    if let Some(ca) = certificate_authority {
+    if pending.count_for(endpoint) < per_source_limit
+        && let Some(ca) = certificate_authority
+    {
         match ca.to_auth_config() {
             Ok(auth) => {
                 if let Err(error) = respond_initial(
@@ -187,13 +221,23 @@ pub async fn begin_initial(
 pub async fn begin_rekey(
     transport: &UdpTransport,
     obfuscation: Option<&ObfuscationKey>,
-    pending: &mut HashMap<SessionId, PendingHandshake>,
+    pending: &mut PendingHandshakes,
     endpoint: SocketAddr,
     current: &ActivePeer,
     initiation: HandshakeMessage,
+    per_source_limit: usize,
 ) -> Result<()> {
     if pending.contains_key(&current.session.session_id()) {
         tracing::debug!(peer = %current.identity.name, session_id = ?current.session.session_id(), "rekey already in progress for peer; ignoring initiation");
+        return Ok(());
+    }
+    if pending.count_for(endpoint) >= per_source_limit {
+        tracing::warn!(
+            %endpoint,
+            limit = per_source_limit,
+            peer = %current.identity.name,
+            "source exceeded its pending-handshake limit; ignoring rekey initiation"
+        );
         return Ok(());
     }
     let phase = current
@@ -257,10 +301,11 @@ pub async fn maybe_send_rekey(
 }
 
 pub fn finish_pending(
-    pending: &mut HashMap<SessionId, PendingHandshake>,
-    active: &mut HashMap<SessionId, ActivePeer>,
+    pending: &mut PendingHandshakes,
+    active: &mut std::collections::HashMap<SessionId, ActivePeer>,
     endpoint: SocketAddr,
     packet: Packet,
+    grace_period: Duration,
 ) -> Vec<SessionId> {
     let session_id = packet.header.session_id;
 
@@ -350,7 +395,7 @@ pub fn finish_pending(
 
     let mut session = session;
     if let Some(existing) = active.get(&id) {
-        session.inherit_previous(&existing.session);
+        session.inherit_previous(&existing.session, grace_period);
     }
 
     let name = identity.name.clone();
@@ -362,10 +407,10 @@ pub fn finish_pending(
 pub async fn retransmit_pending(
     transport: &UdpTransport,
     obfuscation: Option<&ObfuscationKey>,
-    pending: &mut HashMap<SessionId, PendingHandshake>,
+    pending: &mut PendingHandshakes,
     policy: &HandshakeConfig,
 ) -> Result<()> {
-    pending.retain(|_, state| state.attempts < policy.retry_limit);
+    pending.retain(|state| state.attempts < policy.retry_limit);
     for state in pending.values_mut() {
         send_wire(
             transport,
@@ -377,4 +422,41 @@ pub async fn retransmit_pending(
         state.attempts += 1;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rvpn_config::AuthMode;
+
+    fn peer(name: &str) -> PeerIdentity {
+        PeerIdentity {
+            name: name.into(),
+            allowed_ips: vec!["10.42.0.2/32".parse().unwrap()],
+            auth: AuthConfig::PinnedKey {
+                local_seed: [1; 32],
+                peer_public_key: [2; 32],
+            },
+        }
+    }
+    // avoid unused-import warning if AuthMode isn't otherwise needed here
+    #[allow(dead_code)]
+    fn _unused(_: AuthMode) {}
+
+    #[test]
+    fn per_source_limit_covers_a_full_identity_trial_burst() {
+        let identities = vec![peer("a"), peer("b"), peer("c")];
+        let limit = per_source_pending_limit(&identities, None);
+        assert!(limit >= identities.len());
+        // with a CA too, the burst is one bigger
+        let limit_with_ca_baseline = per_source_pending_limit(&identities, None);
+        assert!(limit_with_ca_baseline >= 3);
+    }
+
+    #[test]
+    fn per_source_limit_has_a_sane_floor_for_small_deployments() {
+        let identities: Vec<PeerIdentity> = vec![peer("only-peer")];
+        let limit = per_source_pending_limit(&identities, None);
+        assert!(limit >= MIN_PENDING_HANDSHAKES_PER_SOURCE);
+    }
 }

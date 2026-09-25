@@ -17,9 +17,9 @@ use tokio::time::{Instant, interval, sleep};
 use crate::firewall::ForwardingGuard;
 use crate::handshake::{
     begin_initial, begin_rekey, challenge_or_admit, finish_pending, maybe_send_rekey,
-    retransmit_pending,
+    per_source_pending_limit, retransmit_pending,
 };
-use crate::state::{ActivePeer, PendingHandshake, close_all};
+use crate::state::{ActivePeer, PendingHandshakes, close_all};
 
 const MAX_CONSECUTIVE_RECV_ERRORS: u32 = 50;
 
@@ -269,7 +269,9 @@ pub async fn run_server_loop(
 ) -> Result<()> {
     let obfuscation = obfuscation.as_ref();
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
-    let mut pending: HashMap<SessionId, PendingHandshake> = HashMap::new();
+    let mut pending: PendingHandshakes = PendingHandshakes::new();
+    let per_source_pending_limit =
+        per_source_pending_limit(&identities, certificate_authority.as_ref());
     let mut router = Router::new(Links::from_groups(
         config.links.iter().map(|link| link.between.as_slice()),
     ));
@@ -286,6 +288,7 @@ pub async fn run_server_loop(
     let (outbound, mut outbound_rx) = OutboundQueue::new(1024);
     let mut sweep = interval(Duration::from_secs(10));
     let idle_timeout = config.liveness.timeout();
+    let rekey_grace_period = config.rekey.grace_period();
     let mut recv_errors = 0u32;
 
     let result: Result<()> = async {
@@ -436,7 +439,7 @@ pub async fn run_server_loop(
                             if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
                                 match challenge_or_admit(&transport, &cookie_key, obfuscation, datagram.peer, &initiation).await {
                                     Ok(true) => {
-                                        if let Err(error) = begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation).await {
+                                        if let Err(error) = begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation, per_source_pending_limit).await {
                                             tracing::warn!(%error, peer = %datagram.peer, "could not start handshake");
                                         }
                                     }
@@ -447,7 +450,7 @@ pub async fn run_server_loop(
                         }
                         PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
                             let finish_session_id = packet.header.session_id;
-                            for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet) {
+                            for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet, rekey_grace_period) {
                                 router.unregister(evicted);
                             }
                             register_new_peers(&mut router, &active);
@@ -502,6 +505,7 @@ pub async fn run_server_loop(
                                         datagram.peer,
                                         current,
                                         initiation,
+                                        per_source_pending_limit,
                                     )
                                     .await
                                 {

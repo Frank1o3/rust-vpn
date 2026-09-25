@@ -53,10 +53,6 @@ impl UdpTransport {
         if let Some(peer) = config.remote_address {
             socket.connect(peer).await?;
         }
-        // Best-effort: enable DF-bit so the kernel emits EMSGSIZE when the
-        // path rejects a datagram rather than silently fragmenting it. This
-        // makes the adaptive MTU logic trigger reliably on IPv4. Failures are
-        // logged at debug level and do not prevent the socket from being used.
         set_path_mtu_discovery(&socket);
         let target_mtu = config.max_datagram_size;
         let minimum_mtu = tuning.minimum_mtu.unwrap_or_else(|| target_mtu.min(576));
@@ -109,21 +105,13 @@ impl UdpTransport {
         self.mtu.record_path_failure();
     }
 
-    /// Records that a caller dropped a datagram locally due to backpressure
-    /// (for example, an [`crate::OutboundQueue::try_enqueue`] failure), so
-    /// it shows up in [`Self::metrics_snapshot`] alongside every other
-    /// transport counter instead of only reaching a debug log.
     pub fn record_dropped_backpressure(&self) {
         self.metrics.record_dropped_backpressure();
     }
 
-    /// If `payload` exceeds the configured maximum, logs it, counts it, and
-    /// steps the adaptive MTU down accordingly, and returns `true` so the
-    /// caller can treat this as "nothing to send" rather than propagate a
-    /// fatal error. A packet that's merely too big for this datagram budget
-    /// is never, on its own, a reason to tear down the whole transport.
     fn drop_if_oversized(&self, payload: &[u8]) -> bool {
-        if payload.len() <= self.config.max_datagram_size {
+        let limit = self.mtu.effective_mtu();
+        if payload.len() <= limit {
             return false;
         }
         self.metrics.record_dropped_oversized();
@@ -132,14 +120,13 @@ impl UdpTransport {
         }
         tracing::warn!(
             attempted = payload.len(),
+            effective_mtu = limit,
             configured_maximum = self.config.max_datagram_size,
-            effective_mtu = self.mtu.effective_mtu(),
-            "dropping outbound datagram that exceeds the configured maximum instead of sending it"
+            "dropping outbound datagram that exceeds the current effective MTU instead of sending it"
         );
         true
     }
 
-    /// Sends opaque bytes to the configured remote peer.
     pub async fn send(
         &self,
         payload: Bytes,
@@ -162,7 +149,6 @@ impl UdpTransport {
         }
     }
 
-    /// Sends opaque bytes to `peer`, without changing the configured default peer.
     pub async fn send_to(
         &self,
         peer: SocketAddr,
@@ -217,11 +203,6 @@ impl UdpTransport {
         error.into()
     }
 
-    /// Receives the next datagram, silently dropping (and logging) any
-    /// datagram larger than this transport's configured maximum instead of
-    /// failing the call — an oversized inbound datagram (garbage, a
-    /// misbehaving peer, or a peer whose own budget doesn't match ours) is
-    /// never on its own a reason to stop receiving.
     pub async fn receive(&self) -> Result<ReceivedDatagram, TransportError> {
         loop {
             match receive_from(&self.socket, &self.recv_pool, &self.metrics).await {
@@ -275,8 +256,6 @@ impl UdpTransport {
     }
 
     fn ensure_supported(&self, options: SendOptions) -> Result<(), TransportError> {
-        // Options are accepted from day one so a caller must state semantics;
-        // unimplemented promises fail explicitly instead of silently degrading.
         if options.delivery != DeliveryMode::UNRELIABLE {
             return Err(TransportError::UnsupportedDeliveryMode);
         }
@@ -287,10 +266,6 @@ impl UdpTransport {
         Arc::clone(&self.socket)
     }
 
-    /// Returns the underlying raw socket file descriptor.
-    ///
-    /// On Android, callers must pass this descriptor to `VpnService.protect(fd)`
-    /// so outbound UDP datagrams are excluded from the VPN tunnel.
     #[cfg(unix)]
     pub fn raw_fd(&self) -> std::os::fd::RawFd {
         use std::os::fd::AsRawFd;
@@ -334,8 +309,6 @@ fn is_message_too_long(error: &std::io::Error) -> bool {
 
 #[cfg(windows)]
 fn is_message_too_long(error: &std::io::Error) -> bool {
-    // WSAEMSGSIZE. The `libc` crate does not expose Winsock error
-    // constants under POSIX names, so this is spelled out explicitly.
     const WSAEMSGSIZE: i32 = 10040;
     error.raw_os_error() == Some(WSAEMSGSIZE)
 }
@@ -345,17 +318,6 @@ fn is_message_too_long(_error: &std::io::Error) -> bool {
     false
 }
 
-/// Enables the "Don't Fragment" bit on the socket so that the OS emits
-/// `EMSGSIZE` when a datagram exceeds the path MTU rather than silently
-/// fragmenting it. This is best-effort: failures are logged but do not abort
-/// the connection setup.
-///
-/// * **Linux** – sets `IP_MTU_DISCOVER = IP_PMTUDISC_DO` (IPv4) and
-///   `IPV6_DONTFRAG = 1` (IPv6) via `socket2`.
-/// * **macOS/BSDs** – sets `IP_DONTFRAG` (IPv4) via `socket2`.
-/// * **Windows / other** – no-op; EMSGSIZE is still raised by Winsock when
-///   the Winsock send buffer limit is hit, so the adaptive MTU still works,
-///   just less reliably on IPv4.
 fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
     #[cfg(target_os = "linux")]
     {
@@ -368,14 +330,13 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
                 return;
             }
         };
-        // IP_PMTUDISC_DO = 2 on Linux. For IPv6 we set IPV6_DONTFRAG = 1.
         let (level, optname, val): (libc::c_int, libc::c_int, libc::c_int) = if local.is_ipv6() {
             (libc::IPPROTO_IPV6, libc::IPV6_DONTFRAG, 1)
         } else {
             (
                 libc::IPPROTO_IP,
                 libc::IP_MTU_DISCOVER,
-                2, /* IP_PMTUDISC_DO */
+                2,
             )
         };
         let ret = unsafe {
@@ -409,7 +370,6 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
         };
 
         if local.is_ipv4() {
-            // IP_DONTFRAG available on macOS/BSDs.
             let val: libc::c_int = 1;
             let ret = unsafe {
                 libc::setsockopt(
@@ -433,7 +393,6 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
         }
     }
 
-    // Android and other unsupported platforms do not use IP_DONTFRAG here.
     #[cfg(any(
         target_os = "android",
         not(any(
@@ -447,10 +406,48 @@ fn set_path_mtu_discovery(socket: &tokio::net::UdpSocket) {
     {
         let _ = socket;
     }
-    // Windows/Winsock: WSAEMSGSIZE is raised based on the send-buffer limits;
-    // no portable socket option to force DF-bit without socket2 WSA extensions.
     #[cfg(not(unix))]
     {
         let _ = socket;
+    }
+}
+
+#[cfg(test)]
+mod effective_mtu_tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    fn localhost() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+    }
+
+    #[tokio::test]
+    async fn outbound_oversize_check_uses_effective_mtu() {
+        let mut config = TransportConfig::new(localhost());
+        config.max_datagram_size = 64;
+        let transport = UdpTransport::open(config).await.unwrap();
+        assert_eq!(transport.effective_mtu(), 64);
+
+        let at_limit = Bytes::from(vec![0u8; 64]);
+        let sent = transport
+            .send_to(localhost(), at_limit, SendOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(sent, 64);
+
+        let over_limit = Bytes::from(vec![0u8; 65]);
+        let sent = transport
+            .send_to(localhost(), over_limit, SendOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(sent, 0, "payload over effective_mtu must be dropped, not sent");
+        assert_eq!(transport.metrics_snapshot().packets_dropped_oversized, 1);
+    }
+
+    #[test]
+    fn effective_mtu_can_never_exceed_configured_maximum() {
+        let mtu = AdaptiveMtu::new(1400, 576);
+        assert!(mtu.effective_mtu() <= 1400);
+        assert_eq!(mtu.maximum_mtu(), 1400);
     }
 }

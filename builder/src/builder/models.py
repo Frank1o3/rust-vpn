@@ -73,6 +73,7 @@ class SecurityPolicy:
     retry_jitter_ms: int = 150
     rekey_packet_limit: int = 1 << 20
     rekey_time_limit_secs: int = 120
+    rekey_grace_period_secs: int = 15
     liveness_timeout_secs: int = 90
 
 
@@ -129,7 +130,6 @@ class PeerSetup:
     tunnel_v4: str
     tunnel_v6: str
     client: ClientOptions
-    server_psk: str = ""
     server_seed_hex: str = ""
     server_pub_hex: str = ""
     client_seed_hex: str = ""

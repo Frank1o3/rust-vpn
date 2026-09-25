@@ -6,7 +6,7 @@ pub use state::{GuiSnapshot, GuiState, GuiStateHandle, format_bytes, format_dura
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SessionId([u8; Self::LENGTH]);
 
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(30, 1);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(31, 1);
 
 impl SessionId {
     pub const LENGTH: usize = 16;

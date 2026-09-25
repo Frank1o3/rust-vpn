@@ -84,6 +84,9 @@ def ask_security() -> SecurityPolicy:
     rekey_time_limit_secs = prompt_int(
         "Rekey time limit (seconds, 0 disables)", 120, minimum=0
     )
+    rekey_grace_period_secs = prompt_int(
+        "Rekey previous-key grace period (seconds, 0 disables)", 15, minimum=0
+    )
 
     while True:
         liveness_timeout_secs = prompt_int(
@@ -99,6 +102,7 @@ def ask_security() -> SecurityPolicy:
         retry_jitter_ms=retry_jitter_ms,
         rekey_packet_limit=rekey_packet_limit,
         rekey_time_limit_secs=rekey_time_limit_secs,
+        rekey_grace_period_secs=rekey_grace_period_secs,
         liveness_timeout_secs=liveness_timeout_secs,
     )
 
@@ -154,7 +158,7 @@ def ask_server() -> SetupConfig:
         console.print("  [dim]-> generated a new 32-byte obfuscation key for all generated clients[/dim]")
 
     auth_mode = prompt_choice(
-        "Peer authentication mode", ["pinned-key", "certificate", "psk"], "pinned-key"
+        "Peer authentication mode", ["pinned-key", "certificate"], "pinned-key"
     )
 
     security = ask_security()
@@ -321,9 +325,7 @@ def gather_peers(setup: SetupConfig) -> list[PeerSetup]:
             client=ask_client_options(setup, name, platform),
         )
 
-        if setup.auth_mode == "psk":
-            peer.server_psk = generate_hex_secret()
-        elif setup.auth_mode == "pinned-key":
+        if setup.auth_mode == "pinned-key":
             server_side = generate_keypair()
             client_side = generate_keypair()
             peer.server_seed_hex = server_side.seed

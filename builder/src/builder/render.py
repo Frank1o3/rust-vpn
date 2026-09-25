@@ -48,6 +48,7 @@ def render_security(lines: list[str], setup: SetupConfig) -> None:
             "[rekey]",
             f"    packet_limit={security.rekey_packet_limit}",
             f"    time_limit_secs={security.rekey_time_limit_secs}",
+            f"    grace_period_secs={security.rekey_grace_period_secs}",
             "",
             "[liveness]",
             f"    timeout_secs={security.liveness_timeout_secs}",
@@ -149,9 +150,7 @@ def render_server_toml(
                     f"        mode={toml_str(setup.auth_mode)}",
                 ]
             )
-            if setup.auth_mode == "psk":
-                lines.append(f"        pre_shared_key={toml_str(peer.server_psk)}")
-            elif setup.auth_mode == "pinned-key":
+            if setup.auth_mode == "pinned-key":
                 lines.append(
                     f"        local_identity_seed={toml_str(peer.server_seed_hex)}"
                 )
@@ -214,10 +213,7 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
     lines.append("")
 
     lines.append("[auth]")
-    if setup.auth_mode == "psk":
-        lines.append(f"    mode={toml_str('psk')}")
-        lines.append(f"    pre_shared_key={toml_str(peer.server_psk)}")
-    elif setup.auth_mode == "pinned-key":
+    if setup.auth_mode == "pinned-key":
         lines.append(f"    mode={toml_str('pinned-key')}")
         lines.append(f"    local_identity_seed={toml_str(peer.client_seed_hex)}")
         lines.append(f"    peer_public_key={toml_str(peer.server_pub_hex)}")

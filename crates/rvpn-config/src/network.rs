@@ -23,7 +23,6 @@ impl InterfaceConfig {
         self.mode.unwrap_or_default()
     }
 
-    /// Parsed `dns_servers`, empty when unset.
     pub fn dns_server_list(&self) -> Result<Vec<IpAddr>, ConfigError> {
         let Some(raw) = self.dns_servers.as_deref() else {
             return Ok(Vec::new());
@@ -91,6 +90,8 @@ pub struct RekeyConfig {
     pub packet_limit: u64,
     #[serde(default = "default_rekey_time_limit_secs")]
     pub time_limit_secs: u64,
+    #[serde(default = "default_rekey_grace_period_secs")]
+    pub grace_period_secs: u64,
 }
 
 const fn default_rekey_packet_limit() -> u64 {
@@ -101,11 +102,16 @@ const fn default_rekey_time_limit_secs() -> u64 {
     120
 }
 
+const fn default_rekey_grace_period_secs() -> u64 {
+    15
+}
+
 impl Default for RekeyConfig {
     fn default() -> Self {
         Self {
             packet_limit: default_rekey_packet_limit(),
             time_limit_secs: default_rekey_time_limit_secs(),
+            grace_period_secs: default_rekey_grace_period_secs(),
         }
     }
 }
@@ -122,15 +128,15 @@ impl RekeyConfig {
             Some(Duration::from_secs(self.time_limit_secs))
         }
     }
+
+    pub fn grace_period(&self) -> Duration {
+        Duration::from_secs(self.grace_period_secs)
+    }
 }
 
-/// Dead-peer detection. Keepalives are sent roughly every 25 seconds, so the
-/// timeout must leave room for several missed ones.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LivenessConfig {
-    /// Seconds without any authenticated packet before the peer is considered
-    /// gone: the server drops the session, the client reconnects. `0` disables.
     #[serde(default = "default_liveness_timeout_secs")]
     pub timeout_secs: u64,
 }
@@ -168,13 +174,10 @@ pub struct ClientRoutingConfig {
     #[serde(default)]
     pub default_route: bool,
     pub gateway: Option<String>,
-    /// Accepted for backward compatibility and ignored: the route to the
-    /// server is taken from the OS routing table when connecting.
     pub endpoint_gateway: Option<String>,
     #[serde(default)]
     pub default_route_v6: bool,
     pub gateway_v6: Option<String>,
-    /// Accepted for backward compatibility and ignored.
     pub endpoint_gateway_v6: Option<String>,
     #[serde(default)]
     pub routes: Vec<String>,

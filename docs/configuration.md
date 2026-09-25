@@ -77,6 +77,7 @@ retry_limit = 5
 [rekey]
 packet_limit = 1048576   # rotate after this many sent packets; 0 disables the packet trigger
 time_limit_secs = 120    # rotate after this session age; 0 disables the time trigger
+grace_period_secs = 15   # seconds the previous key phase stays valid after a rekey; 0 disables it
 
 [liveness]
 timeout_secs = 90        # 0 disables; otherwise >= 60
