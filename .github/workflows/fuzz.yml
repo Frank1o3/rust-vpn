@@ -32,6 +32,7 @@ jobs:
           - handshake_accept
           - obfuscation_unwrap
           - certificate_decode_verify
+          - session_aead_open
 
     steps:
       - uses: actions/checkout@v7.0.1
