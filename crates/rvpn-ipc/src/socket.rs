@@ -123,6 +123,9 @@ impl Connection {
     async fn read_line(&mut self) -> Result<Option<String>, IpcError> {
         loop {
             if let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
+                if pos > MAX_CONTROL_MESSAGE_LEN {
+                    return Err(IpcError::Malformed);
+                }
                 let rest = self.buf.split_off(pos + 1);
                 let mut line = std::mem::replace(&mut self.buf, rest);
                 line.pop(); // drop the trailing '\n'
@@ -144,7 +147,7 @@ impl Connection {
             // If no newline has arrived, the entire buffer is one incomplete
             // frame. Reject it before another read can grow memory further.
             if self.buf.len() > MAX_CONTROL_MESSAGE_LEN
-                && !self.buf.contains(&b'\\n')
+                && !self.buf.contains(&b'\n')
             {
                 return Err(IpcError::Malformed);
             }
