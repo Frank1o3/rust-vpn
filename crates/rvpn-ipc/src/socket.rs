@@ -42,6 +42,12 @@ pub fn socket_path() -> PathBuf {
 
 const WINDOWS_PIPE_NAME: &str = "rvpn-control";
 
+/// Maximum size of one newline-delimited control request or response.
+/// Control messages contain only small JSON-like protocol records; accepting
+/// unbounded lines lets a local client exhaust daemon memory without sending a
+/// complete request.
+const MAX_CONTROL_MESSAGE_LEN: usize = 64 * 1024;
+
 async fn create_listener() -> Result<Listener, IpcError> {
     if cfg!(windows) {
         let name = WINDOWS_PIPE_NAME.to_ns_name::<GenericNamespaced>()?;
@@ -135,6 +141,13 @@ impl Connection {
                 };
             }
             self.buf.extend_from_slice(&chunk[..read]);
+            // If no newline has arrived, the entire buffer is one incomplete
+            // frame. Reject it before another read can grow memory further.
+            if self.buf.len() > MAX_CONTROL_MESSAGE_LEN
+                && !self.buf.contains(&b'\\n')
+            {
+                return Err(IpcError::Malformed);
+            }
         }
     }
 
