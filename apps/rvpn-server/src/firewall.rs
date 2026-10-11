@@ -111,7 +111,10 @@ impl ForwardingGuard {
         external: &str,
         mtu: u16,
     ) -> Result<()> {
-        let _ = run("nft", ["delete", "table", "inet", "rvpn"]).await;
+        // Never delete a pre-existing table: it may contain rules owned by
+        // an administrator or another RVPN instance. If a stale table remains
+        // after an unclean shutdown, fail closed and require explicit operator
+        // cleanup rather than silently flushing unrelated firewall state.
         run("nft", ["add", "table", "inet", "rvpn"]).await?;
         self.cleanup.push(CleanupCommand::new(
             "nft",
