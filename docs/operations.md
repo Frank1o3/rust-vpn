@@ -59,6 +59,12 @@ raise capabilities itself. Two supported ways to get them:
 The server runs under a dedicated `rvpn` system user and gets the same two
 capabilities the same way, via `rvpn-server.service`.
 
+When nftables forwarding is enabled, RVPN uses the `inet rvpn` table. Startup
+will now fail rather than delete an existing table with that name, because it
+may contain rules managed outside this process. After an unclean shutdown,
+inspect `sudo nft list table inet rvpn` and remove the stale table only after
+confirming its rules are safe to discard.
+
 ## Installing as systemd services (recommended)
 
 Use `./build.sh` rather than hand-editing the unit files — it builds the
