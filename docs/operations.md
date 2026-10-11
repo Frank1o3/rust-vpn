@@ -30,6 +30,12 @@ The daemon only accepts a `config_path` that resolves inside the RVPN config
 directory (`~/.config/rvpn/` on Linux, or `$XDG_CONFIG_HOME/rvpn/` if set) —
 it will refuse an IPC `Connect` for a path outside that directory.
 
+The IPC protocol uses newline-delimited control messages capped at 64 KiB. The
+daemon rejects oversized or incomplete frames rather than buffering an
+unbounded message. This limits memory exhaustion from malformed local control
+clients; it does not replace operating-system access controls on the socket or
+Windows named pipe.
+
 ## Privileges and build
 
 Linux TUN/TAP creation needs `CAP_NET_ADMIN`, plus `CAP_NET_RAW` for raw
