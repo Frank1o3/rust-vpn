@@ -9,6 +9,11 @@ placeholder credentials below.
 bind = "0.0.0.0:9000"
 obfuscation_key = "<optional 64-hex key>"
 
+[limits]
+# MiB per second per peer; zero leaves that direction unlimited.
+tx_mib_per_sec = 0
+rx_mib_per_sec = 0
+
 [interface]
 name = "rvpn-server0"
 mode = "tun"
@@ -38,6 +43,15 @@ peer_public_key = "<client public key>"
 
 `allowed_ips` is both the assigned address set and the anti-spoofing allowlist.
 Give every peer its own host prefixes.
+
+`[limits]` rates use 1 MiB = 1,048,576 bytes and apply independently to each
+peer. `rx_mib_per_sec` polices authenticated peer-to-server payload after
+source validation. `tx_mib_per_sec` shapes server-to-peer encrypted datagrams
+in the fair outbound queue, including internet-forwarded and peer-to-peer
+traffic. Handshakes, rekeys, and keepalives are outside both limits. The
+outbound bucket allows up to one second of burst (or one maximum UDP payload
+for rates below a packet's size); queued data remains subject to the bounded
+per-peer queue.
 
 When `[dns].upstreams` is set, the server runs a DNS forwarder on UDP and TCP
 port 53 at each configured tunnel interface address. It accepts requests from

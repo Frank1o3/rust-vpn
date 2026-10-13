@@ -14,7 +14,8 @@ pub use network::{
     InterfaceConfig, LivenessConfig, RekeyConfig,
 };
 pub use server::{
-    CertificateAuthorityConfig, DnsConfig, PeerIdentity, ServerConfig, ServerPeerConfig,
+    CertificateAuthorityConfig, DnsConfig, PeerIdentity, PeerLimitsConfig, ServerConfig,
+    ServerPeerConfig,
 };
 pub use util::{
     default_client_config_path, default_config_dir, default_server_config_path,

@@ -7,11 +7,13 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 use tokio::sync::Notify;
 
 const DRR_QUANTUM: usize = 1500;
 const MAX_PEER_QUEUE: usize = 256;
+const MAX_TRACKED_PEERS: usize = 8192;
 
 #[derive(Debug)]
 pub struct QueuedDatagram {
@@ -23,6 +25,7 @@ pub struct QueuedDatagram {
 pub struct OutboundQueue {
     capacity: usize,
     per_peer_capacity: usize,
+    rate_bytes_per_sec: Option<u64>,
     queued: Arc<AtomicUsize>,
     state: Arc<Mutex<QueueState>>,
     ready: Arc<Notify>,
@@ -37,20 +40,97 @@ pub struct OutboundQueueReceiver {
 
 #[derive(Debug, Default)]
 struct QueueState {
-    peers: HashMap<SocketAddr, PeerQueue>,
-    rotation: VecDeque<SocketAddr>,
+    peers: HashMap<QueueKey, PeerQueue>,
+    rotation: VecDeque<QueueKey>,
     queued: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum QueueKey {
+    Endpoint(SocketAddr),
+    Stable([u8; 16]),
+}
+
+#[derive(Debug)]
 struct PeerQueue {
     packets: VecDeque<QueuedDatagram>,
     deficit: usize,
     in_round: bool,
+    rate_bucket: Option<RateBucket>,
+    last_activity: Instant,
+}
+
+impl PeerQueue {
+    fn new(rate_bytes_per_sec: Option<u64>) -> Self {
+        Self {
+            packets: VecDeque::new(),
+            deficit: 0,
+            in_round: false,
+            rate_bucket: rate_bytes_per_sec.map(RateBucket::new),
+            last_activity: Instant::now(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RateBucket {
+    rate_bytes_per_sec: u64,
+    capacity: u64,
+    tokens: u64,
+    updated: Instant,
+}
+
+impl RateBucket {
+    fn new(rate_bytes_per_sec: u64) -> Self {
+        // Keep at least one maximum UDP payload's worth of burst capacity so
+        // a configured rate below the packet size can still make progress.
+        let capacity = rate_bytes_per_sec.max(65_535);
+        Self {
+            rate_bytes_per_sec,
+            capacity,
+            tokens: capacity,
+            updated: Instant::now(),
+        }
+    }
+
+    fn consume_or_delay(&mut self, bytes: usize) -> Result<(), Duration> {
+        let now = Instant::now();
+        let replenished = now
+            .duration_since(self.updated)
+            .as_nanos()
+            .saturating_mul(u128::from(self.rate_bytes_per_sec))
+            / 1_000_000_000;
+        self.tokens = self.capacity.min(
+            self.tokens
+                .saturating_add(u64::try_from(replenished).unwrap_or(u64::MAX)),
+        );
+        self.updated = now;
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        if self.tokens >= bytes {
+            self.tokens -= bytes;
+            return Ok(());
+        }
+        let missing = u128::from(bytes - self.tokens);
+        let nanos = missing
+            .saturating_mul(1_000_000_000)
+            .div_ceil(u128::from(self.rate_bytes_per_sec));
+        Err(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+    }
 }
 
 impl OutboundQueue {
     pub fn new(capacity: usize) -> (Arc<Self>, OutboundQueueReceiver) {
+        Self::new_with_rate(capacity, 0)
+    }
+
+    /// Creates a fair queue with an optional per-peer transmit rate.
+    /// A zero rate leaves transmission unlimited.
+    pub fn new_with_rate(
+        capacity: usize,
+        rate_bytes_per_sec: u64,
+    ) -> (Arc<Self>, OutboundQueueReceiver) {
         let capacity = capacity.max(1);
         let queued = Arc::new(AtomicUsize::new(0));
         let state = Arc::new(Mutex::new(QueueState::default()));
@@ -58,6 +138,7 @@ impl OutboundQueue {
         let queue = Arc::new(Self {
             capacity,
             per_peer_capacity: capacity.min(MAX_PEER_QUEUE),
+            rate_bytes_per_sec: (rate_bytes_per_sec != 0).then_some(rate_bytes_per_sec),
             queued: Arc::clone(&queued),
             state: Arc::clone(&state),
             ready: Arc::clone(&ready),
@@ -81,23 +162,57 @@ impl OutboundQueue {
     }
 
     pub fn try_enqueue(&self, peer: SocketAddr, payload: Bytes) -> Result<(), TransportError> {
+        self.try_enqueue_keyed(QueueKey::Endpoint(peer), peer, payload)
+    }
+
+    /// Enqueues data under a stable authenticated peer key. The endpoint can
+    /// then roam without resetting its fair-queue slot or rate bucket.
+    pub fn try_enqueue_for_peer(
+        &self,
+        peer_key: [u8; 16],
+        endpoint: SocketAddr,
+        payload: Bytes,
+    ) -> Result<(), TransportError> {
+        self.try_enqueue_keyed(QueueKey::Stable(peer_key), endpoint, payload)
+    }
+
+    fn try_enqueue_keyed(
+        &self,
+        key: QueueKey,
+        endpoint: SocketAddr,
+        payload: Bytes,
+    ) -> Result<(), TransportError> {
         let mut state = self.state.lock().expect("outbound queue mutex poisoned");
+        let now = Instant::now();
+        state.peers.retain(|_, peer_queue| {
+            !peer_queue.packets.is_empty()
+                || now.duration_since(peer_queue.last_activity) < Duration::from_secs(1)
+        });
         if state.queued >= self.capacity {
             return Err(TransportError::Backpressure);
         }
-        let peer_queue = state.peers.entry(peer).or_default();
+        if !state.peers.contains_key(&key) && state.peers.len() >= MAX_TRACKED_PEERS {
+            return Err(TransportError::Backpressure);
+        }
+        let peer_queue = state
+            .peers
+            .entry(key)
+            .or_insert_with(|| PeerQueue::new(self.rate_bytes_per_sec));
         if peer_queue.packets.len() >= self.per_peer_capacity {
             return Err(TransportError::Backpressure);
         }
         if peer_queue.packets.is_empty() {
-            state.rotation.push_back(peer);
+            state.rotation.push_back(key);
         }
-        state
+        let peer_queue = state
             .peers
-            .get_mut(&peer)
-            .expect("peer queue was just created")
-            .packets
-            .push_back(QueuedDatagram { peer, payload });
+            .get_mut(&key)
+            .expect("peer queue was just created");
+        peer_queue.packets.push_back(QueuedDatagram {
+            peer: endpoint,
+            payload,
+        });
+        peer_queue.last_activity = now;
         state.queued += 1;
         self.queued.fetch_add(1, Ordering::Relaxed);
         drop(state);
@@ -119,10 +234,16 @@ impl OutboundQueueReceiver {
             // check and await is retained as a notification permit.
             let notified = self.ready.notified();
             let closed;
+            let mut wait_for: Option<Duration> = None;
+            let mut yielded_to_deficit = false;
             {
                 let mut state = self.state.lock().expect("outbound queue mutex poisoned");
-                while let Some(peer) = state.rotation.pop_front() {
-                    let Some(peer_queue) = state.peers.get_mut(&peer) else {
+                let peers_to_visit = state.rotation.len();
+                for _ in 0..peers_to_visit {
+                    let Some(key) = state.rotation.pop_front() else {
+                        break;
+                    };
+                    let Some(peer_queue) = state.peers.get_mut(&key) else {
                         continue;
                     };
                     if !peer_queue.in_round {
@@ -136,22 +257,38 @@ impl OutboundQueueReceiver {
                         .unwrap_or(0);
                     if packet_size > peer_queue.deficit {
                         peer_queue.in_round = false;
-                        state.rotation.push_back(peer);
+                        state.rotation.push_back(key);
+                        yielded_to_deficit = true;
                         continue;
+                    }
+                    if let Some(bucket) = &mut peer_queue.rate_bucket {
+                        if let Err(delay) = bucket.consume_or_delay(packet_size) {
+                            peer_queue.in_round = false;
+                            wait_for = Some(wait_for.map_or(delay, |old| old.min(delay)));
+                            state.rotation.push_back(key);
+                            continue;
+                        }
                     }
                     peer_queue.deficit -= packet_size;
                     let packet = peer_queue.packets.pop_front();
+                    peer_queue.last_activity = Instant::now();
+                    let mut remove_peer = false;
                     if peer_queue.packets.is_empty() {
-                        state.peers.remove(&peer);
+                        peer_queue.in_round = false;
+                        peer_queue.deficit = 0;
+                        remove_peer = peer_queue.rate_bucket.is_none();
                     } else if peer_queue
                         .packets
                         .front()
                         .is_some_and(|next| next.payload.len() <= peer_queue.deficit)
                     {
-                        state.rotation.push_front(peer);
+                        state.rotation.push_front(key);
                     } else {
                         peer_queue.in_round = false;
-                        state.rotation.push_back(peer);
+                        state.rotation.push_back(key);
+                    }
+                    if remove_peer {
+                        state.peers.remove(&key);
                     }
                     if let Some(packet) = packet {
                         state.queued -= 1;
@@ -164,7 +301,16 @@ impl OutboundQueueReceiver {
             if closed {
                 return None;
             }
-            notified.await;
+            if let Some(delay) = wait_for {
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {},
+                    _ = notified => {},
+                }
+            } else if yielded_to_deficit {
+                tokio::task::yield_now().await;
+            } else {
+                notified.await;
+            }
         }
     }
 }

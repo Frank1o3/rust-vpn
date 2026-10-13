@@ -10,6 +10,7 @@ use rvpn_routing::{
 };
 use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::time::{Instant, interval, sleep};
@@ -28,6 +29,20 @@ fn wrap(encoded: bytes::Bytes, obfuscation: Option<&ObfuscationKey>) -> Result<b
         Some(key) => key.wrap(&encoded)?,
         None => encoded,
     })
+}
+
+fn peer_queue_key(peer: &ActivePeer) -> [u8; 16] {
+    let mut first = std::collections::hash_map::DefaultHasher::new();
+    peer.identity.name.hash(&mut first);
+    peer.identity.allowed_ips.hash(&mut first);
+    let mut second = std::collections::hash_map::DefaultHasher::new();
+    1_u8.hash(&mut second);
+    peer.identity.name.hash(&mut second);
+    peer.identity.allowed_ips.hash(&mut second);
+    let mut key = [0_u8; 16];
+    key[..8].copy_from_slice(&first.finish().to_be_bytes());
+    key[8..].copy_from_slice(&second.finish().to_be_bytes());
+    key
 }
 
 async fn send_wire(
@@ -68,7 +83,7 @@ fn seal_and_queue(
         }
     };
     let wire_bytes = wire.len();
-    if let Err(error) = outbound.try_enqueue(peer.endpoint, wire) {
+    if let Err(error) = outbound.try_enqueue_for_peer(peer_queue_key(peer), peer.endpoint, wire) {
         transport.record_dropped_backpressure();
         if matches!(kind, PacketKind::Data | PacketKind::DataTap) {
             peer.stats.record_drop();
@@ -231,6 +246,14 @@ async fn route_inbound(
         }
     };
 
+    if let Some(peer) = active.get_mut(&session_id)
+        && !peer.rx_limiter.allow(payload.len())
+    {
+        peer.stats.record_drop();
+        tracing::debug!(peer = %peer.identity.name, bytes = payload.len(), "inbound peer rate limit exceeded");
+        return;
+    }
+
     if let Some(peer) = active.get_mut(&session_id) {
         peer.stats.record_rx(payload.len(), wire_bytes);
     }
@@ -293,7 +316,9 @@ pub async fn run_server_loop(
         config.handshake.retry_jitter_ms,
     )));
     let keepalive = transport.keepalive();
-    let (outbound, mut outbound_rx) = OutboundQueue::new(1024);
+    let tx_rate_bytes_per_sec = config.limits.tx_mib_per_sec.saturating_mul(1024 * 1024);
+    let rx_rate_bytes_per_sec = config.limits.rx_mib_per_sec.saturating_mul(1024 * 1024);
+    let (outbound, mut outbound_rx) = OutboundQueue::new_with_rate(1024, tx_rate_bytes_per_sec);
     let mut sweep = interval(Duration::from_secs(10));
     let mut stats_log = interval(Duration::from_secs(60));
     let idle_timeout = config.liveness.timeout();
@@ -477,7 +502,7 @@ pub async fn run_server_loop(
                         }
                         PacketKind::Handshake | PacketKind::Rekey if packet.header.sequence == 1 => {
                             let finish_session_id = packet.header.session_id;
-                            for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet, rekey_grace_period) {
+                            for evicted in finish_pending(&mut pending, &mut active, datagram.peer, packet, rekey_grace_period, rx_rate_bytes_per_sec) {
                                 router.unregister(evicted);
                             }
                             register_new_peers(&mut router, &active);
@@ -552,7 +577,17 @@ pub async fn run_server_loop(
                                     tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
                                     peer.endpoint = datagram.peer;
                                 }
-                                let _ = seal_and_queue(peer, PacketKind::Keepalive, b"", obfuscation, &outbound, &transport);
+                                match peer.session.seal(PacketKind::Keepalive, b"") {
+                                    Ok(packet) => match wrap(packet.encode(), obfuscation) {
+                                        Ok(wire) => {
+                                            if let Err(error) = send_wire(&transport, peer.endpoint, wire).await {
+                                                tracing::debug!(peer = %peer.identity.name, %error, "keepalive acknowledgment send failed");
+                                            }
+                                        }
+                                        Err(error) => tracing::debug!(peer = %peer.identity.name, %error, "keepalive acknowledgment wrap failed"),
+                                    },
+                                    Err(error) => tracing::debug!(peer = %peer.identity.name, %error, "keepalive acknowledgment seal failed"),
+                                }
                             }
                         }
                         PacketKind::Data | PacketKind::DataTap | PacketKind::Close => {

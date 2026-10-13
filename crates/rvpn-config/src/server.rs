@@ -31,7 +31,21 @@ pub struct ServerConfig {
     pub liveness: LivenessConfig,
     #[serde(default)]
     pub dns: DnsConfig,
+    #[serde(default)]
+    pub limits: PeerLimitsConfig,
     pub obfuscation_key: Option<String>,
+}
+
+/// Optional per-peer data-plane limits, in MiB/s. Zero disables a direction.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerLimitsConfig {
+    /// Peer-to-server authenticated payload rate.
+    #[serde(default)]
+    pub rx_mib_per_sec: u64,
+    /// Server-to-peer encrypted datagram rate.
+    #[serde(default)]
+    pub tx_mib_per_sec: u64,
 }
 
 /// Optional DNS forwarding service for VPN peers.

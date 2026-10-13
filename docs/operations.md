@@ -55,7 +55,8 @@ capabilities the same way, via `rvpn-server.service`.
 
 The server logs authenticated per-peer traffic totals once a minute. The
 totals include accepted inner packet bytes, encrypted UDP payload bytes,
-packets dropped by routing or outbound queue pressure, and completed rekeys.
+packets dropped by routing, rate enforcement, or outbound queue pressure, and
+completed rekeys.
 Outbound totals count packets admitted to the bounded send queue.
 Handshake and keepalive packets are excluded. These counters reset when the
 server process restarts and are currently available in the service journal;

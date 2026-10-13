@@ -3,7 +3,11 @@ use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
-use std::{collections::HashMap, net::SocketAddr, time::Instant};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 pub struct ActivePeer {
     pub identity: PeerIdentity,
@@ -12,6 +16,51 @@ pub struct ActivePeer {
     pub last_rx: Instant,
     pub last_rekey_request: Option<Instant>,
     pub stats: PeerStats,
+    pub rx_limiter: PeerRateLimiter,
+}
+
+/// Token bucket used to police authenticated inbound payloads per peer.
+#[derive(Clone, Copy, Debug)]
+pub struct PeerRateLimiter {
+    rate_bytes_per_sec: u64,
+    burst_bytes: u64,
+    tokens: u64,
+    updated: Instant,
+}
+
+impl PeerRateLimiter {
+    pub fn new(rate_bytes_per_sec: u64) -> Self {
+        let burst_bytes = rate_bytes_per_sec.max(65_535);
+        Self {
+            rate_bytes_per_sec,
+            burst_bytes,
+            tokens: burst_bytes,
+            updated: Instant::now(),
+        }
+    }
+
+    pub fn allow(&mut self, bytes: usize) -> bool {
+        if self.rate_bytes_per_sec == 0 {
+            return true;
+        }
+        let now = Instant::now();
+        let replenished = now
+            .duration_since(self.updated)
+            .as_nanos()
+            .saturating_mul(u128::from(self.rate_bytes_per_sec))
+            / 1_000_000_000;
+        self.tokens = self.burst_bytes.min(
+            self.tokens
+                .saturating_add(u64::try_from(replenished).unwrap_or(u64::MAX)),
+        );
+        self.updated = now;
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        if self.tokens < bytes {
+            return false;
+        }
+        self.tokens -= bytes;
+        true
+    }
 }
 
 /// Authenticated data-plane counters for one peer. Handshake and keepalive
@@ -51,7 +100,12 @@ impl PeerStats {
 }
 
 impl ActivePeer {
-    pub fn new(identity: PeerIdentity, session: ProtectedSession, endpoint: SocketAddr) -> Self {
+    pub fn new(
+        identity: PeerIdentity,
+        session: ProtectedSession,
+        endpoint: SocketAddr,
+        rx_rate_bytes_per_sec: u64,
+    ) -> Self {
         Self {
             identity,
             session,
@@ -59,6 +113,7 @@ impl ActivePeer {
             last_rx: Instant::now(),
             last_rekey_request: None,
             stats: PeerStats::default(),
+            rx_limiter: PeerRateLimiter::new(rx_rate_bytes_per_sec),
         }
     }
 }

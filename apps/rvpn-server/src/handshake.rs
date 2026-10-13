@@ -394,6 +394,7 @@ pub fn finish_pending(
     endpoint: SocketAddr,
     packet: Packet,
     grace_period: Duration,
+    rx_rate_bytes_per_sec: u64,
 ) -> Vec<SessionId> {
     let session_id = packet.header.session_id;
 
@@ -482,18 +483,22 @@ pub fn finish_pending(
     });
 
     let mut session = session;
-    let stats = if let Some(existing) = active.get(&id) {
+    let (stats, rx_limiter) = if let Some(existing) = active.get(&id) {
         session.inherit_previous(&existing.session, grace_period);
         let mut stats = existing.stats;
         stats.record_rekey();
-        stats
+        (stats, existing.rx_limiter)
     } else {
-        Default::default()
+        (
+            Default::default(),
+            crate::state::PeerRateLimiter::new(rx_rate_bytes_per_sec),
+        )
     };
 
     let name = identity.name.clone();
-    let mut peer = ActivePeer::new(identity, session, endpoint);
+    let mut peer = ActivePeer::new(identity, session, endpoint, rx_rate_bytes_per_sec);
     peer.stats = stats;
+    peer.rx_limiter = rx_limiter;
     active.insert(id, peer);
     tracing::info!(%name, session_id = ?id, %endpoint, "authenticated RVPN peer established");
     evicted

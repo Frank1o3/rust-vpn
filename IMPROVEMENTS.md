@@ -117,7 +117,8 @@ Keep key material and private peer configuration out of status output.
 - Outbound datagrams use bounded per-endpoint queues with deficit
   round-robin scheduling. The queue has a global capacity and caps each
   endpoint at 256 pending datagrams.
-- Configurable rate limits, live reload, persistent history, and the analytics
-  portal remain future work. The portal should follow an authenticated local
-  status interface so it does not need to expose peer data on the public VPN
-  endpoint.
+- Optional per-peer `tx_mib_per_sec` shaping and `rx_mib_per_sec` policing are
+  configurable under `[limits]`; both default to unlimited.
+- Live reload, persistent history, and the analytics portal remain future
+  work. The portal should follow an authenticated local status interface so
+  it does not expose peer data on the public VPN endpoint.
