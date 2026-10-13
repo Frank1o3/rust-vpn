@@ -75,6 +75,21 @@ fn accepts_hostname_shaped_server_syntax() {
     );
 }
 
+#[test]
+fn kill_switch_default_routes_require_a_numeric_endpoint() {
+    let config = format!(
+        "server = 'vpn.example:9000'\n{}[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
+        pinned_auth_toml(&seed(), &pubkey())
+    );
+    assert!(ClientConfig::from_toml(&config).is_err());
+
+    let numeric = format!(
+        "server = '203.0.113.7:9000'\n{}[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
+        pinned_auth_toml(&seed(), &pubkey())
+    );
+    assert!(ClientConfig::from_toml(&numeric).is_ok());
+}
+
 #[tokio::test]
 async fn resolves_literal_ip_endpoint() {
     let resolved = resolve_endpoint("127.0.0.1:9000").await.unwrap();

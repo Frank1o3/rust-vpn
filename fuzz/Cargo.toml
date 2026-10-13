@@ -21,6 +21,12 @@ path="../crates/rvpn-crypto"
 [dependencies.rvpn-protocol]
 path="../crates/rvpn-protocol"
 
+[dependencies.rvpn-routing]
+path="../crates/rvpn-routing"
+
+[dependencies.rvpn-core]
+path="../crates/rvpn-core"
+
 [[bin]]
 name="packet_decode"
 path="fuzz_targets/packet_decode.rs"
@@ -59,6 +65,13 @@ bench=false
 [[bin]]
 name="session_aead_open"
 path="fuzz_targets/session_aead_open.rs"
+test=false
+doc=false
+bench=false
+
+[[bin]]
+name="routing_parse"
+path="fuzz_targets/routing_parse.rs"
 test=false
 doc=false
 bench=false

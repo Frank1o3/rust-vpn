@@ -38,6 +38,11 @@ Give every peer its own host prefixes.
 
 ## Linux client
 
+When either default route is enabled, configure `server` with a numeric IP
+address (for example, `203.0.113.10:51820`). Endpoint resolution happens before
+the VPN routes and Linux kill switch are active, so a hostname would require a
+DNS lookup over the physical network.
+
 ```toml
 server = "vpn.example.net:9000"
 obfuscation_key = "<same optional key>"

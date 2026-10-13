@@ -2,7 +2,11 @@ use anyhow::{Context, Result, bail};
 use rvpn_config::{CertificateAuthorityConfig, HandshakeConfig, PeerIdentity};
 use rvpn_core::SessionId;
 use rvpn_crypto::{AuthConfig, CookieKey, ObfuscationKey};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use rvpn_protocol::{HandshakeMessage, Header, Packet, PacketKind, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
@@ -13,6 +17,61 @@ use crate::state::{ActivePeer, PendingHandshakes, PendingSource, same_peer};
 const MAX_PENDING_HANDSHAKES: usize = 4096;
 const REKEY_REQUEST_INTERVAL: Duration = Duration::from_secs(5);
 const MIN_PENDING_HANDSHAKES_PER_SOURCE: usize = 8;
+const COOKIE_SOURCE_LIMIT: u32 = 4;
+const COOKIE_GLOBAL_LIMIT: u32 = 100;
+const COOKIE_SOURCE_CAPACITY: usize = 8192;
+
+#[derive(Default)]
+pub struct CookieChallengeLimiter {
+    sources: HashMap<IpAddr, (Instant, u32)>,
+    global: (Option<Instant>, u32),
+    last_prune: Option<Instant>,
+}
+
+impl CookieChallengeLimiter {
+    pub fn allow(&mut self, endpoint: SocketAddr) -> bool {
+        let now = Instant::now();
+        if self
+            .last_prune
+            .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+        {
+            self.sources
+                .retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(1));
+            self.last_prune = Some(now);
+        }
+        let ip = endpoint.ip();
+        let source_allowed = if let Some((start, count)) = self.sources.get_mut(&ip) {
+            if now.duration_since(*start) >= Duration::from_secs(1) {
+                *start = now;
+                *count = 1;
+                true
+            } else if *count >= COOKIE_SOURCE_LIMIT {
+                false
+            } else {
+                *count += 1;
+                true
+            }
+        } else if self.sources.len() >= COOKIE_SOURCE_CAPACITY {
+            false
+        } else {
+            self.sources.insert(ip, (now, 1));
+            true
+        };
+        if !source_allowed {
+            return false;
+        }
+        match self.global.0 {
+            Some(start) if now.duration_since(start) < Duration::from_secs(1) => {
+                if self.global.1 >= COOKIE_GLOBAL_LIMIT {
+                    return false;
+                }
+                self.global.1 += 1;
+            }
+            _ => self.global = (Some(now), 1),
+        }
+        true
+    }
+}
 
 fn unix_now() -> u64 {
     SystemTime::now()
@@ -37,6 +96,7 @@ pub async fn challenge_or_admit(
     obfuscation: Option<&ObfuscationKey>,
     endpoint: SocketAddr,
     initiation: &HandshakeMessage,
+    limiter: &mut CookieChallengeLimiter,
 ) -> Result<bool> {
     let HandshakeMessage::Initiation {
         public_key,
@@ -53,6 +113,9 @@ pub async fn challenge_or_admit(
     {
         return Ok(true);
     }
+    if !limiter.allow(endpoint) {
+        return Ok(false);
+    }
     let expected = cookie_key.mint(endpoint, public_key, random, now);
     let reply = Packet {
         header: Header {
@@ -65,6 +128,31 @@ pub async fn challenge_or_admit(
     };
     send_wire(transport, endpoint, reply.encode(), obfuscation).await?;
     Ok(false)
+}
+
+#[cfg(test)]
+mod cookie_limiter_tests {
+    use super::*;
+
+    #[test]
+    fn challenge_limiter_caps_each_ip_and_the_global_rate() {
+        let mut limiter = CookieChallengeLimiter::default();
+        let source = SocketAddr::from(([192, 0, 2, 1], 1000));
+        for _ in 0..COOKIE_SOURCE_LIMIT {
+            assert!(limiter.allow(source));
+        }
+        assert!(!limiter.allow(source));
+        assert!(limiter.allow(SocketAddr::from(([192, 0, 2, 2], 1000))));
+
+        let mut limiter = CookieChallengeLimiter::default();
+        for n in 0..COOKIE_GLOBAL_LIMIT {
+            assert!(limiter.allow(SocketAddr::from((
+                [198, 51, 100, (n % 250) as u8],
+                n as u16 + 1
+            ))));
+        }
+        assert!(!limiter.allow(SocketAddr::from(([203, 0, 113, 1], 2000))));
+    }
 }
 
 async fn send_wire(

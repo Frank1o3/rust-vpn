@@ -10,8 +10,21 @@ fn table_name(uid: u32) -> String {
 }
 
 pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
-    delete_table(spec.uid)?;
+    match send_batch(build_batch(spec, true)?) {
+        Ok(()) => {}
+        Err(error) if is_missing_table_error(&error) => {
+            // First installation has nothing to replace. The replacement path
+            // is a single nftables transaction, so a failed update leaves the
+            // previous policy installed.
+            send_batch(build_batch(spec, false)?)?;
+        }
+        Err(error) => return Err(error),
+    }
+    tracing::info!(uid = spec.uid, endpoint = %spec.endpoint, tunnel = %spec.tunnel_interface, "installed persistent RVPN kill switch");
+    Ok(())
+}
 
+fn build_batch(spec: &KillSwitchSpec, replace: bool) -> Result<Batch, NetError> {
     let table_name = table_name(spec.uid);
     let table_c = std::ffi::CString::new(table_name.clone())
         .map_err(|_| NetError::Operation("invalid nftables table name".into()))?;
@@ -20,6 +33,9 @@ pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
 
     let mut batch = Batch::new();
     let table = Table::new(table_c.as_c_str(), ProtoFamily::Inet);
+    if replace {
+        batch.add(&table, nftnl::MsgType::Del);
+    }
     batch.add(&table, nftnl::MsgType::Add);
 
     let mut chain = Chain::new(CHAIN_NAME, &table);
@@ -33,9 +49,7 @@ pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
     add_endpoint_accept(&mut batch, &chain, spec.uid, spec.endpoint)?;
     add_uid_drop(&mut batch, &chain, spec.uid);
 
-    send_batch(batch)?;
-    tracing::info!(uid = spec.uid, endpoint = %spec.endpoint, tunnel = %spec.tunnel_interface, "installed persistent RVPN kill switch");
-    Ok(())
+    Ok(batch)
 }
 
 pub fn remove(uid: u32) -> Result<(), NetError> {
@@ -122,6 +136,13 @@ fn delete_table(uid: u32) -> Result<(), NetError> {
             }
         }
     }
+}
+
+fn is_missing_table_error(error: &NetError) -> bool {
+    let message = error.to_string();
+    message.contains("No such file")
+        || message.contains("No such file or directory")
+        || message.contains("ENOENT")
 }
 
 fn send_batch(batch: Batch) -> Result<(), NetError> {

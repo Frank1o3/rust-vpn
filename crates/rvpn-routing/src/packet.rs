@@ -12,26 +12,70 @@ pub type Mac = [u8; 6];
 
 pub fn packet_source(packet: &[u8]) -> Option<IpAddr> {
     match packet.first()? >> 4 {
-        4 if packet.len() >= IPV4_MIN_HEADER => {
-            Some(IpAddr::from(<[u8; 4]>::try_from(&packet[12..16]).ok()?))
-        }
-        6 if packet.len() >= IPV6_HEADER => {
-            Some(IpAddr::from(<[u8; 16]>::try_from(&packet[8..24]).ok()?))
-        }
+        4 if valid_ipv4(packet) => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[12..16]).ok()?)),
+        6 if valid_ipv6(packet) => Some(IpAddr::from(<[u8; 16]>::try_from(&packet[8..24]).ok()?)),
         _ => None,
     }
 }
 
 pub fn packet_destination(packet: &[u8]) -> Option<IpAddr> {
     match packet.first()? >> 4 {
-        4 if packet.len() >= IPV4_MIN_HEADER => {
-            Some(IpAddr::from(<[u8; 4]>::try_from(&packet[16..20]).ok()?))
-        }
-        6 if packet.len() >= IPV6_HEADER => {
-            Some(IpAddr::from(<[u8; 16]>::try_from(&packet[24..40]).ok()?))
-        }
+        4 if valid_ipv4(packet) => Some(IpAddr::from(<[u8; 4]>::try_from(&packet[16..20]).ok()?)),
+        6 if valid_ipv6(packet) => Some(IpAddr::from(<[u8; 16]>::try_from(&packet[24..40]).ok()?)),
         _ => None,
     }
+}
+
+fn valid_ipv4(packet: &[u8]) -> bool {
+    if packet.len() < IPV4_MIN_HEADER || packet[0] >> 4 != 4 {
+        return false;
+    }
+    let header_len = usize::from(packet[0] & 0x0f) * 4;
+    let total_len = usize::from(u16::from_be_bytes([packet[2], packet[3]]));
+    header_len >= IPV4_MIN_HEADER
+        && header_len <= total_len
+        && total_len <= packet.len()
+        && ipv4_header_checksum(&packet[..header_len]) == 0
+}
+
+fn valid_ipv6(packet: &[u8]) -> bool {
+    if packet.len() < IPV6_HEADER || packet[0] >> 4 != 6 {
+        return false;
+    }
+    let payload_len = usize::from(u16::from_be_bytes([packet[4], packet[5]]));
+    let end = IPV6_HEADER + payload_len;
+    if end > packet.len() {
+        return false;
+    }
+
+    // Validate extension-header lengths before accepting the base addresses.
+    let mut next = packet[6];
+    let mut offset = IPV6_HEADER;
+    for _ in 0..8 {
+        let length = match next {
+            0 | 43 | 60 => {
+                if offset + 2 > end {
+                    return false;
+                }
+                (usize::from(packet[offset + 1]) + 1) * 8
+            }
+            44 => 8, // Fragment header
+            51 => {
+                if offset + 2 > end {
+                    return false;
+                }
+                (usize::from(packet[offset + 1]) + 2) * 4
+            }
+            _ => return true,
+        };
+        if offset + length > end {
+            return false;
+        }
+        next = packet[offset];
+        offset += length;
+    }
+    // A chain longer than the parser's bounded traversal is rejected.
+    !matches!(next, 0 | 43 | 44 | 51 | 60)
 }
 
 pub fn ethernet_dst_mac(frame: &[u8]) -> Option<Mac> {
@@ -57,7 +101,14 @@ pub fn ethernet_payload_ip(frame: &[u8], is_dest: bool) -> Option<IpAddr> {
     }
     let payload = &frame[ETHERNET_HEADER_LEN..];
     match ethertype(frame)? {
-        ETHERTYPE_IPV4 | ETHERTYPE_IPV6 => {
+        ETHERTYPE_IPV4 if payload.first().is_some_and(|byte| byte >> 4 == 4) => {
+            if is_dest {
+                packet_destination(payload)
+            } else {
+                packet_source(payload)
+            }
+        }
+        ETHERTYPE_IPV6 if payload.first().is_some_and(|byte| byte >> 4 == 6) => {
             if is_dest {
                 packet_destination(payload)
             } else {
@@ -65,7 +116,14 @@ pub fn ethernet_payload_ip(frame: &[u8], is_dest: bool) -> Option<IpAddr> {
             }
         }
         ETHERTYPE_ARP => {
-            if payload.len() < 28 {
+            if payload.len() < 28
+                || payload[0..2] != [0, 1]
+                || payload[2..4] != ETHERTYPE_IPV4.to_be_bytes()
+                || payload[4] != 6
+                || payload[5] != 4
+                || !matches!(u16::from_be_bytes([payload[6], payload[7]]), 1 | 2)
+                || frame[6..12] != payload[8..14]
+            {
                 return None;
             }
             let offset = if is_dest { 24 } else { 14 };
@@ -167,6 +225,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_inconsistent_lengths_checksums_and_ether_types() {
+        let mut invalid_length = ipv4([10, 42, 0, 2], [10, 42, 0, 3], 64);
+        invalid_length[2..4].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert_eq!(packet_source(&invalid_length), None);
+
+        let mut invalid_checksum = ipv4([10, 42, 0, 2], [10, 42, 0, 3], 64);
+        invalid_checksum[10] ^= 1;
+        assert_eq!(packet_destination(&invalid_checksum), None);
+
+        let mut mismatched = vec![0u8; ETHERNET_HEADER_LEN];
+        mismatched[12..14].copy_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+        mismatched.extend_from_slice(&[0x60; IPV6_HEADER]);
+        assert_eq!(ethernet_payload_ip(&mismatched, false), None);
+    }
+
+    #[test]
     fn ttl_decrement_keeps_checksum_valid() {
         let mut packet = ipv4([10, 42, 0, 2], [10, 42, 0, 3], 64);
         assert_eq!(ipv4_header_checksum(&packet[..20]), 0);
@@ -199,6 +273,11 @@ mod tests {
     fn arp_addresses_use_sender_and_target_fields() {
         let mut frame = vec![0u8; 14 + 28];
         frame[12..14].copy_from_slice(&ETHERTYPE_ARP.to_be_bytes());
+        frame[14..16].copy_from_slice(&1u16.to_be_bytes());
+        frame[16..18].copy_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
+        frame[18] = 6;
+        frame[19] = 4;
+        frame[20..22].copy_from_slice(&1u16.to_be_bytes());
         frame[14 + 14..14 + 18].copy_from_slice(&[10, 42, 0, 2]);
         frame[14 + 24..14 + 28].copy_from_slice(&[10, 42, 0, 3]);
         assert_eq!(

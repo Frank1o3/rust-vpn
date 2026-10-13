@@ -16,8 +16,8 @@ use tokio::time::{Instant, interval, sleep};
 
 use crate::firewall::ForwardingGuard;
 use crate::handshake::{
-    begin_initial, begin_rekey, challenge_or_admit, finish_pending, maybe_send_rekey,
-    per_source_pending_limit, retransmit_pending,
+    CookieChallengeLimiter, begin_initial, begin_rekey, challenge_or_admit, finish_pending,
+    maybe_send_rekey, per_source_pending_limit, retransmit_pending,
 };
 use crate::state::{ActivePeer, PendingHandshakes, close_all};
 
@@ -115,15 +115,6 @@ fn register_new_peers(router: &mut Router, active: &HashMap<SessionId, ActivePee
             tracing::debug!(peer = %peer.identity.name, session_id = ?id, "registered peer with router");
         }
     }
-}
-
-/// A peer with no `allowed_ips` (the legacy single-PSK setup) owns no prefix
-/// in the router, so it receives every packet the router cannot place.
-fn catch_all_peer(active: &HashMap<SessionId, ActivePeer>) -> Option<SessionId> {
-    active
-        .iter()
-        .find(|(_, peer)| peer.identity.allowed_ips.is_empty())
-        .map(|(id, _)| *id)
 }
 
 fn log_drop(peer: &str, kind: PacketKind, payload: &[u8], reason: DropReason) {
@@ -269,6 +260,7 @@ pub async fn run_server_loop(
 ) -> Result<()> {
     let obfuscation = obfuscation.as_ref();
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
+    let mut cookie_limiter = CookieChallengeLimiter::default();
     let mut pending: PendingHandshakes = PendingHandshakes::new();
     let per_source_pending_limit =
         per_source_pending_limit(&identities, certificate_authority.as_ref());
@@ -372,7 +364,7 @@ pub async fn run_server_loop(
                             continue;
                         }
                     };
-                    match router.route_from_local_ip(&outbound_pkt).or_else(|| catch_all_peer(&active)) {
+                    match router.route_from_local_ip(&outbound_pkt) {
                         Some(target) => {
                             plane.send_to(&mut active, target, PacketKind::Data, &outbound_pkt).await;
                         }
@@ -437,7 +429,7 @@ pub async fn run_server_loop(
                     match packet.header.kind {
                         PacketKind::Handshake if packet.header.sequence == 0 && packet.header.session_id == SessionId::ZERO => {
                             if let Ok(initiation @ HandshakeMessage::Initiation { .. }) = HandshakeMessage::decode(packet.payload) {
-                                match challenge_or_admit(&transport, &cookie_key, obfuscation, datagram.peer, &initiation).await {
+                                match challenge_or_admit(&transport, &cookie_key, obfuscation, datagram.peer, &initiation, &mut cookie_limiter).await {
                                     Ok(true) => {
                                         if let Err(error) = begin_initial(&transport, &identities, certificate_authority.as_ref(), obfuscation, &mut pending, datagram.peer, initiation, per_source_pending_limit).await {
                                             tracing::warn!(%error, peer = %datagram.peer, "could not start handshake");

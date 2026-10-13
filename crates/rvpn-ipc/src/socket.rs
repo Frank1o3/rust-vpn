@@ -7,6 +7,8 @@ use interprocess::local_socket::{
 };
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Semaphore;
+use tokio::time::{Duration, timeout};
 
 use crate::protocol::{ControlRequest, ControlResponse};
 
@@ -41,6 +43,9 @@ pub fn socket_path() -> PathBuf {
 }
 
 const WINDOWS_PIPE_NAME: &str = "rvpn-control";
+const MAX_CONTROL_MESSAGE: usize = 64 * 1024;
+const MAX_CONNECTIONS: usize = 128;
+const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 async fn create_listener() -> Result<Listener, IpcError> {
     if cfg!(windows) {
@@ -69,7 +74,31 @@ async fn create_listener() -> Result<Listener, IpcError> {
             Ok(listener)
         }
         Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-            tokio::fs::remove_file(&path).await.ok();
+            // Probe the existing listener first. Only remove a socket that is
+            // unreachable, and only if the path still names the same inode.
+            let before = tokio::fs::symlink_metadata(&path).await?;
+            match Stream::connect(path_str.as_str().to_fs_name::<GenericFilePath>()?).await {
+                Ok(_live) => return Err(e.into()),
+                Err(probe)
+                    if matches!(
+                        probe.kind(),
+                        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+                    ) => {}
+                Err(_) => return Err(e.into()),
+            }
+            let after = tokio::fs::symlink_metadata(&path).await?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if before.dev() != after.dev() || before.ino() != after.ino() {
+                    return Err(e.into());
+                }
+            }
+            #[cfg(not(unix))]
+            if before.file_type() != after.file_type() {
+                return Err(e.into());
+            }
+            tokio::fs::remove_file(&path).await?;
             let name = path_str.as_str().to_fs_name::<GenericFilePath>()?;
             let listener = ListenerOptions::new().name(name).create_tokio()?;
             #[cfg(unix)]
@@ -126,13 +155,20 @@ impl Connection {
             }
             let mut chunk = [0u8; 512];
             let mut reader = &self.stream;
-            let read = reader.read(&mut chunk).await?;
+            let read = timeout(READ_IDLE_TIMEOUT, reader.read(&mut chunk))
+                .await
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::TimedOut, "control connection idle")
+                })??;
             if read == 0 {
                 return if self.buf.is_empty() {
                     Ok(None)
                 } else {
                     Err(IpcError::Malformed)
                 };
+            }
+            if self.buf.len().saturating_add(read) > MAX_CONTROL_MESSAGE {
+                return Err(IpcError::Malformed);
             }
             self.buf.extend_from_slice(&chunk[..read]);
         }
@@ -186,10 +222,18 @@ where
 {
     let listener = create_listener().await?;
     let on_connection = std::sync::Arc::new(on_connection);
+    let connections = std::sync::Arc::new(Semaphore::new(MAX_CONNECTIONS));
     loop {
         let stream = listener.accept().await?;
+        let Ok(permit) = std::sync::Arc::clone(&connections).try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let conn = Connection::new(stream);
         let handler = std::sync::Arc::clone(&on_connection);
-        tokio::spawn(async move { handler(conn).await });
+        tokio::spawn(async move {
+            let _permit = permit;
+            handler(conn).await;
+        });
     }
 }

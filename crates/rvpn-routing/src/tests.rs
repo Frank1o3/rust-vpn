@@ -101,6 +101,20 @@ fn spoofed_sources_are_dropped() {
 }
 
 #[test]
+fn peer_with_no_effective_prefix_cannot_inject_or_receive_ip_traffic() {
+    let mut router = router(&[]);
+    router.register(sid(9), "unassigned", vec![]);
+    assert_eq!(
+        router.route_ip(sid(9), &ipv4([10, 42, 0, 9], [1, 1, 1, 1], 64)),
+        Verdict::Drop(DropReason::SourceNotAllowed)
+    );
+    assert_eq!(
+        router.route_from_local_ip(&ipv4([10, 42, 0, 1], [10, 42, 0, 9], 64)),
+        None
+    );
+}
+
+#[test]
 fn unowned_destinations_go_to_the_local_device() {
     let router = router(&[]);
     let packet = ipv4([10, 42, 0, 2], [1, 1, 1, 1], 64);

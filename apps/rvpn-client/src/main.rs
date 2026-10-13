@@ -64,7 +64,9 @@ async fn reconnect(
     transport: &UdpTransport,
     auth: &AuthConfig,
     obfuscation: Option<&ObfuscationKey>,
+    dev: &VirtualInterface,
     config: &ClientConfig,
+    current_server: &mut SocketAddr,
     shutdown: &mut ShutdownFuture,
 ) -> Result<Option<(ProtectedSession, SocketAddr)>> {
     let mut backoff = RECONNECT_INITIAL_BACKOFF;
@@ -79,6 +81,12 @@ async fn reconnect(
             result = async {
                 let server = rvpn_config::resolve_endpoint(&config.server).await
                     .context("resolving RVPN server during reconnect")?;
+                if server != *current_server {
+                    refresh_client_endpoint(dev, config, *current_server, server)
+                        .await
+                        .context("refreshing client network endpoint before reconnect")?;
+                    *current_server = server;
+                }
                 let session = establish(
                     transport,
                     server,
@@ -271,18 +279,15 @@ pub(crate) async fn run_client(
                     &transport,
                     &auth,
                     obfuscation.as_ref(),
+                    primary_dev,
                     &config,
+                    &mut server,
                     &mut shutdown,
                 )
                 .await
                 {
                     Ok(Some((new_session, new_server))) => {
-                        if new_server != server {
-                            refresh_client_endpoint(primary_dev, &config, server, new_server)
-                                .await
-                                .context("refreshing client network endpoint after reconnect")?;
-                            server = new_server;
-                        }
+                        server = new_server;
                         if let Some(state) = &gui_state {
                             let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
                             state.connected(format!("{:?}", new_session.session_id()), mtu.into());

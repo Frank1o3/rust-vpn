@@ -99,6 +99,13 @@ impl ClientConfig {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint_syntax(&self.server)?;
+        if (self.routing.default_route || self.routing.default_route_v6)
+            && self.server.parse::<SocketAddr>().is_err()
+        {
+            return Err(ConfigError::Invalid(
+                "default-route configurations require a numeric server IP to avoid pre-tunnel DNS lookups",
+            ));
+        }
         self.auth_config()?;
         self.interface
             .validate()

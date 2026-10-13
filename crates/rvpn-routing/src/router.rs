@@ -115,7 +115,7 @@ struct PeerEntry {
 
 impl PeerEntry {
     fn source_allowed(&self, source: IpAddr) -> bool {
-        self.allowed_ips.is_empty() || self.allowed_ips.iter().any(|net| net.contains(&source))
+        !self.allowed_ips.is_empty() && self.allowed_ips.iter().any(|net| net.contains(&source))
     }
 }
 
