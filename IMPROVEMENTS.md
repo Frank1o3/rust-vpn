@@ -1,8 +1,8 @@
 # RVPN Improvements
 
-Ideas for making RVPN fairer, easier to operate, and faster. This is a planning
-document; entries here are proposals, not implemented features. Security work
-already tracked in `ISSUES.md` remains the source of truth for those issues.
+Ideas and ongoing work for making RVPN fairer, easier to operate, and faster.
+The progress section records which parts are already implemented. Security work
+tracked in `ISSUES.md` remains the source of truth for those issues.
 
 ## 1. Per-peer bandwidth accounting and fair limits
 
@@ -111,14 +111,35 @@ Keep key material and private peer configuration out of status output.
 
 ## Current implementation progress
 
-- The server now keeps authenticated per-peer payload and wire-byte totals,
-  packet/drop counts, activity age, and completed rekeys in memory and logs
-  them once a minute. They reset on restart and are not exposed through an API.
-- Outbound datagrams use bounded per-endpoint queues with deficit
+- Implemented: authenticated per-peer payload and wire-byte totals,
+  packet/drop counts, last activity, and completed rekeys are kept in memory
+  and logged once a minute. They reset on restart and are not exposed through
+  an API.
+- Implemented: outbound datagrams use bounded per-endpoint queues with deficit
   round-robin scheduling. The queue has a global capacity and caps each
   endpoint at 256 pending datagrams.
-- Optional per-peer `tx_mib_per_sec` shaping and `rx_mib_per_sec` policing are
-  configurable under `[limits]`; both default to unlimited.
+- Implemented: optional per-peer `tx_mib_per_sec` shaping and
+  `rx_mib_per_sec` policing are configurable under `[limits]`; both default to
+  unlimited.
+- Partially implemented: section 2's model checks and bootstrap protections
+  exist; real packet-capture checks remain outstanding under issues 13 and 15.
+- Partially implemented: section 3's parser checks, routing tests, and fuzz
+  target exist. Expand the adversarial fuzz corpus and keep fuzzing under issue
+  14. Empty effective certificate peer prefixes are now rejected at handshake
+  time as well as being blocked by routing (issue 6).
+- Partially implemented: section 4's cookie challenge limits and in-memory
+  peer counters are implemented. Persistent history and a server status API
+  remain future work.
+- Partially implemented: section 5 has transport benchmarks, but repeatable
+  authentication, routing, queueing, and TUN/TAP injection benchmarks remain
+  to be added.
+- Partially implemented: section 6's bounded per-peer outbound queues,
+  deficit round-robin scheduling, and transport MTU metrics exist. Queue delay
+  and detailed local congestion/drop attribution remain future work.
+- Not implemented: section 7's upstream health checks, optional cache, and
+  per-upstream failure metrics.
+- Not implemented: section 8's validated live configuration reload and
+  operator status view.
 - Live reload, persistent history, and the analytics portal remain future
-  work. The portal should follow an authenticated local status interface so
-  it does not expose peer data on the public VPN endpoint.
+  work. Any status interface should be local and authenticated so it does not
+  expose peer data on the public VPN endpoint.

@@ -452,6 +452,14 @@ pub fn finish_pending(
                     return Vec::new();
                 }
             };
+            if allowed_ips.is_empty() {
+                tracing::warn!(
+                    subject = %subject_hex,
+                    session_id = ?id,
+                    "rejecting certificate peer with no effective allowed_ips"
+                );
+                return Vec::new();
+            }
             let auth = match ca.to_auth_config() {
                 Ok(auth) => auth,
                 Err(error) => {
