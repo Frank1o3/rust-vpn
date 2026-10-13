@@ -52,25 +52,31 @@ fn seal_and_queue(
     obfuscation: Option<&ObfuscationKey>,
     outbound: &OutboundQueue,
     transport: &UdpTransport,
-) {
+) -> Option<usize> {
     let packet = match peer.session.seal(kind, plaintext) {
         Ok(packet) => packet,
         Err(error) => {
             tracing::warn!(peer = %peer.identity.name, %error, "failed to seal packet; dropping it");
-            return;
+            return None;
         }
     };
     let wire = match wrap(packet.encode(), obfuscation) {
         Ok(wire) => wire,
         Err(error) => {
             tracing::warn!(peer = %peer.identity.name, %error, "failed to obfuscate packet; dropping it");
-            return;
+            return None;
         }
     };
+    let wire_bytes = wire.len();
     if let Err(error) = outbound.try_enqueue(peer.endpoint, wire) {
         transport.record_dropped_backpressure();
+        if matches!(kind, PacketKind::Data | PacketKind::DataTap) {
+            peer.stats.record_drop();
+        }
         tracing::debug!(peer = %peer.identity.name, %error, "outbound queue full; dropping packet");
+        return None;
     }
+    Some(wire_bytes)
 }
 
 async fn maybe_rekey(
@@ -168,14 +174,16 @@ impl DataPlane<'_> {
             self.rekey_time_limit,
         )
         .await;
-        seal_and_queue(
+        if let Some(wire_bytes) = seal_and_queue(
             peer,
             kind,
             payload,
             self.obfuscation,
             self.outbound,
             self.transport,
-        );
+        ) {
+            peer.stats.record_tx(payload.len(), wire_bytes);
+        }
     }
 
     async fn inject_ip(&self, packet: &[u8], peer: &str) {
@@ -203,6 +211,7 @@ async fn route_inbound(
     session_id: SessionId,
     kind: PacketKind,
     payload: &[u8],
+    wire_bytes: usize,
 ) {
     let verdict = if kind == PacketKind::DataTap {
         router.route_frame(session_id, payload)
@@ -214,10 +223,17 @@ async fn route_inbound(
     let delivery = match verdict {
         Verdict::Forward(delivery) => delivery,
         Verdict::Drop(reason) => {
+            if let Some(peer) = active.get_mut(&session_id) {
+                peer.stats.record_drop();
+            }
             log_drop(peer_name, kind, payload, reason);
             return;
         }
     };
+
+    if let Some(peer) = active.get_mut(&session_id) {
+        peer.stats.record_rx(payload.len(), wire_bytes);
+    }
 
     for target in delivery.peers {
         if kind == PacketKind::DataTap {
@@ -279,6 +295,7 @@ pub async fn run_server_loop(
     let keepalive = transport.keepalive();
     let (outbound, mut outbound_rx) = OutboundQueue::new(1024);
     let mut sweep = interval(Duration::from_secs(10));
+    let mut stats_log = interval(Duration::from_secs(60));
     let idle_timeout = config.liveness.timeout();
     let rekey_grace_period = config.rekey.grace_period();
     let mut recv_errors = 0u32;
@@ -322,6 +339,23 @@ pub async fn run_server_loop(
                             }
                             router.unregister(id);
                         }
+                    }
+                }
+                _ = stats_log.tick() => {
+                    for peer in active.values() {
+                        tracing::info!(
+                            peer = %peer.identity.name,
+                            rx_packets = peer.stats.rx_packets,
+                            rx_payload_bytes = peer.stats.rx_payload_bytes,
+                            rx_wire_bytes = peer.stats.rx_wire_bytes,
+                            tx_packets = peer.stats.tx_packets,
+                            tx_payload_bytes = peer.stats.tx_payload_bytes,
+                            tx_wire_bytes = peer.stats.tx_wire_bytes,
+                            dropped_packets = peer.stats.dropped_packets,
+                            rekeys = peer.stats.rekeys,
+                            last_activity_secs = peer.last_rx.elapsed().as_secs(),
+                            "authenticated peer traffic totals"
+                        );
                     }
                 }
                 () = keepalive.wait_for_due() => {
@@ -409,6 +443,7 @@ pub async fn run_server_loop(
                             continue;
                         }
                     };
+                    let wire_bytes = datagram.payload.len();
                     let payload = match obfuscation {
                         Some(key) => match key.unwrap(&datagram.payload) {
                             Ok(payload) => payload,
@@ -517,7 +552,7 @@ pub async fn run_server_loop(
                                     tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
                                     peer.endpoint = datagram.peer;
                                 }
-                                seal_and_queue(peer, PacketKind::Keepalive, b"", obfuscation, &outbound, &transport);
+                                let _ = seal_and_queue(peer, PacketKind::Keepalive, b"", obfuscation, &outbound, &transport);
                             }
                         }
                         PacketKind::Data | PacketKind::DataTap | PacketKind::Close => {
@@ -543,7 +578,7 @@ pub async fn run_server_loop(
                                         tracing::info!(peer = %peer.identity.name, old = %peer.endpoint, new = %datagram.peer, "authenticated peer roamed");
                                         peer.endpoint = datagram.peer;
                                     }
-                                    route_inbound(&plane, &mut router, &mut active, session_id, packet_kind, &plaintext).await;
+                                    route_inbound(&plane, &mut router, &mut active, session_id, packet_kind, &plaintext, wire_bytes).await;
                                 }
                                 Err(error) => tracing::warn!(%error, "discarding unauthenticated or replayed packet"),
                             }

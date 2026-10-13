@@ -53,6 +53,14 @@ raise capabilities itself. Two supported ways to get them:
 The server runs under a dedicated `rvpn` system user and gets the same two
 capabilities the same way, via `rvpn-server.service`.
 
+The server logs authenticated per-peer traffic totals once a minute. The
+totals include accepted inner packet bytes, encrypted UDP payload bytes,
+packets dropped by routing or outbound queue pressure, and completed rekeys.
+Outbound totals count packets admitted to the bounded send queue.
+Handshake and keepalive packets are excluded. These counters reset when the
+server process restarts and are currently available in the service journal;
+there is no server status API or web portal yet.
+
 ## Installing as systemd services (recommended)
 
 Use `./build.sh` rather than hand-editing the unit files — it builds the

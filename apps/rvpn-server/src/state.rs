@@ -11,6 +11,43 @@ pub struct ActivePeer {
     pub endpoint: SocketAddr,
     pub last_rx: Instant,
     pub last_rekey_request: Option<Instant>,
+    pub stats: PeerStats,
+}
+
+/// Authenticated data-plane counters for one peer. Handshake and keepalive
+/// traffic is intentionally excluded so these values describe user traffic.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PeerStats {
+    pub rx_packets: u64,
+    pub rx_payload_bytes: u64,
+    pub rx_wire_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_payload_bytes: u64,
+    pub tx_wire_bytes: u64,
+    pub dropped_packets: u64,
+    pub rekeys: u64,
+}
+
+impl PeerStats {
+    pub fn record_rx(&mut self, payload_bytes: usize, wire_bytes: usize) {
+        self.rx_packets = self.rx_packets.saturating_add(1);
+        self.rx_payload_bytes = self.rx_payload_bytes.saturating_add(payload_bytes as u64);
+        self.rx_wire_bytes = self.rx_wire_bytes.saturating_add(wire_bytes as u64);
+    }
+
+    pub fn record_tx(&mut self, payload_bytes: usize, wire_bytes: usize) {
+        self.tx_packets = self.tx_packets.saturating_add(1);
+        self.tx_payload_bytes = self.tx_payload_bytes.saturating_add(payload_bytes as u64);
+        self.tx_wire_bytes = self.tx_wire_bytes.saturating_add(wire_bytes as u64);
+    }
+
+    pub fn record_drop(&mut self) {
+        self.dropped_packets = self.dropped_packets.saturating_add(1);
+    }
+
+    pub fn record_rekey(&mut self) {
+        self.rekeys = self.rekeys.saturating_add(1);
+    }
 }
 
 impl ActivePeer {
@@ -21,6 +58,7 @@ impl ActivePeer {
             endpoint,
             last_rx: Instant::now(),
             last_rekey_request: None,
+            stats: PeerStats::default(),
         }
     }
 }

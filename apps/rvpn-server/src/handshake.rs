@@ -482,12 +482,19 @@ pub fn finish_pending(
     });
 
     let mut session = session;
-    if let Some(existing) = active.get(&id) {
+    let stats = if let Some(existing) = active.get(&id) {
         session.inherit_previous(&existing.session, grace_period);
-    }
+        let mut stats = existing.stats;
+        stats.record_rekey();
+        stats
+    } else {
+        Default::default()
+    };
 
     let name = identity.name.clone();
-    active.insert(id, ActivePeer::new(identity, session, endpoint));
+    let mut peer = ActivePeer::new(identity, session, endpoint);
+    peer.stats = stats;
+    active.insert(id, peer);
     tracing::info!(%name, session_id = ?id, %endpoint, "authenticated RVPN peer established");
     evicted
 }
