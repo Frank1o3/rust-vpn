@@ -4,6 +4,14 @@ use rvpn_interface::VirtualInterface;
 use std::net::{IpAddr, SocketAddr};
 use tokio::process::Command;
 
+pub async fn install_bootstrap_kill_switch(_config: &ClientConfig) -> Result<bool> {
+    Ok(false)
+}
+
+pub async fn remove_bootstrap_kill_switch() -> Result<()> {
+    Ok(())
+}
+
 pub async fn configure_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,

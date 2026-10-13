@@ -4,6 +4,7 @@
         "apps/rvpn-server",
         "apps/rvpn-tray",
         "crates/rvpn-config",
+        "crates/rvpn-dns",
         "crates/rvpn-core",
         "crates/rvpn-crypto",
         "crates/rvpn-interface",
@@ -21,6 +22,7 @@
         "crates/rvpn-config",
         "crates/rvpn-core",
         "crates/rvpn-crypto",
+        "crates/rvpn-dns",
         "crates/rvpn-interface",
         "crates/rvpn-ipc",
         "crates/rvpn-net",
@@ -48,18 +50,18 @@
         hex="0.4.3"
         hkdf="0.13"
         hmac="0.13"
-        interprocess={version="2.4.4", features=["tokio"]}
+        interprocess={version="2.4.5", features=["tokio"]}
         ipnet="2.11"
-        libc="0.2"
+        libc="0.2.190"
         rand="0.10.3"
         serde={version="1.0.229", features=["derive"]}
-        sha2="0.11.0"
+        sha2="0.11.1"
         socket2="0.6.5"
-        thiserror="2.0.20"
+        thiserror="2.0.21"
         tokio={version="1.53.1", features=["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]}
-        toml="1.1.6"
+        toml="1.1.8"
         tracing="0.1.44"
         tracing-subscriber="0.3.23"
         wintun="0.5.1"
         x25519-dalek={version="3.0.0", features=["static_secrets"]}
-        zeroize="1.9.0"
+        zeroize="1.9.1"

@@ -5,6 +5,36 @@ use rvpn_interface::VirtualInterface;
 use rvpn_net::{KillSwitchSpec, NetConfigurator, RouteSpec, SystemNet};
 use std::net::{IpAddr, SocketAddr};
 
+pub async fn install_bootstrap_kill_switch(config: &ClientConfig) -> Result<bool> {
+    if !config.routing.default_route && !config.routing.default_route_v6 {
+        return Ok(false);
+    }
+    let endpoint = config
+        .server
+        .parse::<SocketAddr>()
+        .context("default-route bootstrap requires a numeric VPN endpoint")?;
+    let uid = unsafe { libc::geteuid() };
+    let net = SystemNet::new().context("opening Linux networking backend")?;
+    net.install_kill_switch(&KillSwitchSpec {
+        endpoint,
+        tunnel_interface: None,
+        uid,
+    })
+    .await
+    .context("installing Linux bootstrap kill switch")?;
+    tracing::info!(uid, %endpoint, "Linux bootstrap kill switch is active before endpoint resolution");
+    Ok(true)
+}
+
+pub async fn remove_bootstrap_kill_switch() -> Result<()> {
+    let uid = unsafe { libc::geteuid() };
+    SystemNet::new()
+        .context("opening Linux networking backend")?
+        .remove_kill_switch(uid)
+        .await
+        .context("removing Linux bootstrap kill switch")
+}
+
 pub async fn configure_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
@@ -12,6 +42,17 @@ pub async fn configure_client_network(
 ) -> Result<()> {
     let net = SystemNet::new().context("opening Linux rtnetlink connection")?;
     let interface_index = net.interface_index(dev.name()).await?;
+
+    if config.routing.default_route || config.routing.default_route_v6 {
+        let uid = unsafe { libc::geteuid() };
+        net.install_kill_switch(&KillSwitchSpec {
+            endpoint: server,
+            tunnel_interface: Some(dev.name().to_owned()),
+            uid,
+        })
+        .await
+        .context("updating Linux kill switch for tunnel interface")?;
+    }
 
     net.set_link_up(dev.name()).await?;
 
@@ -38,21 +79,6 @@ pub async fn configure_client_network(
             source: None,
         })
         .await?;
-    }
-
-    if config.routing.default_route || config.routing.default_route_v6 {
-        let uid = unsafe { libc::geteuid() };
-        net.install_kill_switch(&KillSwitchSpec {
-            endpoint: server,
-            tunnel_interface: dev.name().to_owned(),
-            uid,
-        })
-        .await
-        .context("installing persistent Linux kill switch")?;
-        tracing::info!(
-            uid,
-            "Linux RVPN kill switch is active before default routes are installed"
-        );
     }
 
     if config.routing.default_route {
@@ -283,7 +309,7 @@ pub async fn refresh_client_endpoint(
         let uid = unsafe { libc::geteuid() };
         net.install_kill_switch(&KillSwitchSpec {
             endpoint: new_server,
-            tunnel_interface: dev.name().to_owned(),
+            tunnel_interface: Some(dev.name().to_owned()),
             uid,
         })
         .await

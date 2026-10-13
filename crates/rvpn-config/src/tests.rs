@@ -90,6 +90,46 @@ fn kill_switch_default_routes_require_a_numeric_endpoint() {
     assert!(ClientConfig::from_toml(&numeric).is_ok());
 }
 
+#[test]
+fn tunnel_dns_does_not_remove_numeric_endpoint_bootstrap_requirement() {
+    let auth = pinned_auth_toml(&seed(), &pubkey());
+    let numeric = format!(
+        "server = '203.0.113.7:9000'\n{}[interface]\ndns_servers = '10.42.0.1'\n[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
+        auth
+    );
+    assert!(ClientConfig::from_toml(&numeric).is_ok());
+
+    let hostname = format!(
+        "server = 'vpn.example:9000'\n{}[interface]\ndns_servers = '10.42.0.1'\n[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
+        auth
+    );
+    assert!(ClientConfig::from_toml(&hostname).is_err());
+}
+
+#[test]
+fn server_dns_forwarder_requires_tunnel_address_and_valid_upstream_ports() {
+    let no_tunnel_address = format!(
+        "bind = '0.0.0.0:9000'\n[dns]\nupstreams = ['1.1.1.1:53']\n[[peers]]\nname = 'laptop'\nallowed_ips = ['10.42.0.2/32']\n[peers.auth]\nmode = 'pinned-key'\nlocal_identity_seed = '{}'\npeer_public_key = '{}'",
+        seed(),
+        pubkey()
+    );
+    assert!(ServerConfig::from_toml(&no_tunnel_address).is_err());
+
+    let invalid_port = format!(
+        "bind = '0.0.0.0:9000'\n[interface]\naddress = '10.42.0.1/24'\n[dns]\nupstreams = ['1.1.1.1:0']\n[[peers]]\nname = 'laptop'\nallowed_ips = ['10.42.0.2/32']\n[peers.auth]\nmode = 'pinned-key'\nlocal_identity_seed = '{}'\npeer_public_key = '{}'",
+        seed(),
+        pubkey()
+    );
+    assert!(ServerConfig::from_toml(&invalid_port).is_err());
+
+    let valid = format!(
+        "bind = '0.0.0.0:9000'\n[interface]\naddress = '10.42.0.1/24'\n[dns]\nupstreams = ['1.1.1.1:53', '[2606:4700:4700::1111]:53']\n[[peers]]\nname = 'laptop'\nallowed_ips = ['10.42.0.2/32']\n[peers.auth]\nmode = 'pinned-key'\nlocal_identity_seed = '{}'\npeer_public_key = '{}'",
+        seed(),
+        pubkey()
+    );
+    assert!(ServerConfig::from_toml(&valid).is_ok());
+}
+
 #[tokio::test]
 async fn resolves_literal_ip_endpoint() {
     let resolved = resolve_endpoint("127.0.0.1:9000").await.unwrap();

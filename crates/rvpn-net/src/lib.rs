@@ -50,7 +50,8 @@ pub struct RouteSpec {
 #[derive(Clone, Debug)]
 pub struct KillSwitchSpec {
     pub endpoint: SocketAddr,
-    pub tunnel_interface: String,
+    /// The interface permitted for tunnel traffic, or `None` while bootstrapping.
+    pub tunnel_interface: Option<String>,
     pub uid: u32,
 }
 

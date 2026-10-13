@@ -1,0 +1,14 @@
+[package]
+    authors.workspace=true
+    edition.workspace=true
+    license.workspace=true
+    name="rvpn-dns"
+    version.workspace=true
+
+[dependencies]
+    anyhow.workspace=true
+    hickory-server={version="0.26.3", default-features=false, features=["resolver"]}
+    ipnet.workspace=true
+    tokio.workspace=true
+    tokio-util="0.7.20"
+    tracing.workspace=true

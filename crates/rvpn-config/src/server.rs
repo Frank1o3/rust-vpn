@@ -29,7 +29,18 @@ pub struct ServerConfig {
     pub forwarding: ForwardingConfig,
     #[serde(default)]
     pub liveness: LivenessConfig,
+    #[serde(default)]
+    pub dns: DnsConfig,
     pub obfuscation_key: Option<String>,
+}
+
+/// Optional DNS forwarding service for VPN peers.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DnsConfig {
+    /// Upstream DNS servers. An empty list disables the embedded DNS service.
+    #[serde(default)]
+    pub upstreams: Vec<SocketAddr>,
 }
 
 impl ServerConfig {
@@ -58,7 +69,24 @@ impl ServerConfig {
             .and_then(|_| self.handshake.validate())
             .and_then(|_| self.rekey.validate())
             .and_then(|_| self.forwarding.validate())
-            .and_then(|_| self.liveness.validate())
+            .and_then(|_| self.liveness.validate())?;
+        if !self.dns.upstreams.is_empty()
+            && self.interface.address.is_none()
+            && self.interface.addresses.is_empty()
+        {
+            return Err(ConfigError::Invalid(
+                "DNS upstreams require at least one configured tunnel interface address",
+            ));
+        }
+        if self
+            .dns
+            .upstreams
+            .iter()
+            .any(|upstream| upstream.port() == 0)
+        {
+            return Err(ConfigError::Invalid("DNS upstream ports must not be zero"));
+        }
+        Ok(())
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {

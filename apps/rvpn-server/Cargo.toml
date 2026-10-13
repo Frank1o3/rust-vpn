@@ -13,6 +13,7 @@
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}
+    rvpn-dns={path="../../crates/rvpn-dns"}
     rvpn-interface={path="../../crates/rvpn-interface"}
     rvpn-net={path="../../crates/rvpn-net"}
     rvpn-protocol={path="../../crates/rvpn-protocol"}

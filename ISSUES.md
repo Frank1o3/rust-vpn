@@ -15,6 +15,7 @@ Total closed issues: 0
 - Summary: Validate that Linux kill-switch rules for a protected UID only allow the required loopback, tunnel, and endpoint traffic and fail closed under reconnects, endpoint changes, and IPv6 conditions.
 - Risk: A stale or overly broad exception could allow protected traffic to escape the tunnel or break reconnect behavior.
 - Classification: Defense-in-depth security test issue.
+- Local progress (2026-10-12): Added model-level checks for exact IPv4/IPv6 endpoint exceptions, DNS on physical versus tunnel interfaces, bootstrap fail-closed behavior, and endpoint replacement. Runtime nftables behavior during reconnect and interface changes still needs integration verification.
 
 ## 2) #14 — [Security][Medium] Fuzz IP and Ethernet routing parsers and validate source/destination consistency
 
@@ -31,6 +32,7 @@ Total closed issues: 0
 - Summary: Verify whether DNS resolution for the VPN endpoint or application traffic can leak outside the tunnel during bootstrap, reconnect, or tunnel loss.
 - Risk: DNS or endpoint lookups may escape the encrypted path and violate privacy or expected fail-closed behavior.
 - Classification: Privacy and traffic-leak validation issue.
+- Local progress (2026-10-12): Linux now installs the bootstrap kill switch before endpoint resolution and permits only loopback plus the numeric VPN endpoint until the tunnel interface is ready. A regression check covers this policy and ensures tunnel DNS settings do not make hostname endpoints valid for full-tunnel bootstrap. Packet-capture verification across bootstrap, reconnect, and tunnel loss is still outstanding.
 
 ## 4) #12 — [Security][High impact if violated] Strengthen replay-window tests across reordering and key transitions
 

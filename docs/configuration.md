@@ -16,6 +16,9 @@ mtu = 1400
 address = "10.42.0.1/24"
 addresses = ["fd42::1/64"]
 
+[dns]
+upstreams = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"]
+
 [forwarding]
 enabled = true
 backend = "auto" # auto, iptables, or nftables
@@ -36,6 +39,12 @@ peer_public_key = "<client public key>"
 `allowed_ips` is both the assigned address set and the anti-spoofing allowlist.
 Give every peer its own host prefixes.
 
+When `[dns].upstreams` is set, the server runs a DNS forwarder on UDP and TCP
+port 53 at each configured tunnel interface address. It accepts requests from
+the configured tunnel networks and forwards them to the listed upstream
+servers. Keep the DNS listener on tunnel addresses; do not expose it on the
+server's public address.
+
 ## Linux client
 
 When either default route is enabled, configure `server` with a numeric IP
@@ -46,7 +55,7 @@ plain UDP and TCP DNS on physical interfaces is blocked; DNS through loopback
 or the tunnel interface remains available.
 
 ```toml
-server = "vpn.example.net:9000"
+server = "203.0.113.10:9000"
 obfuscation_key = "<same optional key>"
 
 [interface]
@@ -55,6 +64,7 @@ mode = "tun"
 mtu = 1400
 address = "10.42.0.2/24"
 addresses = ["fd42::2/64"]
+dns_servers = "10.42.0.1, fd42::1"
 
 [routing]
 default_route = true

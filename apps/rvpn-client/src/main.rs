@@ -14,7 +14,10 @@ use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
 use std::{env, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use handshake::establish;
-use platform::{configure_client_network, refresh_client_endpoint, teardown_client_network};
+use platform::{
+    configure_client_network, install_bootstrap_kill_switch, refresh_client_endpoint,
+    remove_bootstrap_kill_switch, teardown_client_network,
+};
 use tunnel::{DataPlaneExit, run_data_plane};
 
 type ShutdownFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
@@ -121,6 +124,28 @@ async fn reconnect(
 }
 
 pub(crate) async fn run_client(
+    config: ClientConfig,
+    gui_state: Option<GuiStateHandle>,
+    shutdown: Option<ShutdownFuture>,
+) -> Result<()> {
+    let bootstrap_kill_switch = install_bootstrap_kill_switch(&config).await?;
+    let result = run_client_inner(config, gui_state, shutdown).await;
+    if !bootstrap_kill_switch {
+        return result;
+    }
+
+    match remove_bootstrap_kill_switch().await {
+        Ok(()) => result,
+        Err(cleanup_error) => match result {
+            Ok(()) => Err(cleanup_error),
+            Err(run_error) => Err(run_error.context(format!(
+                "also failed to remove bootstrap kill switch: {cleanup_error:#}"
+            ))),
+        },
+    }
+}
+
+async fn run_client_inner(
     config: ClientConfig,
     gui_state: Option<GuiStateHandle>,
     shutdown: Option<ShutdownFuture>,

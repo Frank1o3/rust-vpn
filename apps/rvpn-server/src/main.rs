@@ -5,6 +5,7 @@ mod state;
 mod tunnel;
 
 use anyhow::{Context, Result};
+use ipnet::IpNet;
 use rvpn_config::{DeviceMode, ServerConfig};
 use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
@@ -115,6 +116,29 @@ async fn main() -> Result<()> {
     configure_server_interface(primary_dev, &config).await?;
     let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name(), mtu).await?;
 
+    let dns = if config.dns.upstreams.is_empty() {
+        None
+    } else {
+        let interface_networks: Vec<IpNet> = config
+            .interface
+            .address
+            .iter()
+            .chain(&config.interface.addresses)
+            .map(|address| address.parse())
+            .collect::<std::result::Result<_, _>>()
+            .context("parsing configured tunnel prefixes for DNS access control")?;
+        let listen_addresses: Vec<_> = interface_networks.iter().map(IpNet::addr).collect();
+        Some(
+            rvpn_dns::start(
+                &listen_addresses,
+                &interface_networks,
+                &config.dns.upstreams,
+            )
+            .await
+            .context("starting embedded DNS forwarder")?,
+        )
+    };
+
     tracing::info!(
         bind = %transport.local_addr()?,
         peers = identities.len(),
@@ -126,7 +150,7 @@ async fn main() -> Result<()> {
     );
 
     let shutdown = Box::pin(shutdown_signal());
-    run_server_loop(
+    let result = run_server_loop(
         transport,
         config,
         identities,
@@ -138,7 +162,13 @@ async fn main() -> Result<()> {
         forwarding,
         shutdown,
     )
-    .await
+    .await;
+    if let Some(dns) = dns {
+        dns.shutdown()
+            .await
+            .context("stopping embedded DNS forwarder")?;
+    }
+    result
 }
 
 fn effective_tunnel_mtu(requested: u16, wire_overhead: usize, outer_is_ipv6: bool) -> u16 {

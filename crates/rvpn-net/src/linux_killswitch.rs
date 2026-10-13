@@ -17,7 +17,7 @@ enum OutputRule {
     },
     DropDns {
         protocol: u8,
-        tunnel_interface: String,
+        tunnel_interface: Option<String>,
     },
     DropUid {
         uid: u32,
@@ -57,7 +57,7 @@ fn policy_allows(rules: &[OutputRule], packet: OutputPacket<'_>) -> bool {
                     .destination
                     .is_some_and(|endpoint| endpoint.port() == 53)
                 && packet.interface != "lo"
-                && packet.interface != tunnel_interface =>
+                && tunnel_interface.as_deref() != Some(packet.interface) =>
             {
                 return false;
             }
@@ -68,16 +68,18 @@ fn policy_allows(rules: &[OutputRule], packet: OutputPacket<'_>) -> bool {
     true
 }
 
-fn output_rules(spec: &KillSwitchSpec) -> [OutputRule; 6] {
-    [
-        OutputRule::AcceptInterface {
+fn output_rules(spec: &KillSwitchSpec) -> Vec<OutputRule> {
+    let mut rules = vec![OutputRule::AcceptInterface {
+        uid: spec.uid,
+        name: "lo".to_owned(),
+    }];
+    if let Some(tunnel_interface) = &spec.tunnel_interface {
+        rules.push(OutputRule::AcceptInterface {
             uid: spec.uid,
-            name: "lo".to_owned(),
-        },
-        OutputRule::AcceptInterface {
-            uid: spec.uid,
-            name: spec.tunnel_interface.clone(),
-        },
+            name: tunnel_interface.clone(),
+        });
+    }
+    rules.extend([
         OutputRule::AcceptEndpoint {
             uid: spec.uid,
             endpoint: spec.endpoint,
@@ -91,7 +93,8 @@ fn output_rules(spec: &KillSwitchSpec) -> [OutputRule; 6] {
             tunnel_interface: spec.tunnel_interface.clone(),
         },
         OutputRule::DropUid { uid: spec.uid },
-    ]
+    ]);
+    rules
 }
 
 fn table_name(uid: u32) -> String {
@@ -109,7 +112,7 @@ pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
         }
         Err(error) => return Err(error),
     }
-    tracing::info!(uid = spec.uid, endpoint = %spec.endpoint, tunnel = %spec.tunnel_interface, "installed persistent RVPN kill switch");
+    tracing::info!(uid = spec.uid, endpoint = %spec.endpoint, tunnel = ?spec.tunnel_interface, "installed persistent RVPN kill switch");
     Ok(())
 }
 
@@ -117,8 +120,10 @@ fn build_batch(spec: &KillSwitchSpec, replace: bool) -> Result<Batch, NetError> 
     let table_name = table_name(spec.uid);
     let table_c = std::ffi::CString::new(table_name.clone())
         .map_err(|_| NetError::Operation("invalid nftables table name".into()))?;
-    std::ffi::CString::new(spec.tunnel_interface.clone())
-        .map_err(|_| NetError::Operation("invalid tunnel interface name".into()))?;
+    if let Some(tunnel_interface) = &spec.tunnel_interface {
+        std::ffi::CString::new(tunnel_interface.clone())
+            .map_err(|_| NetError::Operation("invalid tunnel interface name".into()))?;
+    }
 
     let mut batch = Batch::new();
     let table = Table::new(table_c.as_c_str(), ProtoFamily::Inet);
@@ -159,7 +164,7 @@ mod tests {
     fn spec(endpoint: &str) -> KillSwitchSpec {
         KillSwitchSpec {
             endpoint: endpoint.parse().unwrap(),
-            tunnel_interface: "rvpn0".into(),
+            tunnel_interface: Some("rvpn0".into()),
             uid: 1001,
         }
     }
@@ -184,11 +189,11 @@ mod tests {
                 },
                 OutputRule::DropDns {
                     protocol: 17,
-                    tunnel_interface: "rvpn0".into()
+                    tunnel_interface: Some("rvpn0".into())
                 },
                 OutputRule::DropDns {
                     protocol: 6,
-                    tunnel_interface: "rvpn0".into()
+                    tunnel_interface: Some("rvpn0".into())
                 },
                 OutputRule::DropUid { uid: 1001 }
             ]
@@ -204,6 +209,71 @@ mod tests {
                 endpoint: "[2001:db8::9]:51820".parse().unwrap()
             })
         );
+    }
+
+    #[test]
+    fn bootstrap_policy_allows_only_loopback_and_exact_endpoint() {
+        let rules = output_rules(&KillSwitchSpec {
+            endpoint: "203.0.113.9:51820".parse().unwrap(),
+            tunnel_interface: None,
+            uid: 1001,
+        });
+        let packet = |interface, protocol, destination| OutputPacket {
+            uid: 1001,
+            interface,
+            protocol,
+            destination,
+        };
+
+        assert!(policy_allows(
+            &rules,
+            packet("eth0", 17, Some("203.0.113.9:51820".parse().unwrap()))
+        ));
+        assert!(policy_allows(
+            &rules,
+            packet("lo", 17, Some("127.0.0.1:53".parse().unwrap()))
+        ));
+        assert!(!policy_allows(
+            &rules,
+            packet("eth0", 17, Some("192.0.2.53:53".parse().unwrap()))
+        ));
+        assert!(!policy_allows(
+            &rules,
+            packet("rvpn0", 17, Some("192.0.2.53:53".parse().unwrap()))
+        ));
+        assert!(!policy_allows(
+            &rules,
+            packet("eth0", 6, Some("198.51.100.10:443".parse().unwrap()))
+        ));
+    }
+
+    #[test]
+    fn endpoint_refresh_only_allows_the_new_exact_endpoint() {
+        let old = output_rules(&spec("198.51.100.9:51820"));
+        let new = output_rules(&spec("[2001:db8::9]:51820"));
+        let packet = |destination| OutputPacket {
+            uid: 1001,
+            interface: "eth0",
+            protocol: 17,
+            destination: Some(destination),
+        };
+
+        assert!(policy_allows(
+            &old,
+            packet("198.51.100.9:51820".parse().unwrap())
+        ));
+        assert!(!policy_allows(
+            &old,
+            packet("[2001:db8::9]:51820".parse().unwrap())
+        ));
+        assert!(!policy_allows(
+            &new,
+            packet("198.51.100.9:51820".parse().unwrap())
+        ));
+        assert!(policy_allows(
+            &new,
+            packet("[2001:db8::9]:51820".parse().unwrap())
+        ));
     }
 
     #[test]
@@ -236,6 +306,15 @@ mod tests {
                 interface: "rvpn0",
                 protocol: 17,
                 destination: None,
+            }
+        ));
+        assert!(policy_allows(
+            &rules,
+            OutputPacket {
+                uid: 1001,
+                interface: "rvpn0",
+                protocol: 17,
+                destination: Some("192.0.2.53:53".parse().unwrap()),
             }
         ));
         assert!(!policy_allows(&rules, packet(17, None)));
@@ -367,12 +446,14 @@ fn add_uid_drop(batch: &mut Batch, chain: &Chain, uid: u32) {
     batch.add(&rule, nftnl::MsgType::Add);
 }
 
-fn add_dns_drop(batch: &mut Batch, chain: &Chain, tunnel_interface: &str, protocol: u8) {
+fn add_dns_drop(batch: &mut Batch, chain: &Chain, tunnel_interface: &Option<String>, protocol: u8) {
     let mut rule = Rule::new(chain);
     rule.add_expr(&nft_expr!(meta oifname));
     rule.add_expr(&nft_expr!(cmp != &b"lo"[..]));
-    rule.add_expr(&nft_expr!(meta oifname));
-    rule.add_expr(&nft_expr!(cmp != tunnel_interface.as_bytes()));
+    if let Some(tunnel_interface) = tunnel_interface {
+        rule.add_expr(&nft_expr!(meta oifname));
+        rule.add_expr(&nft_expr!(cmp != tunnel_interface.as_bytes()));
+    }
     rule.add_expr(&nft_expr!(meta l4proto));
     rule.add_expr(&nft_expr!(cmp == protocol));
     if protocol == 17 {
