@@ -6,7 +6,7 @@ use rvpn_transport::{SendOptions, UdpTransport};
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 pub struct ActivePeer {
