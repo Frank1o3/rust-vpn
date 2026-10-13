@@ -39,6 +39,11 @@ controlled over a local IPC socket, with `rvpn-tray` acting as its UI:
 - `rvpn-client`, `rvpn-server`, `rvpn-android`, and `rvpn-tray`: endpoint applications. `rvpn-tray` is a thin UI shell with no networking privileges of its own; it drives `rvpn-client` entirely through `rvpn-ipc`.
 
 Transport moves opaque datagrams only; encryption belongs above it.
+Outbound datagrams use bounded per-endpoint queues and deficit round-robin
+scheduling, with a 1500-byte quantum and a maximum of 256 queued datagrams per
+endpoint. This keeps a busy peer from occupying the entire server queue and
+lets smaller packets from other peers proceed while a large packet consumes
+multiple scheduling rounds.
 
 ## Sessions and peers
 

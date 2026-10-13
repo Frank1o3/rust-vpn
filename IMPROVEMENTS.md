@@ -108,3 +108,16 @@ Consider safe configuration reloads for peer links, DNS upstreams, and rate
 limits, with validation before applying a change. Add a status view that shows
 per-peer rates and shaping state alongside the existing transport counters.
 Keep key material and private peer configuration out of status output.
+
+## Current implementation progress
+
+- The server now keeps authenticated per-peer payload and wire-byte totals,
+  packet/drop counts, activity age, and completed rekeys in memory and logs
+  them once a minute. They reset on restart and are not exposed through an API.
+- Outbound datagrams use bounded per-endpoint queues with deficit
+  round-robin scheduling. The queue has a global capacity and caps each
+  endpoint at 256 pending datagrams.
+- Configurable rate limits, live reload, persistent history, and the analytics
+  portal remain future work. The portal should follow an authenticated local
+  status interface so it does not need to expose peer data on the public VPN
+  endpoint.
