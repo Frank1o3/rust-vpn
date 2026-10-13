@@ -11,7 +11,7 @@ use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::env;
+use std::{env, time::Duration};
 
 use firewall::ForwardingGuard;
 use network::configure_server_interface;
@@ -129,10 +129,15 @@ async fn main() -> Result<()> {
             .context("parsing configured tunnel prefixes for DNS access control")?;
         let listen_addresses: Vec<_> = interface_networks.iter().map(IpNet::addr).collect();
         Some(
-            rvpn_dns::start(
+            rvpn_dns::start_with_options(
                 &listen_addresses,
                 &interface_networks,
                 &config.dns.upstreams,
+                rvpn_dns::DnsOptions {
+                    timeout: Duration::from_millis(config.dns.timeout_ms),
+                    attempts: config.dns.attempts,
+                    cache_entries: config.dns.cache_entries,
+                },
             )
             .await
             .context("starting embedded DNS forwarder")?,

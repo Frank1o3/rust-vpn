@@ -132,6 +132,44 @@ def prompt_dns_servers(text: str, default: str) -> str:
         return ", ".join(parts)
 
 
+def prompt_dns_upstreams(text: str, default: str) -> list[str]:
+    while True:
+        value = prompt(text, default=default)
+        if not value:
+            return []
+        try:
+            return [
+                _normalize_dns_upstream(part)
+                for part in re.split(r"[,\s]+", value)
+                if part
+            ]
+        except ValueError as error:
+            console.print(f"  [red]{error}[/red]")
+
+
+def _normalize_dns_upstream(value: str) -> str:
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0 or value[closing + 1 : closing + 2] != ":":
+            raise ValueError("IPv6 DNS upstreams must use [address]:port format.")
+        host = value[1:closing]
+        port_text = value[closing + 2 :]
+    else:
+        host, separator, port_text = value.rpartition(":")
+        if not separator or ":" in host:
+            raise ValueError("Use IP:port for IPv4 and [IPv6]:port for IPv6 DNS upstreams.")
+    try:
+        address = ipaddress.ip_address(host)
+        port = int(port_text)
+    except ValueError as error:
+        raise ValueError("DNS upstreams must be numeric IP:port addresses.") from error
+    if not 1 <= port <= 65535:
+        raise ValueError("DNS upstream ports must be between 1 and 65535.")
+    if isinstance(address, ipaddress.IPv6Address):
+        return f"[{address}]:{port}"
+    return f"{address}:{port}"
+
+
 def prompt_cidr_list(text: str, default: str = "") -> list[str]:
     while True:
         value = prompt(text, default=default)
@@ -210,15 +248,15 @@ def detect_external_interface() -> Optional[str]:
     return None
 
 
-def derive_dns_from_endpoint_external(endpoint_external: str) -> str:
-    try:
-        address = ipaddress.ip_address(endpoint_external)
-        if isinstance(address, ipaddress.IPv4Address) and address.is_private:
-            octets = endpoint_external.split(".")
-            return ".".join(octets[:3] + ["1"])
-    except ValueError:
-        pass
-    return "1.1.1.1"
+def derive_dns_from_tunnel(
+    server_v4: str, server_v6: str = "", *, enabled: bool
+) -> str:
+    if not enabled:
+        return ""
+    addresses = [str(ipaddress.ip_interface(server_v4).ip)]
+    if server_v6:
+        addresses.append(str(ipaddress.ip_interface(server_v6).ip))
+    return ", ".join(addresses)
 
 
 def _not_hex(value: str) -> bool:

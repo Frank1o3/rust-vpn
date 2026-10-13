@@ -239,6 +239,7 @@ ensure_server_user() {
 
     sudo useradd \
         --system \
+        --user-group \
         --create-home \
         --home-dir /var/lib/rvpn \
         --shell "$nologin_shell" \

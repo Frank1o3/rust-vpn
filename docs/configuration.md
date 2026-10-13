@@ -23,6 +23,9 @@ addresses = ["fd42::1/64"]
 
 [dns]
 upstreams = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"]
+timeout_ms = 2000
+attempts = 2
+cache_entries = 1024 # zero disables the TTL-aware response cache
 
 [forwarding]
 enabled = true
@@ -56,8 +59,11 @@ per-peer queue.
 When `[dns].upstreams` is set, the server runs a DNS forwarder on UDP and TCP
 port 53 at each configured tunnel interface address. It accepts requests from
 the configured tunnel networks and forwards them to the listed upstream
-servers. Keep the DNS listener on tunnel addresses; do not expose it on the
-server's public address.
+servers. Upstream requests time out after `timeout_ms` and are retried up to
+`attempts` times. Validated ranges are 100–30000 ms and 1–5 retries. The
+TTL-aware response cache holds up to `cache_entries` responses (maximum 65536);
+set it to zero to disable caching. Keep the DNS listener on tunnel addresses;
+do not expose it on the server's public address.
 
 ## Linux client
 
@@ -97,6 +103,10 @@ For IPv4 default-route mode, `endpoint_gateway` keeps the server's UDP route
 on the physical network. Use `routes` instead of `default_route` for split
 tunnelling. RVPN assigns the matching tunnel address as the source for default
 routes, preventing LAN addresses from entering the tunnel.
+
+Client `[interface].dns_servers` configures which resolver the device uses.
+Server `[dns].upstreams` configures where the server-side tunnel DNS forwarder
+sends queries; it does not set DNS on client devices by itself.
 
 ## Handshake and rekey
 

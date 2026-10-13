@@ -1,9 +1,8 @@
 # RVPN systemd services
 
 - `rvpn-server.service` — system unit running under the dedicated `rvpn`
-  system user. It receives `CAP_NET_ADMIN` and `CAP_NET_RAW` through
-  systemd ambient capabilities so it can create the VPN interface and manage
-  the host network.
+  system user and group. It receives only `CAP_NET_ADMIN` through systemd
+  ambient capabilities for TUN/TAP, routes, and firewall management.
 - `rvpn-client@.service` — system unit template. The instance name is the
   Linux username, for example `rvpn-client@alice.service`. The service runs
   `rvpn-client --daemon` as that user and receives
@@ -35,7 +34,8 @@ systemctl --user enable --now rvpn-tray.service
 ## Privileges
 
 The client needs `CAP_NET_ADMIN` and `CAP_NET_RAW` to create/configure the
-VPN interface and perform raw network operations.
+VPN interface and perform raw network operations. The server only needs
+`CAP_NET_ADMIN` for its current TUN/TAP, route, and firewall operations.
 
 Those capabilities are granted only by `rvpn-client@.service` through:
 
@@ -52,9 +52,10 @@ when the binary is started by its systemd service.
 
 ## Config locations
 
-`rvpn-server` defaults to
-`$XDG_CONFIG_HOME/rvpn/server.toml` (normally
-`~/.config/rvpn/server.toml` for the `rvpn` service user).
+`rvpn-server.service` reads
+`/var/lib/rvpn/.config/rvpn/server.toml`, owned by `rvpn:rvpn` with mode 0600.
+The service account is a system user with a non-login shell; it is separate
+from both root and interactive users.
 
 The client daemon starts without a config file and waits for IPC requests.
 The tray sends a config path with its `Connect` request, so the client reads

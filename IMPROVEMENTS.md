@@ -109,6 +109,29 @@ limits, with validation before applying a change. Add a status view that shows
 per-peer rates and shaping state alongside the existing transport counters.
 Keep key material and private peer configuration out of status output.
 
+## Potential product differentiators
+
+RVPN already supports Android QR import, split tunneling, a Linux kill switch,
+peer links, and per-peer traffic limits. Possible next additions that build on
+those foundations:
+
+- A local admin dashboard with peer presence, live rates, usage totals, and
+  shaping drops. Keep it behind the local control socket and explicit local
+  authentication.
+- Per-peer monthly or rolling usage quotas with warning thresholds and a clear
+  reset policy, reusing the authenticated traffic accounting.
+- Server-side DNS policy profiles for malware/domain blocking, with per-peer
+  opt-in and visible block counts. Keep DNS policy separate from packet
+  routing so it can be audited and disabled independently.
+- Roaming-friendly profile management: named profiles, expiry/revocation, and
+  simple device enrollment that produces the existing QR/import format.
+- Connection diagnostics that explain endpoint reachability, DNS path, MTU,
+  handshake stage, and kill-switch state without exposing keys.
+
+These are product directions, not claims of parity with WireGuard. Prioritize
+features that make RVPN easier to operate and verify while keeping its protocol
+and key management conservative.
+
 ## Current implementation progress
 
 - Implemented: authenticated per-peer payload and wire-byte totals,
@@ -136,10 +159,11 @@ Keep key material and private peer configuration out of status output.
 - Partially implemented: section 6's bounded per-peer outbound queues,
   deficit round-robin scheduling, and transport MTU metrics exist. Queue delay
   and detailed local congestion/drop attribution remain future work.
-- Not implemented: section 7's upstream health checks, optional cache, and
-  per-upstream failure metrics.
+- Partially implemented: section 7 now has configurable upstream timeouts,
+  retries, and an optional bounded TTL-aware response cache. Upstream health
+  checks and per-upstream failure metrics remain open.
 - Not implemented: section 8's validated live configuration reload and
   operator status view.
-- Live reload, persistent history, and the analytics portal remain future
-  work. Any status interface should be local and authenticated so it does not
-  expose peer data on the public VPN endpoint.
+- Persistent history and the analytics portal remain future work. Any status
+  interface should be local and authenticated so it does not expose peer data
+  on the public VPN endpoint.

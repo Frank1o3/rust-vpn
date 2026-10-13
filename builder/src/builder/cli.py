@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import os
 import sys
 from pathlib import Path
 
@@ -22,13 +23,14 @@ from .models import (
 )
 from .prompts import (
     console,
-    derive_dns_from_endpoint_external,
+    derive_dns_from_tunnel,
     detect_external_interface,
     prompt,
     prompt_bool,
     prompt_cidr_list,
     prompt_choice,
     prompt_dns_servers,
+    prompt_dns_upstreams,
     prompt_endpoint_host,
     prompt_index_group,
     prompt_int,
@@ -69,6 +71,20 @@ def slugify(name: str) -> str:
 
 def section(title: str) -> None:
     console.print(Panel(title, style="cyan", expand=False))
+
+
+def write_private_text(path: Path, content: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            descriptor = -1
+            output.write(content)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    os.chmod(path, 0o600)
 
 
 def ask_security() -> SecurityPolicy:
@@ -137,6 +153,16 @@ def ask_server() -> SetupConfig:
     console.print(f"  [dim]-> IPv4 tunnel CIDR: {network_cidr(server_v4)}[/dim]")
     if ipv6_enabled:
         console.print(f"  [dim]-> IPv6 tunnel CIDR: {network_cidr(server_v6)}[/dim]")
+
+    dns_enabled = prompt_bool("Enable tunnel DNS forwarding on the server", True)
+    dns_upstreams = (
+        prompt_dns_upstreams(
+            "Upstream DNS server(s) (numeric IP:port)",
+            "1.1.1.1:53, 1.0.0.1:53",
+        )
+        if dns_enabled
+        else []
+    )
 
     forwarding_enabled = prompt_bool("Enable internet gateway / NAT forwarding", True)
     forwarding_backend = "auto"
@@ -211,6 +237,7 @@ def ask_server() -> SetupConfig:
         obfuscation_key=obfuscation_key,
         auth_mode=auth_mode,
         security=security,
+        dns_upstreams=dns_upstreams,
         ca_name=ca_name,
         ca=ca,
         server_identity=server_identity,
@@ -239,7 +266,11 @@ def ask_client_options(setup: SetupConfig, peer_name: str, platform: str) -> Cli
         )
 
     mtu = prompt_int("Client interface MTU", setup.server_mtu, minimum=576, maximum=65535)
-    dns_default = derive_dns_from_endpoint_external(setup.endpoint_external)
+    dns_default = derive_dns_from_tunnel(
+        setup.server_v4,
+        setup.server_v6 if setup.ipv6_enabled else "",
+        enabled=bool(setup.dns_upstreams),
+    )
     dns_servers = prompt_dns_servers("Client DNS server(s)", dns_default)
 
     gateway_v4 = setup.server_v4.split("/")[0]
@@ -380,25 +411,30 @@ def gather_links(setup: SetupConfig, peers: list[PeerSetup]) -> list[list[str]]:
     return groups
 
 
-def generate(output_dir: Path) -> tuple[Path, list[Path]]:
+def generate(output_dir: Path) -> tuple[Path, list[Path], Path | None]:
     setup = ask_server()
     peers = gather_peers(setup)
     links = gather_links(setup, peers)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     server_path = output_dir / "server.toml"
-    server_path.write_text(render_server_toml(setup, peers, links), encoding="utf-8")
+    write_private_text(server_path, render_server_toml(setup, peers, links))
+
+    ca_seed_path = None
+    if setup.ca is not None:
+        ca_seed_path = output_dir / "ca-private-seed.hex"
+        write_private_text(ca_seed_path, setup.ca.seed + "\n")
 
     client_paths: list[Path] = []
     for peer in peers:
         path = output_dir / f"client-{peer.platform}-{slugify(peer.name)}.toml"
         client_text = render_client_toml(setup, peer)
-        path.write_text(client_text, encoding="utf-8")
+        write_private_text(path, client_text)
         client_paths.append(path)
         if peer.platform == "android":
             emit_android_qr(peer.name, client_text, path.with_suffix(".png"))
 
-    return server_path, client_paths
+    return server_path, client_paths, ca_seed_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -420,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        server_path, client_paths = generate(args.output_dir)
+        server_path, client_paths, ca_seed_path = generate(args.output_dir)
     except KeyboardInterrupt:
         console.print("\n[yellow]Setup cancelled.[/yellow]")
         return 130
@@ -429,6 +465,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     console.print(f"\n[green]Wrote[/green] {server_path}")
+    if ca_seed_path is not None:
+        console.print(
+            f"[yellow]CA signing seed saved to {ca_seed_path}; back it up offline. "
+            "It is required to issue certificates later.[/yellow]"
+        )
     for path in client_paths:
         console.print(f"[green]Wrote[/green] {path}")
     console.print(

@@ -49,12 +49,44 @@ pub struct PeerLimitsConfig {
 }
 
 /// Optional DNS forwarding service for VPN peers.
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DnsConfig {
     /// Upstream DNS servers. An empty list disables the embedded DNS service.
     #[serde(default)]
     pub upstreams: Vec<SocketAddr>,
+    /// Maximum wait for an upstream response, in milliseconds.
+    #[serde(default = "default_dns_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Retries after an upstream request fails (1 to 5).
+    #[serde(default = "default_dns_attempts")]
+    pub attempts: usize,
+    /// Maximum cached DNS responses. Zero disables caching.
+    #[serde(default = "default_dns_cache_entries")]
+    pub cache_entries: u64,
+}
+
+fn default_dns_timeout_ms() -> u64 {
+    2_000
+}
+
+fn default_dns_attempts() -> usize {
+    2
+}
+
+fn default_dns_cache_entries() -> u64 {
+    1_024
+}
+
+impl Default for DnsConfig {
+    fn default() -> Self {
+        Self {
+            upstreams: Vec::new(),
+            timeout_ms: default_dns_timeout_ms(),
+            attempts: default_dns_attempts(),
+            cache_entries: default_dns_cache_entries(),
+        }
+    }
 }
 
 impl ServerConfig {
@@ -99,6 +131,19 @@ impl ServerConfig {
             .any(|upstream| upstream.port() == 0)
         {
             return Err(ConfigError::Invalid("DNS upstream ports must not be zero"));
+        }
+        if !(100..=30_000).contains(&self.dns.timeout_ms) {
+            return Err(ConfigError::Invalid(
+                "DNS timeout_ms must be between 100 and 30000",
+            ));
+        }
+        if !(1..=5).contains(&self.dns.attempts) {
+            return Err(ConfigError::Invalid("DNS attempts must be between 1 and 5"));
+        }
+        if self.dns.cache_entries > 65_536 {
+            return Err(ConfigError::Invalid(
+                "DNS cache_entries must not exceed 65536",
+            ));
         }
         Ok(())
     }

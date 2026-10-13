@@ -1,7 +1,6 @@
 [Unit]
 Description=RVPN Client (%i)
 Documentation=https://github.com/Frank1o3/rust-vpn
-
 Wants=network-online.target
 After=network-online.target
 

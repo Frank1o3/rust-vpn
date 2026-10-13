@@ -115,6 +115,7 @@ class SetupConfig:
     obfuscation_key: str
     auth_mode: str
     security: SecurityPolicy
+    dns_upstreams: list[str] = field(default_factory=list)
     ca_name: str = ""
     ca: Optional[KeyPair] = None
     server_identity: Optional[KeyPair] = None

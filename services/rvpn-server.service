@@ -1,5 +1,6 @@
 [Unit]
 Description=RVPN server
+Documentation=https://github.com/Frank1o3/rust-vpn
 After=network-online.target
 Wants=network-online.target
 
@@ -7,18 +8,18 @@ Wants=network-online.target
 Type=simple
 User=rvpn
 Group=rvpn
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
-ExecStartPre=+/sbin/sysctl -w net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
-ExecStart=/usr/local/bin/rvpn-server /etc/rvpn/server.toml
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ExecStart=/usr/local/bin/rvpn-server /var/lib/rvpn/.config/rvpn/server.toml
 Restart=on-failure
 RestartSec=2
+UMask=0077
 
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_PACKET
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true

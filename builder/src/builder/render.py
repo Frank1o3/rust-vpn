@@ -110,6 +110,15 @@ def render_server_toml(
             lines.append(f"    tunnel_cidr_v6={toml_str(setup.tunnel_cidr_v6)}")
         lines.append("")
 
+    if setup.dns_upstreams:
+        lines.extend(
+            [
+                "[dns]",
+                f"    upstreams={toml_list(setup.dns_upstreams)}",
+                "",
+            ]
+        )
+
     if setup.auth_mode == "certificate":
         assert setup.ca is not None and setup.server_identity is not None
         lines.extend(
@@ -275,6 +284,7 @@ def emit_android_qr(peer_name: str, client_toml: str, png_path: Path) -> Path | 
         payload = compact_toml(client_toml)
         qr = build_qr(payload)
         qr.save(str(png_path), kind="png", scale=PNG_SCALE, border=PNG_BORDER)
+        png_path.chmod(0o600)
     except Exception as exc:  # noqa: BLE001 - convenience feature, never fatal
         console.print(f"  [red](could not create QR code for {peer_name}: {exc})[/red]")
         return None

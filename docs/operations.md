@@ -50,8 +50,22 @@ raise capabilities itself. Two supported ways to get them:
   process runs as the normal user, not root, with only those two
   capabilities.
 
-The server runs under a dedicated `rvpn` system user and gets the same two
-capabilities the same way, via `rvpn-server.service`.
+The server runs under the dedicated, non-login `rvpn` system user and group.
+`rvpn-server.service` grants it only `CAP_NET_ADMIN`, which it uses for TUN/TAP,
+routes, and firewall management. It does not need `CAP_NET_RAW`.
+
+When server forwarding is enabled, set the required host-wide forwarding
+sysctls persistently before starting the service. The unit protects kernel
+tunables and does not run a root `sysctl` helper:
+
+```ini
+# /etc/sysctl.d/90-rvpn.conf
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+```
+
+Apply with `sudo sysctl --system`. Enable only the address families RVPN will
+forward. These settings affect the host globally.
 
 The server logs authenticated per-peer traffic totals once a minute. The
 totals include accepted inner packet bytes, encrypted UDP payload bytes,
@@ -84,14 +98,20 @@ To remove any of them: `./uninstall.sh server|client|tray|all`.
 
 ## Config locations
 
-- Server: `~/.config/rvpn/server.toml` (for the `rvpn` service user, that's
-  `/var/lib/rvpn/.config/rvpn/server.toml`).
+- Server service: `/var/lib/rvpn/.config/rvpn/server.toml`.
 - Client: `~/.config/rvpn/client.toml` for the daemon/tray flow. A directly
   invoked `rvpn-client <path>` (foreground mode above) can point at any
   readable path.
 
 Config files must not be group- or world-readable (`chmod 0600`); RVPN
-refuses to read an insecurely-permissioned config file.
+refuses to read an insecurely-permissioned config file. Install the generated
+server config for the service account with:
+
+```sh
+sudo install -d -o rvpn -g rvpn -m 0700 /var/lib/rvpn/.config/rvpn
+sudo install -o rvpn -g rvpn -m 0600 rvpn-setup/server.toml \
+  /var/lib/rvpn/.config/rvpn/server.toml
+```
 
 ## Verify a connection
 

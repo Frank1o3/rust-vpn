@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use hickory_server::{
     Server,
     proto::rr::Name,
-    resolver::config::NameServerConfig,
+    resolver::config::{NameServerConfig, ResolverOpts},
     store::forwarder::{ForwardConfig, ForwardZoneHandler},
     zone_handler::{Catalog, ZoneHandler},
 };
@@ -29,22 +29,85 @@ pub async fn start(
     allowed_networks: &[IpNet],
     upstreams: &[SocketAddr],
 ) -> Result<RunningServer> {
-    start_on_port(listen_addresses, allowed_networks, upstreams, 53)
+    start_with_options(
+        listen_addresses,
+        allowed_networks,
+        upstreams,
+        DnsOptions::default(),
+    )
+    .await
+}
+
+/// Resolver controls for the embedded DNS forwarder.
+#[derive(Clone, Copy, Debug)]
+pub struct DnsOptions {
+    /// Maximum time to wait for an upstream response.
+    pub timeout: Duration,
+    /// Number of retries after an upstream request fails.
+    pub attempts: usize,
+    /// Maximum number of DNS responses kept in the TTL-aware cache. Zero disables caching.
+    pub cache_entries: u64,
+}
+
+impl Default for DnsOptions {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(2),
+            attempts: 2,
+            cache_entries: 1024,
+        }
+    }
+}
+
+pub async fn start_with_options(
+    listen_addresses: &[IpAddr],
+    allowed_networks: &[IpNet],
+    upstreams: &[SocketAddr],
+    options: DnsOptions,
+) -> Result<RunningServer> {
+    start_on_port_with_options(listen_addresses, allowed_networks, upstreams, 53, options)
         .await
         .map(|(server, _)| server)
 }
 
+#[cfg(test)]
 async fn start_on_port(
     listen_addresses: &[IpAddr],
     allowed_networks: &[IpNet],
     upstreams: &[SocketAddr],
     port: u16,
 ) -> Result<(RunningServer, Vec<SocketAddr>)> {
+    start_on_port_with_options(
+        listen_addresses,
+        allowed_networks,
+        upstreams,
+        port,
+        DnsOptions::default(),
+    )
+    .await
+}
+
+async fn start_on_port_with_options(
+    listen_addresses: &[IpAddr],
+    allowed_networks: &[IpNet],
+    upstreams: &[SocketAddr],
+    port: u16,
+    options: DnsOptions,
+) -> Result<(RunningServer, Vec<SocketAddr>)> {
     if listen_addresses.is_empty() {
         bail!("DNS forwarding requires at least one tunnel address");
     }
     if upstreams.is_empty() {
         bail!("DNS forwarding requires at least one upstream server");
+    }
+    if !(Duration::from_millis(100)..=Duration::from_secs(30)).contains(&options.timeout) {
+        bail!("DNS upstream timeout must be between 100 ms and 30 seconds");
+    }
+    if !(1..=5).contains(&options.attempts) {
+        bail!("DNS upstream attempts must be between 1 and 5");
+    }
+    if options.cache_entries > 65_536 {
+        bail!("DNS cache capacity must not exceed 65536 responses");
     }
 
     let mut name_servers = Vec::with_capacity(upstreams.len());
@@ -56,9 +119,14 @@ async fn start_on_port(
         name_servers.push(config);
     }
 
+    let mut resolver_options = ResolverOpts::default();
+    resolver_options.timeout = options.timeout;
+    resolver_options.attempts = options.attempts;
+    resolver_options.cache_size = options.cache_entries;
+
     let forwarder = ForwardZoneHandler::builder_tokio(ForwardConfig {
         name_servers,
-        options: None,
+        options: Some(resolver_options),
     })
     .with_origin(Name::root())
     .build()

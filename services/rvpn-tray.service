@@ -1,5 +1,6 @@
 [Unit]
 Description=RVPN Tray
+Documentation=https://github.com/Frank1o3/rust-vpn
 After=graphical-session.target
 
 [Service]
