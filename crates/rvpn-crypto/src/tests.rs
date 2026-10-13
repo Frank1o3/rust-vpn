@@ -138,6 +138,43 @@ fn independent_handshake_attempts_derive_independent_handshake_keys() {
 }
 
 #[test]
+fn rekey_and_reconnect_derivations_do_not_repeat_key_nonce_pairs() {
+    fn pair() -> (SessionKeys, SessionKeys) {
+        let initiator = EphemeralKeyPair::generate().unwrap();
+        let responder = EphemeralKeyPair::generate().unwrap();
+        let initiator_public = initiator.public_key();
+        let responder_public = responder.public_key();
+        let client_secret = initiator.agree(responder_public).unwrap();
+        let server_secret = responder.agree(initiator_public).unwrap();
+        (
+            SessionKeys::derive(&client_secret, &[0x5a; 32], SessionRole::Initiator).unwrap(),
+            SessionKeys::derive(&server_secret, &[0x5a; 32], SessionRole::Responder).unwrap(),
+        )
+    }
+
+    let nonce = PacketNonce::from_sequence(0, 0);
+    let aad = b"same protected header for independent sessions";
+    let (send_a, receive_a) = pair();
+    let (send_b, receive_b) = pair();
+    let ciphertext_a = send_a.seal(nonce, aad, b"same first packet").unwrap();
+    let ciphertext_b = send_b.seal(nonce, aad, b"same first packet").unwrap();
+
+    assert_ne!(ciphertext_a, ciphertext_b);
+    assert_eq!(
+        receive_a.open(nonce, aad, &ciphertext_a).unwrap(),
+        b"same first packet"[..]
+    );
+    assert_eq!(
+        receive_b.open(nonce, aad, &ciphertext_b).unwrap(),
+        b"same first packet"[..]
+    );
+    assert!(matches!(
+        receive_b.open(nonce, aad, &ciphertext_a),
+        Err(CryptoError::AuthenticationFailed)
+    ));
+}
+
+#[test]
 fn seal_response_and_seal_finish_use_independent_keys_so_nonce_zero_does_not_collide() {
     let initiator = EphemeralKeyPair::generate().unwrap();
     let responder = EphemeralKeyPair::generate().unwrap();

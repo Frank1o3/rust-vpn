@@ -227,6 +227,29 @@ mod tests {
         ProtectedSession::new(new_id, 1, send)
     }
 
+    fn phase_pair(session_id: SessionId) -> (ProtectedSession, ProtectedSession) {
+        let initiator = EphemeralKeyPair::generate().unwrap();
+        let responder = EphemeralKeyPair::generate().unwrap();
+        let initiator_public = initiator.public_key();
+        let responder_public = responder.public_key();
+        let send = SessionKeys::derive(
+            &initiator.agree(responder_public).unwrap(),
+            &[9; 32],
+            SessionRole::Initiator,
+        )
+        .unwrap();
+        let receive = SessionKeys::derive(
+            &responder.agree(initiator_public).unwrap(),
+            &[9; 32],
+            SessionRole::Responder,
+        )
+        .unwrap();
+        (
+            ProtectedSession::new(session_id, 1, send),
+            ProtectedSession::new(session_id, 1, receive),
+        )
+    }
+
     #[test]
     fn zero_grace_period_disables_previous_phase_immediately() {
         let (mut old_sender, old_receiver) = pair();
@@ -268,5 +291,59 @@ mod tests {
             new_receiver.open(old_packet),
             Err(SessionError::Replay(ReplayError::Duplicate))
         ));
+    }
+
+    #[test]
+    fn reordering_and_duplicates_are_checked_independently_across_key_phases() {
+        let (mut old_sender, old_receiver) = pair();
+        let old_zero = old_sender.seal(PacketKind::Data, b"old zero").unwrap();
+        let old_one = old_sender.seal(PacketKind::Data, b"old one").unwrap();
+        let old_two = old_sender.seal(PacketKind::Data, b"old two").unwrap();
+
+        let id = old_receiver.session_id();
+        let (mut new_sender, mut new_receiver) = phase_pair(id);
+        new_receiver.inherit_previous(&old_receiver, Duration::from_secs(30));
+        let new_zero = new_sender.seal(PacketKind::Data, b"new zero").unwrap();
+
+        assert_eq!(
+            new_receiver.open(old_zero.clone()).unwrap(),
+            b"old zero"[..]
+        );
+        assert_eq!(new_receiver.open(old_two).unwrap(), b"old two"[..]);
+        assert_eq!(
+            new_receiver.open(new_zero.clone()).unwrap(),
+            b"new zero"[..]
+        );
+        assert_eq!(new_receiver.open(old_one.clone()).unwrap(), b"old one"[..]);
+        assert!(matches!(
+            new_receiver.open(new_zero),
+            Err(SessionError::Replay(ReplayError::Duplicate))
+        ));
+        assert!(matches!(
+            new_receiver.open(old_zero),
+            Err(SessionError::Replay(ReplayError::Duplicate))
+        ));
+    }
+
+    #[test]
+    fn failed_old_phase_authentication_does_not_consume_replay_state() {
+        let (mut old_sender, old_receiver) = pair();
+        let old_packet = old_sender
+            .seal(PacketKind::Data, b"valid old packet")
+            .unwrap();
+        let id = old_receiver.session_id();
+        let mut new_receiver = keys_for(&old_receiver, id);
+        new_receiver.inherit_previous(&old_receiver, Duration::from_secs(30));
+
+        let mut forged = old_packet.clone();
+        forged.payload = Bytes::from_static(b"invalid tag");
+        assert!(matches!(
+            new_receiver.open(forged),
+            Err(SessionError::Crypto(CryptoError::AuthenticationFailed))
+        ));
+        assert_eq!(
+            new_receiver.open(old_packet).unwrap(),
+            b"valid old packet"[..]
+        );
     }
 }

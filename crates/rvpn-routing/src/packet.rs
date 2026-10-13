@@ -211,6 +211,7 @@ mod tests {
 
         let mut v6 = vec![0u8; 40];
         v6[0] = 0x60;
+        v6[6] = 59; // No next header; valid with an empty payload.
         v6[8..24].copy_from_slice(&"fd42::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
         v6[24..40].copy_from_slice(&"fd42::3".parse::<std::net::Ipv6Addr>().unwrap().octets());
         assert_eq!(packet_source(&v6), Some("fd42::2".parse().unwrap()));
@@ -238,6 +239,22 @@ mod tests {
         mismatched[12..14].copy_from_slice(&ETHERTYPE_IPV4.to_be_bytes());
         mismatched.extend_from_slice(&[0x60; IPV6_HEADER]);
         assert_eq!(ethernet_payload_ip(&mismatched, false), None);
+    }
+
+    #[test]
+    fn validates_ipv6_extension_header_bounds() {
+        let mut packet = vec![0u8; IPV6_HEADER + 8];
+        packet[0] = 0x60;
+        packet[4..6].copy_from_slice(&8u16.to_be_bytes());
+        packet[6] = 0; // Hop-by-hop options header
+        packet[8..24].copy_from_slice(&"fd42::2".parse::<std::net::Ipv6Addr>().unwrap().octets());
+        packet[24..40].copy_from_slice(&"fd42::3".parse::<std::net::Ipv6Addr>().unwrap().octets());
+        packet[40] = 59; // No next header
+        packet[41] = 0; // One 8-byte extension header
+        assert_eq!(packet_source(&packet), Some("fd42::2".parse().unwrap()));
+
+        packet[41] = 1; // Claims 16 bytes, beyond the payload
+        assert_eq!(packet_source(&packet), None);
     }
 
     #[test]

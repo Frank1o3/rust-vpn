@@ -27,6 +27,9 @@ Ed25519 verification against arbitrary certificate bytes.
 session_aead_open exercises the ChaCha20-Poly1305 session decryption path with
 arbitrary nonce, AAD, and ciphertext inputs.
 
+routing_parse exercises IPv4/IPv6 and Ethernet/ARP parsing plus router source
+validation against arbitrary packets and frames.
+
 ## Commands
 
     cargo +nightly fuzz list
@@ -34,6 +37,8 @@ arbitrary nonce, AAD, and ciphertext inputs.
     cargo +nightly fuzz run packet_decode
 
     cargo +nightly fuzz run packet_decode -- -max_total_time=30
+
+    cargo +nightly fuzz run routing_parse -- -max_total_time=30
 
     for target in $(cargo +nightly fuzz list); do cargo fuzz build "$target"; done
 
