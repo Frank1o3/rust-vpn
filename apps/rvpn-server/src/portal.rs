@@ -274,34 +274,101 @@ fn prometheus_metrics(snapshot: &str) -> String {
                 peer["tx_rate"].as_f64().unwrap_or_default(),
             ),
         ] {
-            let _ = writeln!(output, "rvpn_peer_payload_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {payload}");
-            let _ = writeln!(output, "rvpn_peer_wire_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {wire}");
-            let _ = writeln!(output, "rvpn_peer_packets_total{{peer=\"{name}\",direction=\"{direction}\"}} {packets}");
-            let _ = writeln!(output, "rvpn_peer_payload_rate_bytes_per_second{{peer=\"{name}\",direction=\"{direction}\"}} {:.3}", rate * 1_048_576.0);
+            let _ = writeln!(
+                output,
+                "rvpn_peer_payload_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {payload}"
+            );
+            let _ = writeln!(
+                output,
+                "rvpn_peer_wire_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {wire}"
+            );
+            let _ = writeln!(
+                output,
+                "rvpn_peer_packets_total{{peer=\"{name}\",direction=\"{direction}\"}} {packets}"
+            );
+            let _ = writeln!(
+                output,
+                "rvpn_peer_payload_rate_bytes_per_second{{peer=\"{name}\",direction=\"{direction}\"}} {:.3}",
+                rate * 1_048_576.0
+            );
         }
         let drops = peer["dropped_packets"].as_u64().unwrap_or_default();
         let rx_drops = peer["rx_limited_drops"].as_u64().unwrap_or_default();
         let tx_drops = peer["tx_queue_drops"].as_u64().unwrap_or_default();
-        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"all\"}} {drops}");
-        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"rx_limit\"}} {rx_drops}");
-        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"tx_queue\"}} {tx_drops}");
+        let _ = writeln!(
+            output,
+            "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"all\"}} {drops}"
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"rx_limit\"}} {rx_drops}"
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"tx_queue\"}} {tx_drops}"
+        );
         let average = peer["avg_queue_delay_ms"].as_f64().unwrap_or_default() / 1000.0;
         let maximum = peer["max_queue_delay_ms"].as_f64().unwrap_or_default() / 1000.0;
-        let _ = writeln!(output, "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"average\"}} {average:.6}");
-        let _ = writeln!(output, "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"maximum\"}} {maximum:.6}");
+        let _ = writeln!(
+            output,
+            "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"average\"}} {average:.6}"
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"maximum\"}} {maximum:.6}"
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_rekeys_total{{peer=\"{name}\"}} {}",
+            peer["rekeys"].as_u64().unwrap_or_default()
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_key_phase{{peer=\"{name}\"}} {}",
+            peer["key_phase"].as_u64().unwrap_or_default()
+        );
+        let _ = writeln!(
+            output,
+            "rvpn_peer_last_activity_seconds{{peer=\"{name}\"}} {}",
+            peer["last_activity_secs"].as_u64().unwrap_or_default()
+        );
+        for (direction, field) in [
+            ("rx", "rx_limit_mib_per_sec"),
+            ("tx", "tx_limit_mib_per_sec"),
+        ] {
+            let limit = peer[field].as_u64().unwrap_or_default();
+            let _ = writeln!(
+                output,
+                "rvpn_peer_rate_limit_bytes_per_second{{peer=\"{name}\",direction=\"{direction}\"}} {}",
+                limit.saturating_mul(1_048_576)
+            );
+        }
     }
     for (name, field) in [
         ("rvpn_transport_bytes_sent_total", "bytes_sent"),
         ("rvpn_transport_bytes_received_total", "bytes_received"),
         ("rvpn_transport_packets_sent_total", "packets_sent"),
         ("rvpn_transport_packets_received_total", "packets_received"),
-        ("rvpn_transport_dropped_oversized_total", "dropped_oversized"),
-        ("rvpn_transport_dropped_backpressure_total", "dropped_backpressure"),
+        (
+            "rvpn_transport_dropped_oversized_total",
+            "dropped_oversized",
+        ),
+        (
+            "rvpn_transport_dropped_backpressure_total",
+            "dropped_backpressure",
+        ),
         ("rvpn_transport_send_errors_total", "send_errors"),
-        ("rvpn_transport_congestion_events_total", "congestion_events"),
+        (
+            "rvpn_transport_congestion_events_total",
+            "congestion_events",
+        ),
         ("rvpn_transport_mtu_changes_total", "mtu_changes"),
     ] {
-        let _ = writeln!(output, "{name} {}", transport[field].as_u64().unwrap_or_default());
+        let _ = writeln!(
+            output,
+            "{name} {}",
+            transport[field].as_u64().unwrap_or_default()
+        );
     }
     output
 }

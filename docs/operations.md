@@ -192,5 +192,6 @@ mode `0600` inside an owner-only runtime directory. The page keeps the token
 in the browser's session storage and sends it only to the loopback portal API.
 The portal shows live peer rates and totals, transport counters, shaping and
 drop information, queue delay, and a rolling 15-minute aggregate rate chart.
-History remains in memory and resets when the server restarts. The portal
-currently requires a Unix platform.
+Its bearer-authenticated `GET /metrics` endpoint also provides Prometheus text
+exposition for peer and transport counters. History remains in memory and
+resets when the server restarts. The portal currently requires a Unix platform.
