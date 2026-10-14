@@ -11,8 +11,8 @@ Group=rvpn
 RuntimeDirectory=rvpn
 RuntimeDirectoryMode=0700
 Environment=RVPN_RUNTIME_DIR=/run/rvpn
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/rvpn-server /var/lib/rvpn/.config/rvpn/server.toml
 Restart=on-failure
 RestartSec=2

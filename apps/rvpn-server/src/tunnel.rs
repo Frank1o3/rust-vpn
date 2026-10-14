@@ -1,4 +1,6 @@
 use anyhow::Result;
+#[cfg(unix)]
+use ipnet::IpNet;
 use rvpn_config::{CertificateAuthorityConfig, PeerIdentity, ServerConfig};
 use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
@@ -330,6 +332,14 @@ pub async fn run_server_loop(
     ));
     #[cfg(unix)]
     let portal_status_rx = status_rx.clone();
+    #[cfg(unix)]
+    let portal_addresses = config
+        .interface
+        .address
+        .iter()
+        .chain(&config.interface.addresses)
+        .map(|address| address.parse::<IpNet>().map(|network| network.addr()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let status_task = tokio::spawn(async move {
         if let Err(error) = crate::status::serve(status_rx).await {
             tracing::error!(%error, "server status socket failed");
@@ -337,7 +347,7 @@ pub async fn run_server_loop(
     });
     #[cfg(unix)]
     let portal_task = tokio::spawn(async move {
-        if let Err(error) = crate::portal::serve(portal_status_rx).await {
+        if let Err(error) = crate::portal::serve(portal_status_rx, portal_addresses).await {
             tracing::error!(%error, "server metrics portal failed");
         }
     });

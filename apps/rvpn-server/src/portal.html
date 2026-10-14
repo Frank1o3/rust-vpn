@@ -281,49 +281,6 @@
       margin-top: 14px
     }
 
-    .auth {
-      max-width: 420px;
-      margin: 15vh auto;
-      padding: 26px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      border-radius: 16px
-    }
-
-    .auth h1 {
-      margin-bottom: 7px
-    }
-
-    .auth p {
-      color: var(--muted)
-    }
-
-    input {
-      width: 100%;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      background: #0a1219;
-      color: var(--text);
-      margin: 9px 0 12px
-    }
-
-    button {
-      cursor: pointer;
-      border: 0;
-      background: var(--teal);
-      color: #071410;
-      font-weight: 700;
-      padding: 11px 16px;
-      border-radius: 9px
-    }
-
-    button.secondary {
-      background: #1c2b38;
-      color: var(--text);
-      border: 1px solid var(--line)
-    }
-
     .error {
       color: var(--red);
       min-height: 20px;
@@ -374,7 +331,7 @@
 </head>
 
 <body>
-  <main id="app" hidden>
+  <main id="app">
     <header>
       <div class="brand">
         <div class="mark">RV</div>
@@ -383,8 +340,7 @@
           <div class="sub">RVPN · local metrics portal</div>
         </div>
       </div>
-      <div class="connection"><i id="dot" class="dot"></i><span id="updated">Connecting…</span><button class="secondary"
-          id="logout">Lock</button></div>
+      <div class="connection"><i id="dot" class="dot"></i><span id="updated">Connecting…</span></div>
     </header>
     <section class="cards">
       <article class="card">
@@ -450,19 +406,8 @@
     <div class="foot"><span>Metrics are held in memory and reset when the server restarts.</span><span
         id="clock"></span></div>
   </main>
-  <section class="auth" id="auth">
-    <div class="brand">
-      <div class="mark">RV</div>
-      <h1>Unlock local portal</h1>
-    </div>
-    <p>Enter the access token from the local portal token file.</p>
-    <form id="login"><input id="token" type="password" autocomplete="current-password" placeholder="Portal access token"
-        required><button type="submit">Unlock dashboard</button>
-      <div class="error" id="auth-error"></div>
-    </form>
-  </section>
   <script>
-    const $ = id => document.getElementById(id); let token = sessionStorage.getItem('rvpn-portal-token') || ''; let previous = null;
+    const $ = id => document.getElementById(id);
     const fmtBytes = n => { let v = Number(n) || 0, u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'], i = 0; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ } return `${v.toFixed(i ? 1 : 0)} ${u[i]}` };
     const fmtRate = n => `${Number(n || 0).toFixed(2)} MiB/s`;
     const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -474,8 +419,8 @@
       $('peers').innerHTML = peers.length ? peers.map(p => `<tr><td class="peer">${esc(p.name)}</td><td class="online">Connected</td><td>${(+p.rx_rate || 0).toFixed(3)}</td><td>${(+p.tx_rate || 0).toFixed(3)}</td><td>${fmtBytes(p.rx_payload_bytes)}</td><td>${fmtBytes(p.tx_payload_bytes)}</td><td>${limit(p.rx_limit_mib_per_sec)} / ${limit(p.tx_limit_mib_per_sec)}</td><td>${p.rx_limited_drops || 0} / ${p.tx_queue_drops || 0} / ${p.dropped_packets || 0}</td><td>${(+p.avg_queue_delay_ms || 0).toFixed(2)} ms</td><td>${p.key_phase || 0}</td><td>${p.last_activity_secs || 0}s ago</td></tr>`).join('') : '<tr><td colspan="11" class="empty">No authenticated peers are connected.</td></tr>';
       draw(d.history || []); $('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`; $('dot').classList.add('live'); $('clock').textContent = new Date().toLocaleDateString();
     }
-    async function poll() { if (!token) return; try { let r = await fetch('/api/metrics', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }); if (r.status === 401) throw Error('Token rejected. Check the token file and try again.'); if (!r.ok) throw Error(`Portal returned ${r.status}`); render(await r.json()); $('auth').hidden = true; $('app').hidden = false; } catch (e) { $('dot').classList.remove('live'); $('updated').textContent = 'Portal disconnected'; if ($('app').hidden) { $('auth-error').textContent = e.message; } } }
-    $('login').addEventListener('submit', async e => { e.preventDefault(); token = $('token').value.trim(); sessionStorage.setItem('rvpn-portal-token', token); await poll() }); $('logout').addEventListener('click', () => { token = ''; sessionStorage.removeItem('rvpn-portal-token'); $('app').hidden = true; $('auth').hidden = false; $('token').value = '' }); if (token) { $('auth').hidden = true; $('app').hidden = false; poll() } setInterval(poll, 2000);
+    async function poll() { try { let r = await fetch('/api/metrics', { cache: 'no-store' }); if (!r.ok) throw Error(`Portal returned ${r.status}`); render(await r.json()); } catch (e) { $('dot').classList.remove('live'); $('updated').textContent = 'Portal disconnected'; } }
+    poll(); setInterval(poll, 2000);
   </script>
 </body>
 

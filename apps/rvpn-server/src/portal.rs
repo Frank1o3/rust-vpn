@@ -1,9 +1,13 @@
-//! Loopback-only metrics portal with a bearer token stored in a private runtime file.
+//! Read-only metrics portal served on loopback and configured tunnel addresses.
 
-use anyhow::{Context, Result};
-use rand::{TryRng, rngs::SysRng};
+use anyhow::Result;
 use serde_json::{Value, json};
-use std::{collections::VecDeque, io, path::PathBuf, time::Duration};
+use std::{
+    collections::VecDeque,
+    io,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -11,125 +15,89 @@ use tokio::{
     time::{interval, timeout},
 };
 
-const PORTAL_ADDRESS: &str = "127.0.0.1:9842";
+const PORTAL_PORT: u16 = 9842;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const HISTORY_SAMPLES: usize = 180;
 
-fn runtime_dir() -> PathBuf {
-    if let Ok(path) = std::env::var("RVPN_RUNTIME_DIR") {
-        PathBuf::from(path)
-    } else if let Ok(path) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(path).join("rvpn")
-    } else {
-        let uid = unsafe { libc::getuid() };
-        PathBuf::from(format!("/tmp/rvpn-{uid}"))
-    }
-}
+pub async fn serve(status: watch::Receiver<String>, tunnel_addresses: Vec<IpAddr>) -> Result<()> {
+    let mut addresses = vec![
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+    ];
+    addresses.extend(tunnel_addresses);
+    addresses.sort();
+    addresses.dedup();
 
-fn token_file() -> PathBuf {
-    runtime_dir().join("portal.token")
-}
-
-async fn create_token() -> Result<String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = runtime_dir();
-    tokio::fs::create_dir_all(&dir).await?;
-    tokio::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).await?;
-    let mut random = [0u8; 32];
-    SysRng
-        .try_fill_bytes(&mut random)
-        .map_err(|error| anyhow::anyhow!("generating portal token: {error}"))?;
-    let token = hex::encode(random);
-    let mut token_handle = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(token_file())
-        .await?;
-    token_handle
-        .write_all(format!("{token}\n").as_bytes())
-        .await?;
-    token_handle.flush().await?;
-    tokio::fs::set_permissions(token_file(), std::fs::Permissions::from_mode(0o600)).await?;
-    Ok(token)
-}
-
-pub async fn serve(mut status: watch::Receiver<String>) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let token = create_token().await?;
-    let listener = match TcpListener::bind(PORTAL_ADDRESS).await {
-        Ok(listener) => listener,
-        Err(error) => {
-            let _ = tokio::fs::remove_file(token_file()).await;
-            return Err(error)
-                .with_context(|| format!("binding local metrics portal at {PORTAL_ADDRESS}"));
+    let mut listeners = Vec::with_capacity(addresses.len());
+    for ip in addresses {
+        let address = SocketAddr::new(ip, PORTAL_PORT);
+        match TcpListener::bind(address).await {
+            Ok(listener) => {
+                tracing::info!(address = %listener.local_addr()?, "metrics portal ready");
+                listeners.push(listener);
+            }
+            Err(error) => tracing::warn!(%address, %error, "could not bind metrics portal address"),
         }
-    };
-    let local_address = listener.local_addr()?;
-    tracing::info!(
-        address = %local_address,
-        token_file = %token_file().display(),
-        "local metrics portal ready"
-    );
+    }
+    if listeners.is_empty() {
+        anyhow::bail!("metrics portal could not bind to any configured address");
+    }
 
+    let mut tasks = tokio::task::JoinSet::new();
+    for listener in listeners {
+        tasks.spawn(serve_listener(listener, status.clone()));
+    }
+    while let Some(result) = tasks.join_next().await {
+        result??;
+    }
+    Ok(())
+}
+
+async fn serve_listener(listener: TcpListener, mut status: watch::Receiver<String>) -> Result<()> {
     let mut sample_tick = interval(Duration::from_secs(5));
     let mut history: VecDeque<Value> = VecDeque::with_capacity(HISTORY_SAMPLES);
     let request_slots = std::sync::Arc::new(Semaphore::new(32));
-    let result = async {
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    let (stream, remote) = accepted?;
-                    if !remote.ip().is_loopback() {
-                        continue;
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, _remote) = accepted?;
+                let Ok(slot) = std::sync::Arc::clone(&request_slots).try_acquire_owned() else {
+                    continue;
+                };
+                let snapshot = (*status.borrow()).clone();
+                let recent: Vec<Value> = history.iter().cloned().collect();
+                tokio::spawn(async move {
+                    let _slot = slot;
+                    if let Err(error) = handle_request(stream, snapshot, recent).await {
+                        tracing::debug!(%error, "metrics portal request failed");
                     }
-                    let Ok(slot) = std::sync::Arc::clone(&request_slots).try_acquire_owned() else {
-                        continue;
-                    };
-                    let snapshot = (*status.borrow()).clone();
-                    let recent: Vec<Value> = history.iter().cloned().collect();
-                    let token = token.clone();
-                    tokio::spawn(async move {
-                        let _slot = slot;
-                        if let Err(error) = handle_request(stream, snapshot, recent, token).await {
-                            tracing::debug!(%error, "metrics portal request failed");
-                        }
-                    });
+                });
+            }
+            _ = sample_tick.tick() => {
+                let snapshot = (*status.borrow_and_update()).clone();
+                let peers = parse_snapshot(&snapshot).0;
+                let rx: f64 = peers.iter().map(|peer| number(peer, "rx_rate")).sum();
+                let tx: f64 = peers.iter().map(|peer| number(peer, "tx_rate")).sum();
+                history.push_back(json!({
+                    "time": unix_time(),
+                    "rx": rx,
+                    "tx": tx,
+                }));
+                if history.len() > HISTORY_SAMPLES {
+                    history.pop_front();
                 }
-                _ = sample_tick.tick() => {
-                    let snapshot = (*status.borrow_and_update()).clone();
-                    let peers = parse_snapshot(&snapshot).0;
-                    let rx: f64 = peers.iter().map(|peer| number(peer, "rx_rate")).sum();
-                    let tx: f64 = peers.iter().map(|peer| number(peer, "tx_rate")).sum();
-                    history.push_back(json!({
-                        "time": unix_time(),
-                        "rx": rx,
-                        "tx": tx,
-                    }));
-                    if history.len() > HISTORY_SAMPLES {
-                        history.pop_front();
-                    }
-                }
-                changed = status.changed() => {
-                    if changed.is_err() { return Ok(()); }
-                }
+            }
+            changed = status.changed() => {
+                if changed.is_err() { return Ok(()); }
             }
         }
     }
-    .await;
-    let _ = tokio::fs::remove_file(token_file()).await;
-    let _ = tokio::fs::set_permissions(runtime_dir(), std::fs::Permissions::from_mode(0o700)).await;
-    result
 }
 
 async fn handle_request(
     mut stream: TcpStream,
     snapshot: String,
     history: Vec<Value>,
-    token: String,
 ) -> io::Result<()> {
     let mut request = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
@@ -163,11 +131,6 @@ async fn handle_request(
     let mut request_parts = first.split_whitespace();
     let method = request_parts.next().unwrap_or_default();
     let path = request_parts.next().unwrap_or_default();
-    let auth = lines.find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("authorization")
-            .then(|| value.trim())
-    });
 
     let (status, content_type, body) = if method != "GET" {
         (
@@ -182,30 +145,14 @@ async fn handle_request(
             include_str!("portal.html").to_string(),
         )
     } else if path == "/api/metrics" {
-        if !auth.is_some_and(|value| bearer_matches(value, &token)) {
-            (
-                "401 Unauthorized",
-                "application/json",
-                "{\"error\":\"unauthorized\"}".to_string(),
-            )
-        } else {
-            let body = portal_json(&snapshot, history);
-            ("200 OK", "application/json; charset=utf-8", body)
-        }
+        let body = portal_json(&snapshot, history);
+        ("200 OK", "application/json; charset=utf-8", body)
     } else if path == "/metrics" {
-        if !auth.is_some_and(|value| bearer_matches(value, &token)) {
-            (
-                "401 Unauthorized",
-                "text/plain; charset=utf-8",
-                "unauthorized\n".to_string(),
-            )
-        } else {
-            (
-                "200 OK",
-                "text/plain; version=0.0.4; charset=utf-8",
-                prometheus_metrics(&snapshot),
-            )
-        }
+        (
+            "200 OK",
+            "text/plain; version=0.0.4; charset=utf-8",
+            prometheus_metrics(&snapshot),
+        )
     } else {
         (
             "404 Not Found",
@@ -221,20 +168,6 @@ async fn handle_request(
     stream.write_all(headers.as_bytes()).await?;
     stream.write_all(body.as_bytes()).await?;
     stream.shutdown().await
-}
-
-fn bearer_matches(header: &str, expected: &str) -> bool {
-    let Some(supplied) = header.strip_prefix("Bearer ") else {
-        return false;
-    };
-    if supplied.len() != expected.len() {
-        return false;
-    }
-    supplied
-        .bytes()
-        .zip(expected.bytes())
-        .fold(0u8, |difference, (a, b)| difference | (a ^ b))
-        == 0
 }
 
 fn portal_json(snapshot: &str, history: Vec<Value>) -> String {

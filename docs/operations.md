@@ -179,19 +179,13 @@ requires a Unix platform.
 
 ## Local metrics portal
 
-On Unix, the server also serves a browser dashboard at
-`http://127.0.0.1:9842`. It binds only to loopback. Open the portal on the
-server host, or forward the port over SSH with
-`ssh -L 9842:127.0.0.1:9842 <server>` and open the same address locally.
-
-The first page asks for a bearer token. Read it from
-`$RVPN_RUNTIME_DIR/portal.token`, `$XDG_RUNTIME_DIR/rvpn/portal.token`, or
-`/tmp/rvpn-<uid>/portal.token` according to which runtime path is active. For
-the systemd service, use `sudo cat /run/rvpn/portal.token`. The token file is
-mode `0600` inside an owner-only runtime directory. The page keeps the token
-in the browser's session storage and sends it only to the loopback portal API.
-The portal shows live peer rates and totals, transport counters, shaping and
-drop information, queue delay, and a rolling 15-minute aggregate rate chart.
-Its bearer-authenticated `GET /metrics` endpoint also provides Prometheus text
-exposition for peer and transport counters. History remains in memory and
-resets when the server restarts. The portal currently requires a Unix platform.
+On Unix, the server serves a browser dashboard at port `9842` on loopback and
+each configured tunnel address. Open `http://127.0.0.1:9842` on the server or
+`http://<server-tunnel-ip>:9842` through the tunnel, using an address configured
+under `[interface].address` or `[interface].addresses` in `server.toml`. Put
+IPv6 literals in brackets in the URL. The portal does not require login. Its
+read-only dashboard and Prometheus `GET /metrics` endpoint are accessible to
+anyone who can reach one of those addresses. It shows live peer rates and
+totals, transport counters, shaping and drop information, queue delay, and a
+rolling 15-minute aggregate rate chart. History remains in memory and resets
+when the server restarts. The portal currently requires a Unix platform.
