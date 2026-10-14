@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>RVPN · Operations</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1118;
+      --panel: #111b25;
+      --line: #243342;
+      --muted: #91a4b6;
+      --text: #e6eff6;
+      --teal: #55dbc1;
+      --blue: #74a9ff;
+      --amber: #f3bd68;
+      --red: #ff8078;
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(ellipse at 80% -20%, #193342 0, transparent 45%), var(--bg);
+      color: var(--text);
+      font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    main {
+      max-width: 1280px;
+      margin: auto;
+      padding: 34px 28px 56px
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 30px
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border: 1px solid #356276;
+      border-radius: 13px;
+      color: var(--teal);
+      font-weight: 800;
+      letter-spacing: -2px;
+      background: #12242e
+    }
+
+    h1 {
+      font-size: 22px;
+      letter-spacing: -.04em;
+      margin: 0
+    }
+
+    .sub {
+      color: var(--muted);
+      font-size: 12px
+    }
+
+    .connection {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--red)
+    }
+
+    .dot.live {
+      background: var(--teal);
+      box-shadow: 0 0 12px #55dbc177
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-bottom: 16px
+    }
+
+    .panel,
+    .card {
+      border: 1px solid var(--line);
+      background: linear-gradient(145deg, #121e29f2, #101821f2);
+      border-radius: 14px
+    }
+
+    .card {
+      padding: 17px 18px;
+      min-height: 102px
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .11em
+    }
+
+    .value {
+      font-size: 25px;
+      font-weight: 650;
+      letter-spacing: -.04em;
+      margin-top: 6px;
+      font-variant-numeric: tabular-nums
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 2px
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(280px, .8fr);
+      gap: 16px;
+      margin-bottom: 16px
+    }
+
+    .panel {
+      padding: 20px
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px
+    }
+
+    h2 {
+      font-size: 14px;
+      margin: 0;
+      letter-spacing: -.01em
+    }
+
+    .badge {
+      color: var(--muted);
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 4px 9px
+    }
+
+    #chart {
+      width: 100%;
+      height: 240px;
+      display: block;
+      overflow: visible
+    }
+
+    .legend {
+      display: flex;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 10px
+    }
+
+    .legend span::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 3px;
+      background: var(--teal);
+      margin-right: 7px
+    }
+
+    .legend span+span::before {
+      background: var(--blue)
+    }
+
+    .transport {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px
+    }
+
+    .stat {
+      padding: 12px;
+      border: 1px solid #20303c;
+      border-radius: 10px
+    }
+
+    .stat .value {
+      font-size: 17px
+    }
+
+    .stat .label {
+      font-size: 10px
+    }
+
+    .table-wrap {
+      overflow: auto
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums
+    }
+
+    th {
+      text-align: right;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 550;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--line)
+    }
+
+    td {
+      text-align: right;
+      padding: 12px;
+      border-bottom: 1px solid #1d2b36;
+      font-size: 12px
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0
+    }
+
+    .peer {
+      font-weight: 600
+    }
+
+    .online {
+      color: var(--teal)
+    }
+
+    .offline {
+      color: var(--muted)
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 30px;
+      text-align: center
+    }
+
+    .foot {
+      display: flex;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 14px
+    }
+
+    .auth {
+      max-width: 420px;
+      margin: 15vh auto;
+      padding: 26px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 16px
+    }
+
+    .auth h1 {
+      margin-bottom: 7px
+    }
+
+    .auth p {
+      color: var(--muted)
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #0a1219;
+      color: var(--text);
+      margin: 9px 0 12px
+    }
+
+    button {
+      cursor: pointer;
+      border: 0;
+      background: var(--teal);
+      color: #071410;
+      font-weight: 700;
+      padding: 11px 16px;
+      border-radius: 9px
+    }
+
+    button.secondary {
+      background: #1c2b38;
+      color: var(--text);
+      border: 1px solid var(--line)
+    }
+
+    .error {
+      color: var(--red);
+      min-height: 20px;
+      font-size: 12px
+    }
+
+    @media(max-width:850px) {
+      .grid {
+        grid-template-columns: 1fr
+      }
+
+      .cards {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+      }
+    }
+
+    @media(max-width:520px) {
+      main {
+        padding: 24px 14px
+      }
+
+      .cards {
+        gap: 9px
+      }
+
+      .card {
+        padding: 13px;
+        min-height: 91px
+      }
+
+      .value {
+        font-size: 21px
+      }
+
+      header {
+        align-items: flex-start
+      }
+
+      .connection {
+        padding-top: 10px
+      }
+
+      .panel {
+        padding: 14px
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main id="app" hidden>
+    <header>
+      <div class="brand">
+        <div class="mark">RV</div>
+        <div>
+          <h1>Server operations</h1>
+          <div class="sub">RVPN · local metrics portal</div>
+        </div>
+      </div>
+      <div class="connection"><i id="dot" class="dot"></i><span id="updated">Connecting…</span><button class="secondary"
+          id="logout">Lock</button></div>
+    </header>
+    <section class="cards">
+      <article class="card">
+        <div class="label">Connected peers</div>
+        <div class="value" id="peer-count">—</div>
+        <div class="hint">Authenticated sessions</div>
+      </article>
+      <article class="card">
+        <div class="label">Inbound payload</div>
+        <div class="value" id="rx-rate">—</div>
+        <div class="hint">Current aggregate rate</div>
+      </article>
+      <article class="card">
+        <div class="label">Outbound payload</div>
+        <div class="value" id="tx-rate">—</div>
+        <div class="hint">Current aggregate rate</div>
+      </article>
+      <article class="card">
+        <div class="label">Queue pressure</div>
+        <div class="value" id="queue-delay">—</div>
+        <div class="hint">Average peer queue delay</div>
+      </article>
+    </section>
+    <section class="grid">
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Peer throughput</h2><span class="badge">Last 15 minutes · MiB/s</span>
+        </div><svg id="chart" viewBox="0 0 800 240" role="img" aria-label="Peer throughput history"></svg>
+        <div class="legend"><span>Inbound</span><span>Outbound</span></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head">
+          <h2>Transport health</h2><span class="badge">Since restart</span>
+        </div>
+        <div class="transport" id="transport"></div>
+      </article>
+    </section>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Peer details</h2><span class="badge" id="peer-badge">0 peers</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Peer</th>
+              <th>State</th>
+              <th>RX MiB/s</th>
+              <th>TX MiB/s</th>
+              <th>RX total</th>
+              <th>TX total</th>
+              <th>Limits RX / TX</th>
+              <th>Drops RX / TXQ / all</th>
+              <th>Avg queue</th>
+              <th>Phase</th>
+              <th>Last activity</th>
+            </tr>
+          </thead>
+          <tbody id="peers"></tbody>
+        </table>
+      </div>
+    </section>
+    <div class="foot"><span>Metrics are held in memory and reset when the server restarts.</span><span
+        id="clock"></span></div>
+  </main>
+  <section class="auth" id="auth">
+    <div class="brand">
+      <div class="mark">RV</div>
+      <h1>Unlock local portal</h1>
+    </div>
+    <p>Enter the access token from the local portal token file.</p>
+    <form id="login"><input id="token" type="password" autocomplete="current-password" placeholder="Portal access token"
+        required><button type="submit">Unlock dashboard</button>
+      <div class="error" id="auth-error"></div>
+    </form>
+  </section>
+  <script>
+    const $ = id => document.getElementById(id); let token = sessionStorage.getItem('rvpn-portal-token') || ''; let previous = null;
+    const fmtBytes = n => { let v = Number(n) || 0, u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'], i = 0; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++ } return `${v.toFixed(i ? 1 : 0)} ${u[i]}` };
+    const fmtRate = n => `${Number(n || 0).toFixed(2)} MiB/s`;
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    function draw(history) { const svg = $('chart'), w = 800, h = 240, p = 28; svg.replaceChildren(); const vals = history.flatMap(x => [x.rx, x.tx]), max = Math.max(.01, ...vals), n = Math.max(history.length, 2); for (let i = 0; i < 4; i++) { let y = p + (h - 2 * p) * i / 3; let line = document.createElementNS('http://www.w3.org/2000/svg', 'line'); line.setAttribute('x1', p); line.setAttribute('x2', w - p); line.setAttribute('y1', y); line.setAttribute('y2', y); line.setAttribute('stroke', '#263744'); svg.append(line); let text = document.createElementNS('http://www.w3.org/2000/svg', 'text'); text.setAttribute('x', 0); text.setAttribute('y', y + 4); text.setAttribute('fill', '#91a4b6'); text.setAttribute('font-size', '10'); text.textContent = (max * (3 - i) / 3).toFixed(2); svg.append(text) } for (const [key, color] of [['rx', '#55dbc1'], ['tx', '#74a9ff']]) { let path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); let points = history.map((x, i) => `${p + (w - 2 * p) * i / (n - 1)},${h - p - (h - 2 * p) * (x[key] || 0) / max}`); path.setAttribute('d', points.length ? 'M' + points.join(' L') : ''); path.setAttribute('fill', 'none'); path.setAttribute('stroke', color); path.setAttribute('stroke-width', '2.5'); path.setAttribute('stroke-linecap', 'round'); path.setAttribute('stroke-linejoin', 'round'); svg.append(path) } }
+    function render(d) {
+      const peers = d.peers || [], t = d.transport || {}; $('peer-count').textContent = peers.length; $('peer-badge').textContent = `${peers.length} peer${peers.length === 1 ? '' : 's'}`; $('rx-rate').textContent = fmtRate(peers.reduce((a, p) => a + (+p.rx_rate || 0), 0)); $('tx-rate').textContent = fmtRate(peers.reduce((a, p) => a + (+p.tx_rate || 0), 0)); const q = peers.map(p => +p.avg_queue_delay_ms || 0); $('queue-delay').textContent = `${q.length ? (q.reduce((a, b) => a + b, 0) / q.length).toFixed(1) : '0.0'} ms`;
+      $('transport').innerHTML = [['Sent', fmtBytes(t.bytes_sent)], ['Received', fmtBytes(t.bytes_received)], ['Datagrams sent', t.packets_sent || 0], ['Datagrams received', t.packets_received || 0], ['Send errors', t.send_errors || 0], ['Queue drops', t.dropped_backpressure || 0], ['Oversized drops', t.dropped_oversized || 0], ['MTU changes', t.mtu_changes || 0]].map(([a, b]) => `<div class="stat"><div class="label">${a}</div><div class="value">${b}</div></div>`).join('');
+      const limit = n => Number(n) === 0 ? 'unlimited' : `${n} MiB/s`;
+      $('peers').innerHTML = peers.length ? peers.map(p => `<tr><td class="peer">${esc(p.name)}</td><td class="online">Connected</td><td>${(+p.rx_rate || 0).toFixed(3)}</td><td>${(+p.tx_rate || 0).toFixed(3)}</td><td>${fmtBytes(p.rx_payload_bytes)}</td><td>${fmtBytes(p.tx_payload_bytes)}</td><td>${limit(p.rx_limit_mib_per_sec)} / ${limit(p.tx_limit_mib_per_sec)}</td><td>${p.rx_limited_drops || 0} / ${p.tx_queue_drops || 0} / ${p.dropped_packets || 0}</td><td>${(+p.avg_queue_delay_ms || 0).toFixed(2)} ms</td><td>${p.key_phase || 0}</td><td>${p.last_activity_secs || 0}s ago</td></tr>`).join('') : '<tr><td colspan="11" class="empty">No authenticated peers are connected.</td></tr>';
+      draw(d.history || []); $('updated').textContent = `Updated ${new Date().toLocaleTimeString()}`; $('dot').classList.add('live'); $('clock').textContent = new Date().toLocaleDateString();
+    }
+    async function poll() { if (!token) return; try { let r = await fetch('/api/metrics', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' }); if (r.status === 401) throw Error('Token rejected. Check the token file and try again.'); if (!r.ok) throw Error(`Portal returned ${r.status}`); render(await r.json()); $('auth').hidden = true; $('app').hidden = false; } catch (e) { $('dot').classList.remove('live'); $('updated').textContent = 'Portal disconnected'; if ($('app').hidden) { $('auth-error').textContent = e.message; } } }
+    $('login').addEventListener('submit', async e => { e.preventDefault(); token = $('token').value.trim(); sessionStorage.setItem('rvpn-portal-token', token); await poll() }); $('logout').addEventListener('click', () => { token = ''; sessionStorage.removeItem('rvpn-portal-token'); $('app').hidden = true; $('auth').hidden = false; $('token').value = '' }); if (token) { $('auth').hidden = true; $('app').hidden = false; poll() } setInterval(poll, 2000);
+  </script>
+</body>
+
+</html>

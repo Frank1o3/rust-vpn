@@ -13,7 +13,10 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::time::{Instant, interval, sleep};
+use tokio::{
+    sync::watch,
+    time::{Instant, interval, sleep},
+};
 
 use crate::firewall::ForwardingGuard;
 use crate::handshake::{
@@ -86,7 +89,7 @@ fn seal_and_queue(
     if let Err(error) = outbound.try_enqueue_for_peer(peer_queue_key(peer), peer.endpoint, wire) {
         transport.record_dropped_backpressure();
         if matches!(kind, PacketKind::Data | PacketKind::DataTap) {
-            peer.stats.record_drop();
+            peer.stats.record_tx_queue_drop();
         }
         tracing::debug!(peer = %peer.identity.name, %error, "outbound queue full; dropping packet");
         return None;
@@ -249,7 +252,7 @@ async fn route_inbound(
     if let Some(peer) = active.get_mut(&session_id)
         && !peer.rx_limiter.allow(payload.len())
     {
-        peer.stats.record_drop();
+        peer.stats.record_rx_limited_drop();
         tracing::debug!(peer = %peer.identity.name, bytes = payload.len(), "inbound peer rate limit exceeded");
         return;
     }
@@ -321,6 +324,24 @@ pub async fn run_server_loop(
     let (outbound, mut outbound_rx) = OutboundQueue::new_with_rate(1024, tx_rate_bytes_per_sec);
     let mut sweep = interval(Duration::from_secs(10));
     let mut stats_log = interval(Duration::from_secs(60));
+    let mut status_tick = interval(Duration::from_secs(1));
+    let (status_tx, status_rx) = watch::channel(String::from(
+        "STATUS\tname\tconnected\trx_packets\trx_payload_bytes\trx_wire_bytes\ttx_packets\ttx_payload_bytes\ttx_wire_bytes\trx_mib_per_sec\ttx_mib_per_sec\trx_limit_mib_per_sec\ttx_limit_mib_per_sec\trx_limited_drops\ttx_queue_drops\tdropped_packets\trekeys\tkey_phase\tlast_activity_secs\tavg_queue_delay_ms\tmax_queue_delay_ms\n",
+    ));
+    #[cfg(unix)]
+    let portal_status_rx = status_rx.clone();
+    let status_task = tokio::spawn(async move {
+        if let Err(error) = crate::status::serve(status_rx).await {
+            tracing::error!(%error, "server status socket failed");
+        }
+    });
+    #[cfg(unix)]
+    let portal_task = tokio::spawn(async move {
+        if let Err(error) = crate::portal::serve(portal_status_rx).await {
+            tracing::error!(%error, "server metrics portal failed");
+        }
+    });
+    let mut previous_status: HashMap<SessionId, (Instant, u64, u64)> = HashMap::new();
     let idle_timeout = config.liveness.timeout();
     let rekey_grace_period = config.rekey.grace_period();
     let mut recv_errors = 0u32;
@@ -383,6 +404,71 @@ pub async fn run_server_loop(
                         );
                     }
                 }
+                _ = status_tick.tick() => {
+                    let now = Instant::now();
+                    let mut snapshot = String::from(
+                        "STATUS\tname\tconnected\trx_packets\trx_payload_bytes\trx_wire_bytes\ttx_packets\ttx_payload_bytes\ttx_wire_bytes\trx_mib_per_sec\ttx_mib_per_sec\trx_limit_mib_per_sec\ttx_limit_mib_per_sec\trx_limited_drops\ttx_queue_drops\tdropped_packets\trekeys\tkey_phase\tlast_activity_secs\tavg_queue_delay_ms\tmax_queue_delay_ms\n"
+                    );
+                    let mut present = std::collections::HashSet::new();
+                    for (session_id, peer) in &active {
+                        let name = crate::status::field(&peer.identity.name);
+                        present.insert(*session_id);
+                        let prior = previous_status.insert(
+                            *session_id,
+                            (now, peer.stats.rx_payload_bytes, peer.stats.tx_payload_bytes),
+                        );
+                        let (rx_rate, tx_rate) = prior.map_or((0.0, 0.0), |(at, rx, tx)| {
+                            let elapsed = now.duration_since(at).as_secs_f64().max(0.001);
+                            (
+                                peer.stats.rx_payload_bytes.saturating_sub(rx) as f64 / elapsed / 1_048_576.0,
+                                peer.stats.tx_payload_bytes.saturating_sub(tx) as f64 / elapsed / 1_048_576.0,
+                            )
+                        });
+                        use std::fmt::Write as _;
+                        let _ = writeln!(
+                            snapshot,
+                            "PEER\t{name}\tconnected\t{}\t{}\t{}\t{}\t{}\t{}\t{rx_rate:.3}\t{tx_rate:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}",
+                            peer.stats.rx_packets,
+                            peer.stats.rx_payload_bytes,
+                            peer.stats.rx_wire_bytes,
+                            peer.stats.tx_packets,
+                            peer.stats.tx_payload_bytes,
+                            peer.stats.tx_wire_bytes,
+                            config.limits.rx_mib_per_sec,
+                            config.limits.tx_mib_per_sec,
+                            peer.stats.rx_limited_drops,
+                            peer.stats.tx_queue_drops,
+                            peer.stats.dropped_packets,
+                            peer.stats.rekeys,
+                            peer.session.key_phase(),
+                            peer.last_rx.elapsed().as_secs(),
+                            if peer.stats.queue_delay_samples == 0 { 0.0 } else {
+                                peer.stats.queue_delay_total_micros as f64
+                                    / peer.stats.queue_delay_samples as f64 / 1000.0
+                            },
+                            peer.stats.queue_delay_max_micros as f64 / 1000.0,
+                        );
+                    }
+                    let metrics = transport.metrics_snapshot();
+                    use std::fmt::Write as _;
+                    let _ = writeln!(
+                        snapshot,
+                        "TRANSPORT\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        metrics.bytes_sent,
+                        metrics.bytes_received,
+                        metrics.packets_sent,
+                        metrics.packets_received,
+                        metrics.packets_dropped_oversized,
+                        metrics.packets_dropped_backpressure,
+                        metrics.send_errors,
+                        metrics.congestion_events,
+                        metrics.keepalives_sent,
+                        metrics.keepalives_skipped,
+                        metrics.mtu_changes,
+                    );
+                    previous_status.retain(|session_id, _| present.contains(session_id));
+                    let _ = status_tx.send(snapshot);
+                }
                 () = keepalive.wait_for_due() => {
                     for peer in active.values_mut() {
                         match peer.session.seal(PacketKind::Keepalive, b"") {
@@ -402,10 +488,15 @@ pub async fn run_server_loop(
                     keepalive.record_keepalive_sent();
                 }
                 queued = outbound_rx.recv() => {
-                    if let Some(datagram) = queued
-                        && let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await
-                    {
-                        tracing::debug!(%e, "queued datagram send failed");
+                    if let Some(datagram) = queued {
+                        if let Some(key) = datagram.peer_key
+                            && let Some(peer) = active.values_mut().find(|peer| peer_queue_key(peer) == key)
+                        {
+                            peer.stats.record_queue_delay(datagram.queue_delay);
+                        }
+                        if let Err(e) = send_wire(&transport, datagram.peer, datagram.payload).await {
+                            tracing::debug!(%e, "queued datagram send failed");
+                        }
                     }
                 }
                 outbound_tun = async {
@@ -626,6 +717,14 @@ pub async fn run_server_loop(
     }
     .await;
 
+    drop(status_tx);
+    if let Err(error) = status_task.await {
+        tracing::debug!(%error, "server status socket task stopped");
+    }
+    #[cfg(unix)]
+    if let Err(error) = portal_task.await {
+        tracing::debug!(%error, "server metrics portal task stopped");
+    }
     close_all(&transport, &mut active, obfuscation).await;
     forwarding.cleanup();
     result

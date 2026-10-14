@@ -19,6 +19,9 @@ const MAX_TRACKED_PEERS: usize = 8192;
 pub struct QueuedDatagram {
     pub peer: SocketAddr,
     pub payload: Bytes,
+    pub peer_key: Option<[u8; 16]>,
+    pub queue_delay: Duration,
+    enqueued_at: Instant,
 }
 
 #[derive(Debug)]
@@ -211,6 +214,12 @@ impl OutboundQueue {
         peer_queue.packets.push_back(QueuedDatagram {
             peer: endpoint,
             payload,
+            peer_key: match key {
+                QueueKey::Stable(key) => Some(key),
+                QueueKey::Endpoint(_) => None,
+            },
+            queue_delay: Duration::ZERO,
+            enqueued_at: now,
         });
         peer_queue.last_activity = now;
         state.queued += 1;
@@ -270,7 +279,10 @@ impl OutboundQueueReceiver {
                         }
                     }
                     peer_queue.deficit -= packet_size;
-                    let packet = peer_queue.packets.pop_front();
+                    let mut packet = peer_queue.packets.pop_front();
+                    if let Some(packet) = &mut packet {
+                        packet.queue_delay = packet.enqueued_at.elapsed();
+                    }
                     peer_queue.last_activity = Instant::now();
                     let mut remove_peer = false;
                     if peer_queue.packets.is_empty() {

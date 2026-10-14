@@ -1,7 +1,10 @@
 mod firewall;
 mod handshake;
 mod network;
+#[cfg(unix)]
+mod portal;
 mod state;
+mod status;
 mod tunnel;
 
 use anyhow::{Context, Result};

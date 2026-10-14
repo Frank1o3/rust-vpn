@@ -3,11 +3,7 @@ use rvpn_core::SessionId;
 use rvpn_crypto::ObfuscationKey;
 use rvpn_protocol::{Packet, PacketKind, ProtectedSession, ResponderHandshake};
 use rvpn_transport::{SendOptions, UdpTransport};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    time::Instant,
-};
+use std::{collections::HashMap, net::SocketAddr, time::Instant};
 
 pub struct ActivePeer {
     pub identity: PeerIdentity,
@@ -74,6 +70,11 @@ pub struct PeerStats {
     pub tx_payload_bytes: u64,
     pub tx_wire_bytes: u64,
     pub dropped_packets: u64,
+    pub rx_limited_drops: u64,
+    pub tx_queue_drops: u64,
+    pub queue_delay_samples: u64,
+    pub queue_delay_total_micros: u64,
+    pub queue_delay_max_micros: u64,
     pub rekeys: u64,
 }
 
@@ -92,6 +93,23 @@ impl PeerStats {
 
     pub fn record_drop(&mut self) {
         self.dropped_packets = self.dropped_packets.saturating_add(1);
+    }
+
+    pub fn record_rx_limited_drop(&mut self) {
+        self.record_drop();
+        self.rx_limited_drops = self.rx_limited_drops.saturating_add(1);
+    }
+
+    pub fn record_tx_queue_drop(&mut self) {
+        self.record_drop();
+        self.tx_queue_drops = self.tx_queue_drops.saturating_add(1);
+    }
+
+    pub fn record_queue_delay(&mut self, delay: std::time::Duration) {
+        let micros = u64::try_from(delay.as_micros()).unwrap_or(u64::MAX);
+        self.queue_delay_samples = self.queue_delay_samples.saturating_add(1);
+        self.queue_delay_total_micros = self.queue_delay_total_micros.saturating_add(micros);
+        self.queue_delay_max_micros = self.queue_delay_max_micros.max(micros);
     }
 
     pub fn record_rekey(&mut self) {

@@ -135,9 +135,13 @@ and key management conservative.
 ## Current implementation progress
 
 - Implemented: authenticated per-peer payload and wire-byte totals,
-  packet/drop counts, last activity, and completed rekeys are kept in memory
-  and logged once a minute. They reset on restart and are not exposed through
-  an API.
+  packet/drop counts, last activity, inbound policing drops, outbound queue
+  drops, and completed rekeys are kept in memory and logged once a minute.
+  A Unix-only, owner-permissioned local status socket now exposes these totals,
+  one-second payload rates, configured shaping limits, key phase, and activity
+  age without exposing keys. A loopback-only token-authenticated metrics portal
+  also shows transport counters and a bounded 15-minute rate chart. Counters
+  reset on restart.
 - Implemented: outbound datagrams use bounded per-endpoint queues with deficit
   round-robin scheduling. The queue has a global capacity and caps each
   endpoint at 256 pending datagrams.
@@ -150,20 +154,23 @@ and key management conservative.
   target exist. Expand the adversarial fuzz corpus and keep fuzzing under issue
   14. Empty effective certificate peer prefixes are now rejected at handshake
   time as well as being blocked by routing (issue 6).
-- Partially implemented: section 4's cookie challenge limits and in-memory
-  peer counters are implemented. Persistent history and a server status API
-  remain future work.
+- Partially implemented: section 4's cookie challenge limits, in-memory peer
+  counters, local status socket, and authenticated metrics portal are
+  implemented. Persistent history and per-upstream DNS failure metrics remain
+  future work.
 - Partially implemented: section 5 has transport benchmarks, but repeatable
   authentication, routing, queueing, and TUN/TAP injection benchmarks remain
   to be added.
 - Partially implemented: section 6's bounded per-peer outbound queues,
-  deficit round-robin scheduling, and transport MTU metrics exist. Queue delay
-  and detailed local congestion/drop attribution remain future work.
+  deficit round-robin scheduling, and transport MTU metrics exist. The local
+  peer status reports average and maximum outbound queue delay. Detailed local
+  congestion/drop attribution remains future work.
 - Partially implemented: section 7 now has configurable upstream timeouts,
   retries, and an optional bounded TTL-aware response cache. Upstream health
   checks and per-upstream failure metrics remain open.
-- Not implemented: section 8's validated live configuration reload and
-  operator status view.
-- Persistent history and the analytics portal remain future work. Any status
-  interface should be local and authenticated so it does not expose peer data
-  on the public VPN endpoint.
+- Partially implemented: section 8 now has a local Unix status socket and
+  loopback-only metrics portal with token authentication, per-peer traffic,
+  transport counters, and a bounded 15-minute in-memory chart. Validated live
+  configuration reload and persistent history remain outstanding.
+- Metrics interfaces stay local and authenticated so peer details are not
+  exposed on the public VPN endpoint.

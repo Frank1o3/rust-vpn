@@ -70,11 +70,10 @@ forward. These settings affect the host globally.
 The server logs authenticated per-peer traffic totals once a minute. The
 totals include accepted inner packet bytes, encrypted UDP payload bytes,
 packets dropped by routing, rate enforcement, or outbound queue pressure, and
-completed rekeys.
-Outbound totals count packets admitted to the bounded send queue.
-Handshake and keepalive packets are excluded. These counters reset when the
-server process restarts and are currently available in the service journal;
-there is no server status API or web portal yet.
+completed rekeys. Outbound totals count packets admitted to the bounded send
+queue. Handshake and keepalive packets are excluded. Counters reset when the
+server process restarts and are available through the local status socket and
+metrics portal described below.
 
 ## Installing as systemd services (recommended)
 
@@ -136,3 +135,62 @@ needs no networking privileges of its own — it only talks to the daemon over
 IPC. It cannot reliably run from `sudo` (root has no XDG_RUNTIME_DIR/D-Bus
 session), which is one more reason the daemon+IPC split exists: privileged
 tunnel work stays in `rvpn-client`, and the UI stays fully unprivileged.
+
+## Server peer status
+
+On Unix, `rvpn-server` exposes a read-only status socket for local operators.
+It is created at `$RVPN_RUNTIME_DIR/server-status.sock` when that variable is
+set, otherwise at `$XDG_RUNTIME_DIR/rvpn/server-status.sock` or
+`/tmp/rvpn-<uid>/server-status.sock`. The systemd service sets the runtime path
+to `/run/rvpn`. The runtime directory is owner-only and the socket is mode
+`0600`, so only the server's local user can query it. The socket is removed
+during a graceful shutdown.
+
+Send `STATUS` to get a tab-separated snapshot with one row per authenticated
+peer, or send `PING` for a liveness check. For example:
+
+```sh
+if [ -S /run/rvpn/server-status.sock ]; then
+  socket=/run/rvpn/server-status.sock
+  use_sudo=true
+elif [ -n "${RVPN_RUNTIME_DIR:-}" ]; then
+  socket="$RVPN_RUNTIME_DIR/server-status.sock"
+  use_sudo=false
+elif [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+  socket="$XDG_RUNTIME_DIR/rvpn/server-status.sock"
+  use_sudo=false
+else
+  socket="/tmp/rvpn-$(id -u)/server-status.sock"
+  use_sudo=false
+fi
+if [ "$use_sudo" = true ]; then
+  printf 'STATUS\n' | sudo socat - "UNIX-CONNECT:$socket"
+else
+  printf 'STATUS\n' | socat - "UNIX-CONNECT:$socket"
+fi
+```
+
+The snapshot reports payload and encrypted wire totals, one-second payload
+rates, configured per-peer rate limits, inbound policing drops, outbound queue
+drops and average/maximum queue delay, other packet drops, rekeys, key phase,
+and seconds since last activity.
+It does not include keys or peer private configuration. The socket currently
+requires a Unix platform.
+
+## Local metrics portal
+
+On Unix, the server also serves a browser dashboard at
+`http://127.0.0.1:9842`. It binds only to loopback. Open the portal on the
+server host, or forward the port over SSH with
+`ssh -L 9842:127.0.0.1:9842 <server>` and open the same address locally.
+
+The first page asks for a bearer token. Read it from
+`$RVPN_RUNTIME_DIR/portal.token`, `$XDG_RUNTIME_DIR/rvpn/portal.token`, or
+`/tmp/rvpn-<uid>/portal.token` according to which runtime path is active. For
+the systemd service, use `sudo cat /run/rvpn/portal.token`. The token file is
+mode `0600` inside an owner-only runtime directory. The page keeps the token
+in the browser's session storage and sends it only to the loopback portal API.
+The portal shows live peer rates and totals, transport counters, shaping and
+drop information, queue delay, and a rolling 15-minute aggregate rate chart.
+History remains in memory and resets when the server restarts. The portal
+currently requires a Unix platform.
