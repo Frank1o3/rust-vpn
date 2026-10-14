@@ -102,6 +102,21 @@ To remove any of them: `./uninstall.sh server|client|tray|all`.
   invoked `rvpn-client <path>` (foreground mode above) can point at any
   readable path.
 
+Use the root-level `install-config.sh` helper to install or replace a config. It stages the
+new file beside the destination before atomically replacing the previous file:
+
+```sh
+sudo bash ./install-config.sh server rvpn-setup/server.toml
+sudo bash ./install-config.sh client rvpn-setup/client-pc-laptop.toml
+```
+
+For the client command, run it through `sudo` from the desktop account whose
+config should be updated; the helper uses `SUDO_USER` rather than writing to
+`/root`. Both installed files use group `rvpn` and mode `0600`; the server file
+is owned by `rvpn`, while the client file remains owned by the desktop user.
+On a client-only host, the helper creates the `rvpn` system group if it is
+missing.
+
 Config files must not be group- or world-readable (`chmod 0600`); RVPN
 refuses to read an insecurely-permissioned config file. Install the generated
 server config for the service account with:
