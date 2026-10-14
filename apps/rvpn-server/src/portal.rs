@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use rand::{TryRng, rngs::SysRng};
 use serde_json::{Value, json};
-use std::{collections::VecDeque, io, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{collections::VecDeque, io, path::PathBuf, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
