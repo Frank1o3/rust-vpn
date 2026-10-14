@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 # Securely install an RVPN server or client TOML config.
 # Usage (run through sudo):
-#   sudo ./install-config.sh server path/to/server.toml
-#   sudo ./install-config.sh client path/to/client.toml
+#   sudo bash ./install-config.sh server path/to/server.toml
+#   sudo bash ./install-config.sh client path/to/client.toml
 # Client mode uses SUDO_USER so it does not accidentally write into /root.
 
 readonly SERVER_DIR='/var/lib/rvpn/.config/rvpn'
@@ -16,8 +16,8 @@ usage() {
 RVPN config installer
 
 Usage:
-  sudo ./install-config.sh server <source-file>
-  sudo ./install-config.sh client <source-file>
+  sudo bash ./install-config.sh server <source-file>
+  sudo bash ./install-config.sh client <source-file>
 
 Server target: /var/lib/rvpn/.config/rvpn/server.toml
 Client target: <invoking user's home>/.config/rvpn/client.toml
