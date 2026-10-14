@@ -192,6 +192,20 @@ async fn handle_request(
             let body = portal_json(&snapshot, history);
             ("200 OK", "application/json; charset=utf-8", body)
         }
+    } else if path == "/metrics" {
+        if !auth.is_some_and(|value| bearer_matches(value, &token)) {
+            (
+                "401 Unauthorized",
+                "text/plain; charset=utf-8",
+                "unauthorized\n".to_string(),
+            )
+        } else {
+            (
+                "200 OK",
+                "text/plain; version=0.0.4; charset=utf-8",
+                prometheus_metrics(&snapshot),
+            )
+        }
     } else {
         (
             "404 Not Found",
@@ -232,6 +246,71 @@ fn portal_json(snapshot: &str, history: Vec<Value>) -> String {
         "history": history,
     })
     .to_string()
+}
+
+fn prometheus_metrics(snapshot: &str) -> String {
+    use std::fmt::Write as _;
+
+    let (peers, transport) = parse_snapshot(snapshot);
+    let mut output = String::from(
+        "# HELP rvpn_peer_connected Whether the authenticated peer has an active session.\n# TYPE rvpn_peer_connected gauge\n# HELP rvpn_peer_payload_bytes_total Authenticated inner payload bytes.\n# TYPE rvpn_peer_payload_bytes_total counter\n# HELP rvpn_peer_wire_bytes_total Encrypted tunnel datagram bytes.\n# TYPE rvpn_peer_wire_bytes_total counter\n# HELP rvpn_peer_packets_total Authenticated data packets.\n# TYPE rvpn_peer_packets_total counter\n# HELP rvpn_peer_dropped_packets_total Packets dropped for the peer.\n# TYPE rvpn_peer_dropped_packets_total counter\n# HELP rvpn_peer_payload_rate_bytes_per_second Current payload rate.\n# TYPE rvpn_peer_payload_rate_bytes_per_second gauge\n# HELP rvpn_peer_queue_delay_seconds Average and maximum outbound queue delay.\n# TYPE rvpn_peer_queue_delay_seconds gauge\n",
+    );
+    for peer in &peers {
+        let name = prometheus_label(peer["name"].as_str().unwrap_or_default());
+        let _ = writeln!(output, "rvpn_peer_connected{{peer=\"{name}\"}} 1");
+        for (direction, payload, wire, packets, rate) in [
+            (
+                "rx",
+                peer["rx_payload_bytes"].as_u64().unwrap_or_default(),
+                peer["rx_wire_bytes"].as_u64().unwrap_or_default(),
+                peer["rx_packets"].as_u64().unwrap_or_default(),
+                peer["rx_rate"].as_f64().unwrap_or_default(),
+            ),
+            (
+                "tx",
+                peer["tx_payload_bytes"].as_u64().unwrap_or_default(),
+                peer["tx_wire_bytes"].as_u64().unwrap_or_default(),
+                peer["tx_packets"].as_u64().unwrap_or_default(),
+                peer["tx_rate"].as_f64().unwrap_or_default(),
+            ),
+        ] {
+            let _ = writeln!(output, "rvpn_peer_payload_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {payload}");
+            let _ = writeln!(output, "rvpn_peer_wire_bytes_total{{peer=\"{name}\",direction=\"{direction}\"}} {wire}");
+            let _ = writeln!(output, "rvpn_peer_packets_total{{peer=\"{name}\",direction=\"{direction}\"}} {packets}");
+            let _ = writeln!(output, "rvpn_peer_payload_rate_bytes_per_second{{peer=\"{name}\",direction=\"{direction}\"}} {:.3}", rate * 1_048_576.0);
+        }
+        let drops = peer["dropped_packets"].as_u64().unwrap_or_default();
+        let rx_drops = peer["rx_limited_drops"].as_u64().unwrap_or_default();
+        let tx_drops = peer["tx_queue_drops"].as_u64().unwrap_or_default();
+        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"all\"}} {drops}");
+        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"rx_limit\"}} {rx_drops}");
+        let _ = writeln!(output, "rvpn_peer_dropped_packets_total{{peer=\"{name}\",reason=\"tx_queue\"}} {tx_drops}");
+        let average = peer["avg_queue_delay_ms"].as_f64().unwrap_or_default() / 1000.0;
+        let maximum = peer["max_queue_delay_ms"].as_f64().unwrap_or_default() / 1000.0;
+        let _ = writeln!(output, "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"average\"}} {average:.6}");
+        let _ = writeln!(output, "rvpn_peer_queue_delay_seconds{{peer=\"{name}\",statistic=\"maximum\"}} {maximum:.6}");
+    }
+    for (name, field) in [
+        ("rvpn_transport_bytes_sent_total", "bytes_sent"),
+        ("rvpn_transport_bytes_received_total", "bytes_received"),
+        ("rvpn_transport_packets_sent_total", "packets_sent"),
+        ("rvpn_transport_packets_received_total", "packets_received"),
+        ("rvpn_transport_dropped_oversized_total", "dropped_oversized"),
+        ("rvpn_transport_dropped_backpressure_total", "dropped_backpressure"),
+        ("rvpn_transport_send_errors_total", "send_errors"),
+        ("rvpn_transport_congestion_events_total", "congestion_events"),
+        ("rvpn_transport_mtu_changes_total", "mtu_changes"),
+    ] {
+        let _ = writeln!(output, "{name} {}", transport[field].as_u64().unwrap_or_default());
+    }
+    output
+}
+
+fn prometheus_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
 }
 
 fn parse_snapshot(snapshot: &str) -> (Vec<Value>, Value) {
