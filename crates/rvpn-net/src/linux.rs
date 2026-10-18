@@ -106,6 +106,17 @@ impl SystemNet {
         false
     }
 
+    fn is_networkmanager_unmanaged_error(error: &NetError) -> bool {
+        let NetError::Operation(message) = error else {
+            return false;
+        };
+        let message = message.to_ascii_lowercase();
+        message.contains("strictly unmanaged")
+            || message.contains("not available on device")
+            || message.contains("could not enable management")
+            || message.contains("left rvpn interface")
+    }
+
     async fn set_dns_resolv_conf_fallback(servers: &[IpAddr]) -> Result<(), NetError> {
         if tokio::fs::metadata(RESOLV_CONF_BACKUP_PATH).await.is_err()
             && let Ok(current) = tokio::fs::read(RESOLV_CONF_PATH).await
@@ -181,6 +192,39 @@ impl SystemNet {
                     "NetworkManager does not know about interface {name} yet: {e}"
                 ))
             })?;
+
+        let device = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            device_path.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let managed = device
+            .get_property::<bool>("Managed")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        if !managed {
+            tracing::info!(
+                interface = name,
+                "requesting runtime NetworkManager management for the RVPN tunnel device"
+            );
+            device.set_property("Managed", &true).await.map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager could not enable management for RVPN interface {name}: {e}"
+                ))
+            })?;
+            if !device
+                .get_property::<bool>("Managed")
+                .await
+                .map_err(|e| NetError::Operation(e.to_string()))?
+            {
+                return Err(NetError::Operation(format!(
+                    "NetworkManager left RVPN interface {name} unmanaged"
+                )));
+            }
+        }
 
         let interface_index = self.index(name).await?;
         let mut address_messages = self
@@ -631,9 +675,22 @@ impl NetConfigurator for SystemNet {
                 "NetworkManager.conf sets `dns=default` under [main]; \
                  configuring RVPN DNS via NetworkManager instead of systemd-resolved"
             );
-            return self
+            return match self
                 .set_dns_networkmanager(name, servers, &connection)
-                .await;
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(error) if Self::is_networkmanager_unmanaged_error(&error) => {
+                    tracing::warn!(
+                        interface = name,
+                        %error,
+                        "NetworkManager could not manage the RVPN device; falling back to \
+                         the backed-up /etc/resolv.conf"
+                    );
+                    Self::set_dns_resolv_conf_fallback(servers).await
+                }
+                Err(error) => Err(error),
+            };
         }
 
         if !Self::resolved_service_available(&connection)
@@ -679,7 +736,13 @@ impl NetConfigurator for SystemNet {
         let connection = Self::system_bus().await?;
 
         if Self::network_manager_manages_dns().await {
-            return Self::revert_dns_networkmanager(&connection, name).await;
+            let resolv_conf_result = Self::revert_dns_resolv_conf_fallback().await;
+            let networkmanager_result = Self::revert_dns_networkmanager(&connection, name).await;
+            // A NetworkManager-managed DNS host can still have an unmanaged
+            // tunnel device. In that case set_dns() temporarily used the
+            // resolv.conf fallback instead of creating an NM profile.
+            networkmanager_result?;
+            return resolv_conf_result;
         }
 
         if !Self::resolved_service_available(&connection)
