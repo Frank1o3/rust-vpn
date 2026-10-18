@@ -319,6 +319,14 @@ pub async fn configure_client_network(
         }
 
         preserve_server_route(&net, server).await?;
+        net.replace_route(&direct_gateway_route(gateway, interface_index)?)
+            .await
+            .with_context(|| {
+                format!(
+                    "installing direct route to IPv4 tunnel gateway {gateway} on interface {} ({interface_index})",
+                    dev.name()
+                )
+            })?;
         let source = tunnel_source(config, false)?;
         let destination_1: IpNet = "0.0.0.0/1".parse().unwrap();
         let destination_2: IpNet = "128.0.0.0/1".parse().unwrap();
@@ -352,6 +360,14 @@ pub async fn configure_client_network(
         }
 
         preserve_server_route(&net, server).await?;
+        net.replace_route(&direct_gateway_route(gateway, interface_index)?)
+            .await
+            .with_context(|| {
+                format!(
+                    "installing direct route to IPv6 tunnel gateway {gateway} on interface {} ({interface_index})",
+                    dev.name()
+                )
+            })?;
         let source = tunnel_source(config, true)?;
         let destination_1: IpNet = "::/1".parse().unwrap();
         let destination_2: IpNet = "8000::/1".parse().unwrap();
@@ -460,6 +476,11 @@ pub async fn teardown_client_network(
                     .await;
             }
         }
+        if let Some(gateway) = gateway
+            && let Ok(route) = direct_gateway_route(gateway, interface_index)
+        {
+            let _ = net.delete_route(&route).await;
+        }
         remove_server_route(&net, server, false).await;
     }
 
@@ -481,6 +502,11 @@ pub async fn teardown_client_network(
                     })
                     .await;
             }
+        }
+        if let Some(gateway) = gateway
+            && let Ok(route) = direct_gateway_route(gateway, interface_index)
+        {
+            let _ = net.delete_route(&route).await;
         }
         remove_server_route(&net, server, true).await;
     }
@@ -548,6 +574,19 @@ fn tunnel_source(config: &ClientConfig, ipv6: bool) -> Result<IpAddr> {
                 if ipv6 { "IPv6" } else { "IPv4" }
             )
         })
+}
+
+fn direct_gateway_route(gateway: IpAddr, interface_index: u32) -> Result<RouteSpec> {
+    let prefix = if gateway.is_ipv4() { 32 } else { 128 };
+    let destination = format!("{gateway}/{prefix}")
+        .parse::<IpNet>()
+        .context("building direct tunnel gateway route")?;
+    Ok(RouteSpec {
+        destination,
+        gateway: None,
+        interface_index: Some(interface_index),
+        source: None,
+    })
 }
 
 pub async fn refresh_client_endpoint(
