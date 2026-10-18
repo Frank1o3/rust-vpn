@@ -43,8 +43,6 @@ pub struct BestRoute {
 pub struct RouteSpec {
     pub destination: IpNet,
     pub gateway: Option<IpAddr>,
-    /// Treat the configured gateway as directly reachable through the output interface.
-    pub gateway_on_link: bool,
     pub interface_index: Option<u32>,
     pub source: Option<IpAddr>,
 }

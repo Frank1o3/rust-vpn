@@ -294,7 +294,6 @@ pub async fn configure_client_network(
         net.replace_route(&RouteSpec {
             destination,
             gateway: None,
-            gateway_on_link: false,
             interface_index: Some(interface_index),
             source: None,
         })
@@ -326,15 +325,15 @@ pub async fn configure_client_network(
         for destination in [destination_1, destination_2] {
             net.replace_route(&RouteSpec {
                 destination,
-                gateway: Some(gateway),
-                gateway_on_link: true,
+                // TUN carries the original IP packet; it has no L2 next hop to resolve.
+                gateway: None,
                 interface_index: Some(interface_index),
                 source: Some(source),
             })
             .await
             .with_context(|| {
                 format!(
-                    "installing IPv4 tunnel route {destination} via {gateway} on interface {} ({interface_index})",
+                    "installing IPv4 tunnel route {destination} on interface {} ({interface_index})",
                     dev.name()
                 )
             })?;
@@ -360,15 +359,14 @@ pub async fn configure_client_network(
         for destination in [destination_1, destination_2] {
             net.replace_route(&RouteSpec {
                 destination,
-                gateway: Some(gateway),
-                gateway_on_link: true,
+                gateway: None,
                 interface_index: Some(interface_index),
                 source: Some(source),
             })
             .await
             .with_context(|| {
                 format!(
-                    "installing IPv6 tunnel route {destination} via {gateway} on interface {} ({interface_index})",
+                    "installing IPv6 tunnel route {destination} on interface {} ({interface_index})",
                     dev.name()
                 )
             })?;
@@ -407,7 +405,6 @@ async fn preserve_server_route(net: &SystemNet, server: SocketAddr) -> Result<()
     net.replace_route(&RouteSpec {
         destination,
         gateway: best.gateway,
-        gateway_on_link: false,
         interface_index: Some(best.interface_index),
         source: None,
     })
@@ -446,19 +443,13 @@ pub async fn teardown_client_network(
     };
 
     if config.routing.default_route {
-        let gateway = config
-            .routing
-            .gateway
-            .as_deref()
-            .and_then(|s| s.parse().ok());
         let source = tunnel_source(config, false).ok();
         for destination in ["0.0.0.0/1", "128.0.0.0/1"] {
             if let Ok(destination) = destination.parse() {
                 let _ = net
                     .delete_route(&RouteSpec {
                         destination,
-                        gateway,
-                        gateway_on_link: true,
+                        gateway: None,
                         interface_index: Some(interface_index),
                         source,
                     })
@@ -469,19 +460,13 @@ pub async fn teardown_client_network(
     }
 
     if config.routing.default_route_v6 {
-        let gateway = config
-            .routing
-            .gateway_v6
-            .as_deref()
-            .and_then(|s| s.parse().ok());
         let source = tunnel_source(config, true).ok();
         for destination in ["::/1", "8000::/1"] {
             if let Ok(destination) = destination.parse() {
                 let _ = net
                     .delete_route(&RouteSpec {
                         destination,
-                        gateway,
-                        gateway_on_link: true,
+                        gateway: None,
                         interface_index: Some(interface_index),
                         source,
                     })
@@ -529,7 +514,6 @@ async fn remove_server_route(net: &SystemNet, server: SocketAddr, ipv6: bool) {
         .delete_route(&RouteSpec {
             destination,
             gateway: best.gateway,
-            gateway_on_link: false,
             interface_index: Some(best.interface_index),
             source: None,
         })
@@ -594,7 +578,6 @@ async fn remove_endpoint_route(net: &SystemNet, server: SocketAddr) {
         .delete_route(&RouteSpec {
             destination,
             gateway: best.gateway,
-            gateway_on_link: false,
             interface_index: Some(best.interface_index),
             source: None,
         })

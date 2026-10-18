@@ -733,9 +733,6 @@ impl SystemNet {
                         ));
                     };
                     builder = builder.gateway(gateway);
-                    if route.gateway_on_link {
-                        builder = builder.onlink();
-                    }
                 }
                 if let Some(source) = route.source {
                     let IpAddr::V4(source) = source else {
@@ -760,9 +757,6 @@ impl SystemNet {
                         ));
                     };
                     builder = builder.gateway(gateway);
-                    if route.gateway_on_link {
-                        builder = builder.onlink();
-                    }
                 }
                 if let Some(source) = route.source {
                     let IpAddr::V6(source) = source else {
