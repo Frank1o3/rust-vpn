@@ -180,6 +180,7 @@ pub async fn teardown_client_network(
     };
     match net.interface_index(dev.name()).await {
         Ok(interface_index) => {
+            remove_configured_routes(&net, config, interface_index).await;
             if config.routing.default_route {
                 remove_tunnel_routes(&net, ["0.0.0.0/1", "128.0.0.0/1"], interface_index).await;
             }
@@ -200,6 +201,33 @@ pub async fn teardown_client_network(
         && let Err(error) = net.remove_kill_switch(0).await
     {
         tracing::warn!(%error, "failed to remove Windows RVPN kill switch");
+    }
+}
+
+async fn remove_configured_routes(
+    net: &SystemNet,
+    config: &ClientConfig,
+    interface_index: u32,
+) {
+    for route in &config.routing.routes {
+        let destination = match route.parse::<IpNet>() {
+            Ok(destination) => destination,
+            Err(error) => {
+                tracing::warn!(%error, %route, "could not parse configured Windows route during teardown");
+                continue;
+            }
+        };
+        if let Err(error) = net
+            .delete_route(&RouteSpec {
+                destination,
+                gateway: None,
+                interface_index: Some(interface_index),
+                source: None,
+            })
+            .await
+        {
+            tracing::debug!(%error, %destination, interface_index, "failed to remove configured Windows route");
+        }
     }
 }
 
