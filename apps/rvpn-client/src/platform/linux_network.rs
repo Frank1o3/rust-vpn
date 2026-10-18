@@ -297,7 +297,13 @@ pub async fn configure_client_network(
             interface_index: Some(interface_index),
             source: None,
         })
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "installing configured route {destination} on interface {} ({interface_index})",
+                dev.name()
+            )
+        })?;
     }
 
     if config.routing.default_route {
@@ -323,7 +329,13 @@ pub async fn configure_client_network(
                 interface_index: Some(interface_index),
                 source: Some(source),
             })
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "installing IPv4 tunnel route {destination} via {gateway} on interface {} ({interface_index})",
+                    dev.name()
+                )
+            })?;
         }
     }
 
@@ -350,7 +362,13 @@ pub async fn configure_client_network(
                 interface_index: Some(interface_index),
                 source: Some(source),
             })
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "installing IPv6 tunnel route {destination} via {gateway} on interface {} ({interface_index})",
+                    dev.name()
+                )
+            })?;
         }
     }
 
@@ -389,7 +407,13 @@ async fn preserve_server_route(net: &SystemNet, server: SocketAddr) -> Result<()
         interface_index: Some(best.interface_index),
         source: None,
     })
-    .await?;
+    .await
+    .with_context(|| {
+        format!(
+            "preserving physical route to RVPN server {server} through interface index {} via {:?}",
+            best.interface_index, best.gateway
+        )
+    })?;
 
     tracing::info!(
         %server,
