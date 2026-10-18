@@ -36,32 +36,106 @@ impl SystemNet {
         Ok(Self { handle })
     }
 
-    /// Configure DNS for a client tunnel without creating a NetworkManager profile.
+    /// Configure DNS for a native client tunnel using the host's available DNS backend.
     pub async fn set_dns_native(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
-        let Ok(connection) = Self::system_bus().await else {
-            return Self::set_dns_resolv_conf_fallback(servers).await;
-        };
-        if !Self::resolved_service_available(&connection)
-            .await
-            .unwrap_or(false)
+        let connection = Self::system_bus().await.ok();
+
+        if Self::network_manager_manages_dns().await
+            && let Some(connection) = connection.as_ref()
+            && Self::network_manager_service_available(connection).await
         {
-            return Self::set_dns_resolv_conf_fallback(servers).await;
+            if let Err(error) = Self::set_networkmanager_device_unmanaged(name, connection).await {
+                tracing::warn!(interface = name, %error, "could not mark native RVPN interface unmanaged in NetworkManager");
+            }
+            match self.set_dns_networkmanager(name, servers, connection).await {
+                Ok(()) => return Ok(()),
+                Err(error) => tracing::warn!(
+                    interface = name,
+                    %error,
+                    "NetworkManager DNS configuration failed; trying systemd-resolved"
+                ),
+            }
         }
-        self.set_dns_resolved(name, servers, &connection).await
+
+        if let Some(connection) = connection.as_ref()
+            && Self::resolved_service_available(connection)
+                .await
+                .unwrap_or(false)
+        {
+            match self.set_dns_resolved(name, servers, connection).await {
+                Ok(()) => return Ok(()),
+                Err(error) => tracing::warn!(
+                    interface = name,
+                    %error,
+                    "systemd-resolved DNS configuration failed; falling back to resolv.conf"
+                ),
+            }
+        }
+
+        Self::set_dns_resolv_conf_fallback(servers).await
     }
 
     /// Restore DNS after a client tunnel configured with `set_dns_native` is closed.
     pub async fn revert_dns_native(&self, name: &str) -> Result<(), NetError> {
-        let Ok(connection) = Self::system_bus().await else {
-            return Self::revert_dns_resolv_conf_fallback().await;
-        };
-        if !Self::resolved_service_available(&connection)
-            .await
-            .unwrap_or(false)
+        let connection = Self::system_bus().await.ok();
+        if Self::network_manager_manages_dns().await
+            && let Some(connection) = connection.as_ref()
+            && Self::network_manager_service_available(connection).await
         {
-            return Self::revert_dns_resolv_conf_fallback().await;
+            if let Err(error) = Self::revert_dns_networkmanager(connection, name).await {
+                tracing::debug!(interface = name, %error, "no active RVPN NetworkManager DNS profile to restore");
+            }
         }
-        self.revert_dns_resolved(name, &connection).await
+
+        if let Some(connection) = connection.as_ref()
+            && Self::resolved_service_available(connection)
+                .await
+                .unwrap_or(false)
+            && let Err(error) = self.revert_dns_resolved(name, connection).await
+        {
+            tracing::warn!(interface = name, %error, "could not restore systemd-resolved DNS state");
+        }
+
+        Self::revert_dns_resolv_conf_fallback().await
+    }
+
+    async fn set_networkmanager_device_unmanaged(
+        name: &str,
+        connection: &Connection,
+    ) -> Result<(), NetError> {
+        let manager = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let device: OwnedObjectPath =
+            manager
+                .call("GetDeviceByIpIface", &name)
+                .await
+                .map_err(|e| {
+                    NetError::Operation(format!(
+                        "NetworkManager does not know native interface {name}: {e}"
+                    ))
+                })?;
+        let device_proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            device.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        device_proxy
+            .set_property("Managed", false)
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager could not mark interface {name} unmanaged: {e}"
+                ))
+            })
     }
 
     async fn index(&self, name: &str) -> Result<u32, NetError> {
