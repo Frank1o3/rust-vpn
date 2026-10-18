@@ -8,15 +8,15 @@ use ipc::{Daemon, run_ipc_server};
 use rvpn_config::{ClientConfig, DeviceMode};
 use rvpn_core::GuiStateHandle;
 use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
-use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
+use rvpn_interface::{DEFAULT_MTU, VirtualInterface};
 use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
 use std::{env, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use handshake::establish;
 use platform::{
-    configure_client_network, install_bootstrap_kill_switch, refresh_client_endpoint,
-    remove_bootstrap_kill_switch, teardown_client_network,
+    configure_client_network, create_client_devices, install_bootstrap_kill_switch,
+    refresh_client_endpoint, remove_bootstrap_kill_switch, teardown_client_network,
 };
 use tunnel::{DataPlaneExit, run_data_plane};
 
@@ -217,52 +217,23 @@ async fn run_client_inner(
         state.set_key_phase(session.key_phase());
     }
 
-    let (tun, tap) = match mode {
-        DeviceMode::Tun => {
-            let dev = VirtualInterface::create(TunConfig {
-                name: config.interface.name.clone(),
-                mtu,
-                mode: DeviceMode::Tun,
-            })
-            .await?;
-            (Some(dev), None)
-        }
-        DeviceMode::Tap => {
-            let dev = VirtualInterface::create(TunConfig {
-                name: config.interface.name.clone(),
-                mtu,
-                mode: DeviceMode::Tap,
-            })
-            .await?;
-            (None, Some(dev))
-        }
-        DeviceMode::Both => {
-            let tun_name = config.interface.name.clone();
-            let tap_name = config.interface.tap_name.clone().or_else(|| {
-                config
-                    .interface
-                    .name
-                    .as_ref()
-                    .map(|n| format!("{}-tap", n.chars().take(11).collect::<String>()))
-            });
-            let tun_dev = VirtualInterface::create(TunConfig {
-                name: tun_name,
-                mtu,
-                mode: DeviceMode::Tun,
-            })
-            .await?;
-            let tap_dev = VirtualInterface::create(TunConfig {
-                name: tap_name,
-                mtu,
-                mode: DeviceMode::Tap,
-            })
-            .await?;
-            (Some(tun_dev), Some(tap_dev))
-        }
-    };
+    let (tun, tap, networkmanager_managed) = create_client_devices(&config, mode, mtu).await?;
 
     let primary_dev = tun.as_ref().or(tap.as_ref()).expect("at least one device");
-    configure_client_network(primary_dev, &config, server).await?;
+    let networkmanager_interfaces: Vec<String> = if networkmanager_managed {
+        tun.iter()
+            .chain(tap.iter())
+            .map(|device| device.name().to_owned())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Err(error) =
+        configure_client_network(primary_dev, &config, server, networkmanager_managed).await
+    {
+        teardown_client_network(primary_dev, &config, server, &networkmanager_interfaces).await;
+        return Err(error);
+    }
     tracing::info!(
         session_id = ?session.session_id(),
         %server,
@@ -329,7 +300,7 @@ async fn run_client_inner(
     };
 
     tracing::info!("restoring host network state");
-    teardown_client_network(primary_dev, &config, server).await;
+    teardown_client_network(primary_dev, &config, server, &networkmanager_interfaces).await;
 
     result
 }

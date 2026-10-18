@@ -168,10 +168,11 @@ and key management conservative.
 - Partially implemented: section 7 now has configurable upstream timeouts,
   retries, and an optional bounded TTL-aware response cache. Upstream health
   checks and per-upstream failure metrics remain open. On Linux, when
-  NetworkManager is configured with `dns=default`, the client requests runtime
-  management of the RVPN tunnel device before activating its DNS profile. If a
-  strict unmanaged rule prevents that, it falls back to a backed-up
-  `/etc/resolv.conf` and restores it during cleanup.
+  NetworkManager is configured with `dns=default`, the client creates a
+  temporary, non-autoconnecting NetworkManager TUN/TAP profile with the
+  process UID/GID, tunnel addresses, and DNS, then attaches its packet queue.
+  If NetworkManager is unavailable or cannot activate the profile, native
+  device creation and the resolved/resolv.conf DNS path remain available.
 - Partially implemented: section 8 now has a local Unix status socket and
   loopback-only metrics portal with token authentication, per-peer traffic,
   transport counters, and a bounded 15-minute in-memory chart. Validated live

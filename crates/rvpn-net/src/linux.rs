@@ -106,6 +106,247 @@ impl SystemNet {
         false
     }
 
+    async fn network_manager_service_available(connection: &Connection) -> bool {
+        let Ok(dbus) = Proxy::new(
+            connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        else {
+            return false;
+        };
+        dbus.call::<_, _, bool>("NameHasOwner", &"org.freedesktop.NetworkManager")
+            .await
+            .unwrap_or(false)
+    }
+
+    /// True when the local NetworkManager configuration delegates DNS to NM
+    /// and its D-Bus service is available to create a client tunnel device.
+    pub async fn networkmanager_client_tun_available(&self) -> bool {
+        if !Self::network_manager_manages_dns().await {
+            return false;
+        }
+        let Ok(connection) = Self::system_bus().await else {
+            return false;
+        };
+        Self::network_manager_service_available(&connection).await
+    }
+
+    /// Ask NetworkManager to create and activate a temporary TUN/TAP profile
+    /// for the Linux client. The caller then attaches its packet queue by
+    /// opening /dev/net/tun and issuing TUNSETIFF with the returned name.
+    pub async fn create_networkmanager_client_tun(
+        &self,
+        name: &str,
+        mtu: u16,
+        mode: u32,
+        owner_uid: u32,
+        group_gid: u32,
+        addresses: &[IpNet],
+        dns_servers: &[IpAddr],
+    ) -> Result<(), NetError> {
+        let connection = Self::system_bus().await?;
+        if !Self::network_manager_service_available(&connection).await {
+            return Err(NetError::Operation(
+                "NetworkManager D-Bus service is unavailable".into(),
+            ));
+        }
+
+        let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
+        let mut connection_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        connection_settings.insert("id", Value::from(format!("RVPN Client {name}")));
+        connection_settings.insert("type", Value::from("tun"));
+        connection_settings.insert("interface-name", Value::from(name.to_owned()));
+        connection_settings.insert("autoconnect", Value::from(false));
+        settings.insert("connection", connection_settings);
+
+        let mut tun_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        tun_settings.insert("mode", Value::from(mode));
+        tun_settings.insert("owner", Value::from(owner_uid.to_string()));
+        tun_settings.insert("group", Value::from(group_gid.to_string()));
+        tun_settings.insert("pi", Value::from(false));
+        settings.insert("tun", tun_settings);
+
+        let v4_addresses: Vec<HashMap<&str, Value<'static>>> = addresses
+            .iter()
+            .filter_map(|address| match address {
+                IpNet::V4(address) => {
+                    let mut data = HashMap::new();
+                    data.insert("address", Value::from(address.addr().to_string()));
+                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    Some(data)
+                }
+                IpNet::V6(_) => None,
+            })
+            .collect();
+        let v6_addresses: Vec<HashMap<&str, Value<'static>>> = addresses
+            .iter()
+            .filter_map(|address| match address {
+                IpNet::V6(address) => {
+                    let mut data = HashMap::new();
+                    data.insert("address", Value::from(address.addr().to_string()));
+                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    Some(data)
+                }
+                IpNet::V4(_) => None,
+            })
+            .collect();
+
+        let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        ipv4_settings.insert(
+            "method",
+            Value::from(
+                if v4_addresses.is_empty() && dns_servers.iter().all(|a| a.is_ipv6()) {
+                    "disabled"
+                } else {
+                    "manual"
+                },
+            ),
+        );
+        if !v4_addresses.is_empty() {
+            ipv4_settings.insert("address-data", Value::from(v4_addresses));
+        }
+        let v4_dns: Vec<String> = dns_servers
+            .iter()
+            .filter(|address| address.is_ipv4())
+            .map(ToString::to_string)
+            .collect();
+        if !v4_dns.is_empty() {
+            ipv4_settings.insert("dns-data", Value::from(v4_dns));
+            ipv4_settings.insert("dns-priority", Value::from(-1_i32));
+            ipv4_settings.insert("ignore-auto-dns", Value::from(true));
+        }
+        settings.insert("ipv4", ipv4_settings);
+
+        let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        ipv6_settings.insert(
+            "method",
+            Value::from(
+                if v6_addresses.is_empty() && dns_servers.iter().all(|a| a.is_ipv4()) {
+                    "disabled"
+                } else {
+                    "manual"
+                },
+            ),
+        );
+        if !v6_addresses.is_empty() {
+            ipv6_settings.insert("address-data", Value::from(v6_addresses));
+        }
+        let v6_dns: Vec<String> = dns_servers
+            .iter()
+            .filter(|address| address.is_ipv6())
+            .map(ToString::to_string)
+            .collect();
+        if !v6_dns.is_empty() {
+            ipv6_settings.insert("dns-data", Value::from(v6_dns));
+            ipv6_settings.insert("dns-priority", Value::from(-1_i32));
+            ipv6_settings.insert("ignore-auto-dns", Value::from(true));
+        }
+        settings.insert("ipv6", ipv6_settings);
+
+        let root = ObjectPath::try_from("/")
+            .map_err(|e| NetError::Operation(format!("invalid NetworkManager object path: {e}")))?;
+        let mut options: HashMap<&str, Value<'static>> = HashMap::new();
+        options.insert("persist", Value::from("volatile"));
+        options.insert("bind-activation", Value::from("dbus-client"));
+        let manager = Proxy::new(
+            &connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let result = manager
+            .call::<_, _, (
+                OwnedObjectPath,
+                OwnedObjectPath,
+                HashMap<String, OwnedValue>,
+            )>(
+                "AddAndActivateConnection2",
+                &(settings, root.clone(), root, options),
+            )
+            .await
+            .map_err(|e| {
+                NetError::Operation(format!(
+                    "NetworkManager failed to create RVPN client device {name}: {e}"
+                ))
+            });
+        if let Err(error) = result {
+            let _ = Self::deactivate_networkmanager_client_tun_on_bus(&connection, name).await;
+            return Err(error);
+        }
+
+        tracing::info!(
+            interface = name,
+            mtu,
+            mode,
+            owner_uid,
+            group_gid,
+            "created and activated RVPN client device through NetworkManager"
+        );
+        Ok(())
+    }
+
+    pub async fn deactivate_networkmanager_client_tun(&self, name: &str) -> Result<(), NetError> {
+        let connection = Self::system_bus().await?;
+        Self::deactivate_networkmanager_client_tun_on_bus(&connection, name).await
+    }
+
+    async fn deactivate_networkmanager_client_tun_on_bus(
+        connection: &Connection,
+        name: &str,
+    ) -> Result<(), NetError> {
+        let manager = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            "/org/freedesktop/NetworkManager",
+            "org.freedesktop.NetworkManager",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let device: OwnedObjectPath = match manager.call("GetDeviceByIpIface", &name).await {
+            Ok(device) => device,
+            Err(_) => return Ok(()),
+        };
+        let device_proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            device.as_str(),
+            "org.freedesktop.NetworkManager.Device",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let active: OwnedObjectPath = device_proxy
+            .get_property("ActiveConnection")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        if active.as_str() == "/" {
+            return Ok(());
+        }
+        let active_proxy = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            active.as_str(),
+            "org.freedesktop.NetworkManager.Connection.Active",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let id = active_proxy
+            .get_property::<String>("Id")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        if id != format!("RVPN Client {name}") {
+            return Ok(());
+        }
+        manager
+            .call::<_, _, ()>("DeactivateConnection", &active)
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))
+    }
+
     fn is_networkmanager_unmanaged_error(error: &NetError) -> bool {
         let NetError::Operation(message) = error else {
             return false;
@@ -192,39 +433,6 @@ impl SystemNet {
                     "NetworkManager does not know about interface {name} yet: {e}"
                 ))
             })?;
-
-        let device = Proxy::new(
-            connection,
-            "org.freedesktop.NetworkManager",
-            device_path.as_str(),
-            "org.freedesktop.NetworkManager.Device",
-        )
-        .await
-        .map_err(|e| NetError::Operation(e.to_string()))?;
-        let managed = device
-            .get_property::<bool>("Managed")
-            .await
-            .map_err(|e| NetError::Operation(e.to_string()))?;
-        if !managed {
-            tracing::info!(
-                interface = name,
-                "requesting runtime NetworkManager management for the RVPN tunnel device"
-            );
-            device.set_property("Managed", &true).await.map_err(|e| {
-                NetError::Operation(format!(
-                    "NetworkManager could not enable management for RVPN interface {name}: {e}"
-                ))
-            })?;
-            if !device
-                .get_property::<bool>("Managed")
-                .await
-                .map_err(|e| NetError::Operation(e.to_string()))?
-            {
-                return Err(NetError::Operation(format!(
-                    "NetworkManager left RVPN interface {name} unmanaged"
-                )));
-            }
-        }
 
         let interface_index = self.index(name).await?;
         let mut address_messages = self
@@ -667,9 +875,22 @@ impl NetConfigurator for SystemNet {
     }
 
     async fn set_dns(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
-        let connection = Self::system_bus().await?;
+        let connection = match Self::system_bus().await {
+            Ok(connection) => Some(connection),
+            Err(error) => {
+                tracing::warn!(
+                    interface = name,
+                    %error,
+                    "system D-Bus is unavailable; falling back to backed-up /etc/resolv.conf"
+                );
+                None
+            }
+        };
 
-        if Self::network_manager_manages_dns().await {
+        if Self::network_manager_manages_dns().await
+            && let Some(connection) = connection.as_ref()
+            && Self::network_manager_service_available(connection).await
+        {
             tracing::info!(
                 interface = name,
                 "NetworkManager.conf sets `dns=default` under [main]; \
@@ -693,7 +914,19 @@ impl NetConfigurator for SystemNet {
             };
         }
 
-        if !Self::resolved_service_available(&connection)
+        let Some(connection) = connection.as_ref() else {
+            return Self::set_dns_resolv_conf_fallback(servers).await;
+        };
+
+        if Self::network_manager_manages_dns().await {
+            tracing::warn!(
+                interface = name,
+                "NetworkManager DNS mode is configured but its D-Bus service is unavailable; \
+                 using systemd-resolved when available"
+            );
+        }
+
+        if !Self::resolved_service_available(connection)
             .await
             .unwrap_or(false)
         {
@@ -706,14 +939,14 @@ impl NetConfigurator for SystemNet {
             return Self::set_dns_resolv_conf_fallback(servers).await;
         }
 
-        match Self::network_manager_dns_mode(&connection).await {
+        match Self::network_manager_dns_mode(connection).await {
             Ok(mode) => {
                 tracing::info!(
                     interface = name,
                     nm_dns_mode = %mode,
                     "configuring RVPN DNS via systemd-resolved per-link API"
                 );
-                if let Err(e) = Self::revert_dns_networkmanager(&connection, name).await {
+                if let Err(e) = Self::revert_dns_networkmanager(connection, name).await {
                     tracing::debug!(
                         interface = name,
                         %e,
@@ -729,11 +962,14 @@ impl NetConfigurator for SystemNet {
             }
         }
 
-        self.set_dns_resolved(name, servers, &connection).await
+        self.set_dns_resolved(name, servers, connection).await
     }
 
     async fn revert_dns(&self, name: &str) -> Result<(), NetError> {
-        let connection = Self::system_bus().await?;
+        let connection = match Self::system_bus().await {
+            Ok(connection) => connection,
+            Err(_) => return Self::revert_dns_resolv_conf_fallback().await,
+        };
 
         if Self::network_manager_manages_dns().await {
             let resolv_conf_result = Self::revert_dns_resolv_conf_fallback().await;

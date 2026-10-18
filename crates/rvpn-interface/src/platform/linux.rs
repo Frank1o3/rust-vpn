@@ -89,6 +89,52 @@ impl VirtualInterface {
         })
     }
 
+    /// Attach an RVPN packet queue to an existing Linux TUN/TAP device.
+    /// NetworkManager-created client devices use their profile's owner/group
+    /// settings to authorize this queue attachment.
+    pub async fn attach(config: TunConfig) -> Result<Self, InterfaceError> {
+        config.validate()?;
+        let name = config
+            .name
+            .as_deref()
+            .ok_or(InterfaceError::InvalidInterfaceName)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(TUN_PATH)?;
+        let mut request = IfReq::new(Some(name));
+        let flags = match config.mode {
+            DeviceMode::Tap => (libc::IFF_TAP | libc::IFF_NO_PI) as i16,
+            DeviceMode::Tun | DeviceMode::Both => (libc::IFF_TUN | libc::IFF_NO_PI) as i16,
+        };
+        request.data[..2].copy_from_slice(&flags.to_ne_bytes());
+
+        if unsafe {
+            libc::ioctl(
+                file.as_raw_fd(),
+                libc::TUNSETIFF as libc::Ioctl,
+                &mut request,
+            )
+        } < 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let assigned_name = request.assigned_name()?;
+        if assigned_name != name {
+            return Err(InterfaceError::InvalidInterfaceName);
+        }
+        set_mtu(name, config.mtu)?;
+
+        tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, "attached to NetworkManager-created Linux virtual device");
+        Ok(Self {
+            file: AsyncFd::new(file)?,
+            name: name.to_owned(),
+            mtu: config.mtu,
+            mode: config.mode,
+        })
+    }
+
     pub fn from_raw_fd(
         fd: RawFd,
         name: String,

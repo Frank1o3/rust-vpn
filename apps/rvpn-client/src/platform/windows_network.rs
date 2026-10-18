@@ -1,8 +1,51 @@
 use anyhow::{Context, Result, bail};
 use rvpn_config::ClientConfig;
-use rvpn_interface::VirtualInterface;
+use rvpn_interface::{DeviceMode, TunConfig, VirtualInterface};
 use std::net::{IpAddr, SocketAddr};
 use tokio::process::Command;
+
+pub async fn create_client_devices(
+    config: &ClientConfig,
+    mode: DeviceMode,
+    mtu: u16,
+) -> Result<(Option<VirtualInterface>, Option<VirtualInterface>, bool)> {
+    let tun = if matches!(mode, DeviceMode::Tun | DeviceMode::Both) {
+        Some(
+            VirtualInterface::create(TunConfig {
+                name: config.interface.name.clone(),
+                mtu,
+                mode: DeviceMode::Tun,
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    let tap = if matches!(mode, DeviceMode::Tap | DeviceMode::Both) {
+        let tap_name = config.interface.tap_name.clone().or_else(|| {
+            if mode == DeviceMode::Tap {
+                config.interface.name.clone()
+            } else {
+                config
+                    .interface
+                    .name
+                    .as_ref()
+                    .map(|name| format!("{}-tap", name.chars().take(11).collect::<String>()))
+            }
+        });
+        Some(
+            VirtualInterface::create(TunConfig {
+                name: tap_name,
+                mtu,
+                mode: DeviceMode::Tap,
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    Ok((tun, tap, false))
+}
 
 pub async fn install_bootstrap_kill_switch(_config: &ClientConfig) -> Result<bool> {
     Ok(false)
@@ -16,6 +59,7 @@ pub async fn configure_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
+    _networkmanager_managed: bool,
 ) -> Result<()> {
     set_interface_enabled(dev.name()).await?;
 
@@ -116,6 +160,7 @@ pub async fn teardown_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
+    _networkmanager_interfaces: &[String],
 ) {
     if config.routing.default_route {
         for prefix in ["0.0.0.0/1", "128.0.0.0/1"] {

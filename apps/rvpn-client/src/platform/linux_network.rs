@@ -1,9 +1,225 @@
 use anyhow::{Context, Result};
 use ipnet::IpNet;
 use rvpn_config::ClientConfig;
-use rvpn_interface::VirtualInterface;
+use rvpn_interface::{DeviceMode, TunConfig, VirtualInterface};
 use rvpn_net::{KillSwitchSpec, NetConfigurator, RouteSpec, SystemNet};
 use std::net::{IpAddr, SocketAddr};
+
+pub async fn create_client_devices(
+    config: &ClientConfig,
+    mode: DeviceMode,
+    mtu: u16,
+) -> Result<(Option<VirtualInterface>, Option<VirtualInterface>, bool)> {
+    let tun_name = client_interface_name(config.interface.name.as_deref(), false);
+    let tap_name = config.interface.tap_name.clone().or_else(|| {
+        if mode == DeviceMode::Tap {
+            Some(tun_name.clone())
+        } else {
+            Some(client_interface_name(Some(&tun_name), true))
+        }
+    });
+    let networkmanager = SystemNet::new().context("opening Linux networking backend")?;
+
+    if networkmanager.networkmanager_client_tun_available().await {
+        match create_networkmanager_client_devices(
+            &networkmanager,
+            config,
+            mode,
+            mtu,
+            &tun_name,
+            tap_name.as_deref(),
+        )
+        .await
+        {
+            Ok((tun, tap)) => return Ok((tun, tap, true)),
+            Err(error) => tracing::warn!(
+                %error,
+                "NetworkManager could not create RVPN client devices; using native TUN/TAP creation"
+            ),
+        }
+    }
+
+    let (tun, tap) =
+        create_native_client_devices(mode, mtu, &tun_name, tap_name.as_deref()).await?;
+    Ok((tun, tap, false))
+}
+
+async fn create_networkmanager_client_devices(
+    net: &SystemNet,
+    config: &ClientConfig,
+    mode: DeviceMode,
+    mtu: u16,
+    tun_name: &str,
+    tap_name: Option<&str>,
+) -> Result<(Option<VirtualInterface>, Option<VirtualInterface>)> {
+    let addresses = config
+        .interface
+        .address
+        .iter()
+        .chain(&config.interface.addresses)
+        .map(|address| {
+            address
+                .parse::<IpNet>()
+                .with_context(|| format!("invalid configured interface address: {address}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let dns_servers = config.interface.dns_server_list()?;
+    let owner_uid = unsafe { libc::geteuid() };
+    let group_gid = unsafe { libc::getegid() };
+    let (tun_mode, tap_mode) = match mode {
+        DeviceMode::Tun => (true, false),
+        DeviceMode::Tap => (false, true),
+        DeviceMode::Both => (true, true),
+    };
+
+    let tun = if tun_mode {
+        let (addresses, dns_servers) = if mode == DeviceMode::Tap {
+            (&[][..], &[][..])
+        } else {
+            (addresses.as_slice(), dns_servers.as_slice())
+        };
+        Some(
+            create_networkmanager_device(
+                net,
+                tun_name,
+                mtu,
+                DeviceMode::Tun,
+                owner_uid,
+                group_gid,
+                addresses,
+                dns_servers,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let tap = if tap_mode {
+        let is_primary = mode == DeviceMode::Tap;
+        match create_networkmanager_device(
+            net,
+            tap_name.context("missing configured TAP interface name")?,
+            mtu,
+            DeviceMode::Tap,
+            owner_uid,
+            group_gid,
+            if is_primary { &addresses } else { &[] },
+            if is_primary { &dns_servers } else { &[] },
+        )
+        .await
+        {
+            Ok(tap) => Some(tap),
+            Err(error) => {
+                if let Some(tun) = &tun {
+                    let _ = net.deactivate_networkmanager_client_tun(tun.name()).await;
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok((tun, tap))
+}
+
+async fn create_networkmanager_device(
+    net: &SystemNet,
+    name: &str,
+    mtu: u16,
+    mode: DeviceMode,
+    owner_uid: u32,
+    group_gid: u32,
+    addresses: &[IpNet],
+    dns_servers: &[IpAddr],
+) -> Result<VirtualInterface> {
+    let mode_number = match mode {
+        DeviceMode::Tun => 1,
+        DeviceMode::Tap => 2,
+        DeviceMode::Both => anyhow::bail!("NetworkManager cannot create a combined TUN/TAP device"),
+    };
+    let tun_config = TunConfig {
+        name: Some(name.to_owned()),
+        mtu,
+        mode,
+    };
+    tun_config.validate()?;
+    net.create_networkmanager_client_tun(
+        name,
+        mtu,
+        mode_number,
+        owner_uid,
+        group_gid,
+        addresses,
+        dns_servers,
+    )
+    .await?;
+    match VirtualInterface::attach(tun_config).await {
+        Ok(device) => Ok(device),
+        Err(error) => {
+            let _ = net.deactivate_networkmanager_client_tun(name).await;
+            Err(error.into())
+        }
+    }
+}
+
+async fn create_native_client_devices(
+    mode: DeviceMode,
+    mtu: u16,
+    tun_name: &str,
+    tap_name: Option<&str>,
+) -> Result<(Option<VirtualInterface>, Option<VirtualInterface>)> {
+    let tun = if matches!(mode, DeviceMode::Tun | DeviceMode::Both) {
+        Some(
+            VirtualInterface::create(TunConfig {
+                name: Some(tun_name.to_owned()),
+                mtu,
+                mode: DeviceMode::Tun,
+            })
+            .await?,
+        )
+    } else {
+        None
+    };
+    let tap = if matches!(mode, DeviceMode::Tap | DeviceMode::Both) {
+        match VirtualInterface::create(TunConfig {
+            name: Some(
+                tap_name
+                    .context("missing configured TAP interface name")?
+                    .to_owned(),
+            ),
+            mtu,
+            mode: DeviceMode::Tap,
+        })
+        .await
+        {
+            Ok(tap) => Some(tap),
+            Err(error) => {
+                drop(tun);
+                return Err(error.into());
+            }
+        }
+    } else {
+        None
+    };
+    Ok((tun, tap))
+}
+
+fn client_interface_name(configured: Option<&str>, tap: bool) -> String {
+    if let Some(name) = configured {
+        if tap {
+            return format!("{}-tap", name.chars().take(11).collect::<String>());
+        }
+        return name.to_owned();
+    }
+    let process_id = std::process::id() % 1_000_000_000;
+    if tap {
+        format!("rvpt{process_id}")
+    } else {
+        format!("rvpn{process_id}")
+    }
+}
 
 pub async fn install_bootstrap_kill_switch(config: &ClientConfig) -> Result<bool> {
     if !config.routing.default_route && !config.routing.default_route_v6 {
@@ -39,6 +255,7 @@ pub async fn configure_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
+    networkmanager_managed: bool,
 ) -> Result<()> {
     let net = SystemNet::new().context("opening Linux rtnetlink connection")?;
     let interface_index = net.interface_index(dev.name()).await?;
@@ -56,16 +273,18 @@ pub async fn configure_client_network(
 
     net.set_link_up(dev.name()).await?;
 
-    for address in config
-        .interface
-        .address
-        .iter()
-        .chain(&config.interface.addresses)
-    {
-        let prefix: IpNet = address
-            .parse()
-            .with_context(|| format!("invalid configured interface address: {address}"))?;
-        net.add_address(dev.name(), prefix).await?;
+    if !networkmanager_managed {
+        for address in config
+            .interface
+            .address
+            .iter()
+            .chain(&config.interface.addresses)
+        {
+            let prefix: IpNet = address
+                .parse()
+                .with_context(|| format!("invalid configured interface address: {address}"))?;
+            net.add_address(dev.name(), prefix).await?;
+        }
     }
 
     for route in &config.routing.routes {
@@ -135,7 +354,8 @@ pub async fn configure_client_network(
         }
     }
 
-    if let Ok(dns_servers) = config.interface.dns_server_list()
+    if !networkmanager_managed
+        && let Ok(dns_servers) = config.interface.dns_server_list()
         && !dns_servers.is_empty()
     {
         if let Err(error) = net.set_dns(dev.name(), &dns_servers).await {
@@ -184,12 +404,16 @@ pub async fn teardown_client_network(
     dev: &VirtualInterface,
     config: &ClientConfig,
     server: SocketAddr,
+    networkmanager_interfaces: &[String],
 ) {
     let Ok(net) = SystemNet::new() else {
         tracing::warn!("could not open rtnetlink connection during client network teardown");
         return;
     };
     let Ok(interface_index) = net.interface_index(dev.name()).await else {
+        for interface in networkmanager_interfaces {
+            let _ = net.deactivate_networkmanager_client_tun(interface).await;
+        }
         return;
     };
 
@@ -237,7 +461,8 @@ pub async fn teardown_client_network(
         remove_server_route(&net, server, true).await;
     }
 
-    if config.interface.dns_servers.is_some()
+    if networkmanager_interfaces.is_empty()
+        && config.interface.dns_servers.is_some()
         && let Err(error) = net.revert_dns(dev.name()).await
     {
         tracing::warn!(%error, "failed to revert RVPN DNS configuration");
@@ -247,6 +472,12 @@ pub async fn teardown_client_network(
         let uid = unsafe { libc::geteuid() };
         if let Err(error) = net.remove_kill_switch(uid).await {
             tracing::warn!(%error, "failed to remove Linux RVPN kill switch");
+        }
+    }
+
+    for interface in networkmanager_interfaces {
+        if let Err(error) = net.deactivate_networkmanager_client_tun(interface).await {
+            tracing::warn!(%error, interface, "failed to deactivate RVPN NetworkManager profile");
         }
     }
 }
