@@ -31,12 +31,13 @@ pub fn socket_path() -> PathBuf {
 
 #[cfg(unix)]
 pub async fn serve(mut status: watch::Receiver<String>) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 
     let path = socket_path();
     let parent = path.parent().context("status socket path has no parent")?;
     tokio::fs::create_dir_all(parent).await?;
     tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).await?;
+    remove_stale_socket(&path).await?;
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("binding server status socket at {}", path.display()))?;
     tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).await?;
@@ -63,6 +64,37 @@ pub async fn serve(mut status: watch::Receiver<String>) -> Result<()> {
     .await;
     let _ = tokio::fs::remove_file(path).await;
     result
+}
+
+#[cfg(unix)]
+async fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_socket() {
+        anyhow::bail!("refusing to remove non-socket status path {}", path.display());
+    }
+
+    match UnixStream::connect(path).await {
+        Ok(_connection) => anyhow::bail!(
+            "server status socket already has a listener at {}",
+            path.display()
+        ),
+        Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => tracing::debug!(path = %path.display(), "removed stale server status socket"),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!("checking existing server status socket at {}", path.display())
+        }),
+    }
 }
 
 #[cfg(unix)]

@@ -88,7 +88,7 @@ impl SystemNet {
         }
 
         if let Some(connection) = connection.as_ref()
-            && Self::resolved_service_available(connection)
+            && Self::resolved_service_has_owner(connection)
                 .await
                 .unwrap_or(false)
             && let Err(error) = self.revert_dns_resolved(name, connection).await
@@ -178,6 +178,24 @@ impl SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
         Ok(names.iter().any(|n| n == "org.freedesktop.resolve1"))
+    }
+
+    /// Check whether systemd-resolved currently owns its D-Bus name without
+    /// asking D-Bus to activate it. During teardown, an inactive resolver has
+    /// no per-link state to revert, and trying to activate a missing unit only
+    /// produces a noisy failure.
+    async fn resolved_service_has_owner(connection: &Connection) -> Result<bool, NetError> {
+        let dbus = Proxy::new(
+            connection,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        dbus.call::<_, _, bool>("NameHasOwner", &"org.freedesktop.resolve1")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))
     }
 
     async fn network_manager_manages_dns() -> bool {
@@ -1147,7 +1165,7 @@ impl NetConfigurator for SystemNet {
             return resolv_conf_result;
         }
 
-        if !Self::resolved_service_available(&connection)
+        if !Self::resolved_service_has_owner(&connection)
             .await
             .unwrap_or(false)
         {
