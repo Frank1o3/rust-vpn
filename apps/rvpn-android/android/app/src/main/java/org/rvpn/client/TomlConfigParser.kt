@@ -145,6 +145,65 @@ object TomlConfigParser {
         )
     }
 
+    /** Renders a structured form config as readable, indented client TOML. */
+    fun fromRvpnConfig(config: RvpnConfig): String = buildString {
+        fun quoted(value: String) = buildString {
+            append('"')
+            value.forEach { character ->
+                when (character) {
+                    '\\' -> append("\\\\")
+                    '"' -> append("\\\"")
+                    '\b' -> append("\\b")
+                    '\t' -> append("\\t")
+                    '\n' -> append("\\n")
+                    '\u000C' -> append("\\f")
+                    '\r' -> append("\\r")
+                    else -> if (character.code < 0x20) {
+                        append("\\u%04x".format(character.code))
+                    } else {
+                        append(character)
+                    }
+                }
+            }
+            append('"')
+        }
+        append("server = ").append(quoted(config.server)).append("\n")
+        if (config.obfuscationKey.isNotBlank()) append("obfuscation_key = ").append(quoted(config.obfuscationKey)).append("\n")
+        append("\n[interface]\n")
+        append("    address = ").append(quoted("${config.tunnelAddress}/${config.tunnelPrefixLength}")).append("\n")
+        append("    mode = \"tun\"\n")
+        append("    mtu = ").append(config.mtu).append("\n")
+        if (config.ipv6Enabled && config.tunnelAddressV6.isNotBlank()) {
+            append("    addresses = [").append(quoted("${config.tunnelAddressV6}/${config.tunnelPrefixLengthV6}")).append("]\n")
+        }
+        if (config.dnsServers.isNotBlank()) append("    dns_servers = ").append(quoted(config.dnsServers)).append("\n")
+        append("\n[routing]\n")
+        append("    default_route = ").append(config.useDefaultRouteV4).append("\n")
+        append("    default_route_v6 = ").append(config.useDefaultRouteV6).append("\n")
+        val routes = (config.splitTunnelRoutesV4.split(',', '\n') + config.splitTunnelRoutesV6.split(',', '\n'))
+            .map(String::trim).filter(String::isNotEmpty)
+        if (routes.isNotEmpty()) append("    routes = [").append(routes.joinToString(", ") { quoted(it) }).append("]\n")
+        append("\n[auth]\n")
+        append("    mode = ").append(quoted(config.authMode)).append("\n")
+        when (config.authMode) {
+            "psk" -> append("    pre_shared_key = ").append(quoted(config.preSharedKey)).append("\n")
+            "pinned-key" -> {
+                append("    local_identity_seed = ").append(quoted(config.localIdentitySeed)).append("\n")
+                append("    peer_public_key = ").append(quoted(config.peerPublicKey)).append("\n")
+            }
+            "certificate" -> {
+                append("    local_identity_seed = ").append(quoted(config.localIdentitySeed)).append("\n")
+                append("    local_certificate = ").append(quoted(config.localCertificate)).append("\n")
+                append("    ca_public_key = ").append(quoted(config.caPublicKey)).append("\n")
+            }
+        }
+        append("\n[handshake]\n")
+        append("    retry_interval_ms = ").append(config.retryIntervalMs).append("\n")
+        append("    retry_limit = ").append(config.retryLimit).append("\n")
+        append("\n[rekey]\n")
+        append("    packet_limit = ").append(config.rekeyPacketLimit).append("\n")
+    }
+
     private fun splitCidr(value: String?): Pair<String, Int>? {
         if (value.isNullOrBlank()) return null
         val parts = value.split("/", limit = 2)

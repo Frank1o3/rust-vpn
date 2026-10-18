@@ -4,9 +4,9 @@
         "apps/rvpn-server",
         "apps/rvpn-tray",
         "crates/rvpn-config",
-        "crates/rvpn-dns",
         "crates/rvpn-core",
         "crates/rvpn-crypto",
+        "crates/rvpn-dns",
         "crates/rvpn-interface",
         "crates/rvpn-ipc",
         "crates/rvpn-net",
@@ -49,6 +49,7 @@
         chacha20poly1305="0.11"
         criterion={version="0.8.2", default-features=false}
         ed25519-dalek="3.0.0"
+        futures-util="0.3.34"
         hex="0.4.3"
         hickory-server={version="0.26.3", default-features=false, features=["resolver"]}
         hkdf="0.13"
@@ -61,21 +62,26 @@
         nftnl="0.9.4"
         rand="0.10.3"
         rtnetlink="0.23.0"
-        serde_json="1.0.154"
         serde={version="1.0.229", features=["derive"]}
+        serde_json="1.0.154"
         sha2="0.11.1"
-        socket2="0.6.5"
+        tao="0.37.1"
         thiserror="2.0.21"
         tokio={version="1.53.1", features=["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]}
         tokio-util="0.7.20"
         toml="1.1.8"
         tracing="0.1.44"
         tracing-subscriber="0.3.23"
-        tao="0.37.1"
         tray-icon={version="0.26.1", default-features=false, features=["ksni"]}
-        futures-util="0.3.34"
-        zbus={version="6.0.0", default-features=false, features=["proxy", "tokio"]}
+        windows-sys={version="0.61.2", features=[
+            "Win32_NetworkManagement_IpHelper",
+            "Win32_NetworkManagement_Ndis",
+            "Win32_NetworkManagement_WindowsFilteringPlatform",
+            "Win32_Networking_WinSock",
+            "Win32_Security",
+            "Win32_System_Rpc",
+        ]}
         wintun="0.5.1"
-        windows-sys={version="0.61.2", features=["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WindowsFilteringPlatform", "Win32_Networking_WinSock", "Win32_Security", "Win32_System_Rpc"]}
         x25519-dalek={version="3.0.0", features=["static_secrets"]}
+        zbus={version="6.0.0", default-features=false, features=["proxy", "tokio"]}
         zeroize="1.9.1"

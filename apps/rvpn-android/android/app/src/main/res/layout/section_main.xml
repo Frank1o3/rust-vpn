@@ -28,6 +28,17 @@
             android:textColor="#757575"
             android:layout_marginBottom="16dp" />
 
+        <TextView
+            android:id="@+id/diagnosticsText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="14dp"
+            android:background="#F5F5F5"
+            android:text="Connection details will appear here"
+            android:textSize="13sp"
+            android:textColor="#424242"
+            android:layout_marginBottom="16dp" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

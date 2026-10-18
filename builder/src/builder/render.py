@@ -248,14 +248,8 @@ def qr_available() -> bool:
 
 
 def compact_toml(text: str) -> str:
-    """Strip comments, blank lines, and indentation — shrinks the QR payload
-    without changing what the Android TOML reader parses (it trims lines)."""
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    return "\n".join(lines) + "\n"
+    """Keep TOML whitespace and comments intact for readable QR imports."""
+    return text
 
 
 def build_qr(payload: str):
@@ -281,7 +275,7 @@ def emit_android_qr(peer_name: str, client_toml: str, png_path: Path) -> Path | 
         return None
 
     try:
-        payload = compact_toml(client_toml)
+        payload = client_toml
         qr = build_qr(payload)
         qr.save(str(png_path), kind="png", scale=PNG_SCALE, border=PNG_BORDER)
         png_path.chmod(0o600)

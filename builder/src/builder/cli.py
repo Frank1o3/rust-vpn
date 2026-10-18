@@ -331,7 +331,8 @@ def gather_peers(setup: SetupConfig) -> list[PeerSetup]:
 
     for global_index, (platform, platform_index) in enumerate(peer_specs, start=1):
         section(f"{platform.capitalize()} peer {platform_index}")
-        default_name = f"{platform}-{platform_index}"
+        platform_label = "PC" if platform == "pc" else "Android"
+        default_name = platform_label if platform_index == 1 else f"{platform_label}-{platform_index}"
         while True:
             name = prompt("Peer name", default_name, required=True)
             if name in names:
@@ -426,8 +427,16 @@ def generate(output_dir: Path) -> tuple[Path, list[Path], Path | None]:
         write_private_text(ca_seed_path, setup.ca.seed + "\n")
 
     client_paths: list[Path] = []
+    used_filenames: set[str] = set()
     for peer in peers:
-        path = output_dir / f"client-{peer.platform}-{slugify(peer.name)}.toml"
+        base_name = f"client-{slugify(peer.name)}"
+        filename = base_name
+        suffix = 1
+        while f"{filename}.toml".casefold() in used_filenames:
+            filename = f"{base_name}-{suffix}"
+            suffix += 1
+        used_filenames.add(f"{filename}.toml".casefold())
+        path = output_dir / f"{filename}.toml"
         client_text = render_client_toml(setup, peer)
         write_private_text(path, client_text)
         client_paths.append(path)

@@ -32,6 +32,7 @@ const FILTER_KEYS: [GUID; 8] = [
 ];
 const FWP_E_ALREADY_EXISTS: u32 = 0x8032_0009;
 const FWP_E_FILTER_NOT_FOUND: u32 = 0x8032_0003;
+const FWP_E_INVALID_WEIGHT: u32 = 0x8032_0025;
 
 pub fn install(spec: &KillSwitchSpec) -> Result<(), NetError> {
     let engine = open_engine()?;
@@ -167,7 +168,7 @@ fn add_loopback(engine: HANDLE, ipv4: bool) -> Result<(), NetError> {
             "allow loopback IPv6"
         },
         FWP_ACTION_PERMIT,
-        250,
+        15,
         slice::from_mut(&mut condition),
     )
 }
@@ -186,7 +187,7 @@ fn add_endpoint(engine: HANDLE, endpoint: IpAddr) -> Result<(), NetError> {
                 FWPM_LAYER_OUTBOUND_IPPACKET_V4,
                 "allow RVPN IPv4 endpoint",
                 FWP_ACTION_PERMIT,
-                250,
+                15,
                 &mut conditions,
             )
         }
@@ -202,7 +203,7 @@ fn add_endpoint(engine: HANDLE, endpoint: IpAddr) -> Result<(), NetError> {
                 FWPM_LAYER_OUTBOUND_IPPACKET_V6,
                 "allow RVPN IPv6 endpoint",
                 FWP_ACTION_PERMIT,
-                250,
+                15,
                 &mut conditions,
             )
         }
@@ -234,7 +235,7 @@ fn add_tunnel(engine: HANDLE, ipv4: bool, index: u32) -> Result<(), NetError> {
             "allow RVPN tunnel IPv6"
         },
         FWP_ACTION_PERMIT,
-        250,
+        15,
         slice::from_mut(&mut condition),
     )
 }
@@ -254,7 +255,7 @@ fn add_block(engine: HANDLE, ipv4: bool) -> Result<(), NetError> {
             "block other outbound IPv6"
         },
         FWP_ACTION_BLOCK,
-        1,
+        0,
         &mut [],
     )
 }
@@ -330,7 +331,10 @@ fn check(code: u32) -> Result<(), NetError> {
 }
 
 fn error(code: u32) -> NetError {
-    NetError::Operation(format!(
-        "Windows Filtering Platform operation failed with error 0x{code:08x}"
-    ))
+    let description = if code == FWP_E_INVALID_WEIGHT {
+        "FWP_E_INVALID_WEIGHT (filter weight range must be between 0 and 15)"
+    } else {
+        "Windows Filtering Platform operation failed"
+    };
+    NetError::Operation(format!("{description} with error 0x{code:08x}"))
 }

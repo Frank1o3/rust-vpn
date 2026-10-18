@@ -11,51 +11,87 @@
         android:orientation="vertical">
 
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Config" android:textSize="22sp" android:textStyle="bold"
+            android:text="VPN configuration" android:textSize="22sp" android:textStyle="bold"
             android:layout_marginBottom="4dp" />
 
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="Scan the QR code printed by scripts/generate_rvpn_setup.py, or paste the contents of a client.toml file."
-            android:textSize="13sp" android:textColor="#757575"
-            android:layout_marginBottom="16dp" />
+            android:text="Enter your server and tunnel settings, or import a client file. Keys are stored only on this device."
+            android:textSize="13sp" android:textColor="#757575" android:layout_marginBottom="16dp" />
 
-        <Button android:id="@+id/scanQrButton"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:text="Load from QR code"
-            android:textSize="16sp"
+        <Button android:id="@+id/scanQrButton" android:layout_width="match_parent"
+            android:layout_height="56dp" android:text="Scan setup QR code" android:textSize="16sp"
             android:layout_marginBottom="8dp" />
-
         <Button android:id="@+id/pasteClipboardButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Paste from clipboard"
-            android:layout_marginBottom="16dp" />
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Import from clipboard" android:layout_marginBottom="16dp" />
 
-        <EditText android:id="@+id/configInput"
-            android:layout_width="match_parent"
-            android:layout_height="280dp"
-            android:gravity="top|start"
-            android:fontFamily="monospace"
-            android:textSize="13sp"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:hint="server = &quot;203.0.113.10:9000&quot;\n\n[interface]\naddress = &quot;10.42.0.2/24&quot;\n...\n\n[auth]\nmode = &quot;pinned-key&quot;\n..."
-            android:scrollbars="vertical"
-            android:background="#F5F5F5"
-            android:padding="12dp"
-            android:layout_marginBottom="12dp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Connection" android:textStyle="bold" android:textSize="17sp" android:layout_marginBottom="8dp" />
+        <EditText android:id="@+id/formServer" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Server address, e.g. vpn.example.com:9000" android:inputType="textUri" android:singleLine="true" />
 
-        <Button android:id="@+id/saveConfigButton" android:layout_width="match_parent"
-            android:layout_height="wrap_content" android:text="Save Configuration" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Authentication" android:textStyle="bold" android:layout_marginTop="12dp" />
+        <RadioGroup android:id="@+id/formAuthMode" android:layout_width="match_parent" android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/authPsk" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Shared key (PSK)" />
+            <RadioButton android:id="@+id/authPinned" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pinned server key" />
+            <RadioButton android:id="@+id/authCertificate" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Certificate" />
+        </RadioGroup>
+        <EditText android:id="@+id/formPsk" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Pre-shared key (64 hex characters)" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
+        <EditText android:id="@+id/formIdentitySeed" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="This device's private identity seed" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
+        <EditText android:id="@+id/formPeerKey" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Server public key" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
+        <EditText android:id="@+id/formCertificate" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device certificate" android:inputType="textMultiLine|textNoSuggestions" android:fontFamily="monospace" />
+        <EditText android:id="@+id/formCaKey" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Certificate authority public key" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
 
-        <TextView android:id="@+id/configStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="13sp"
-            android:textColor="#616161"
-            android:layout_marginTop="12dp" />
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Tunnel" android:textStyle="bold" android:textSize="17sp" android:layout_marginTop="16dp" />
+        <EditText android:id="@+id/formIpv4" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device IPv4 address / prefix" android:inputType="text" android:singleLine="true" />
+        <CheckBox android:id="@+id/formIpv6Enabled" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Enable IPv6" />
+        <EditText android:id="@+id/formIpv6" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device IPv6 address / prefix" android:inputType="text" android:singleLine="true" />
+        <EditText android:id="@+id/formDns" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="DNS servers, separated by commas" android:inputType="text" android:singleLine="true" />
+        <EditText android:id="@+id/formMtu" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="MTU" android:inputType="number" android:singleLine="true" />
+        <CheckBox android:id="@+id/formDefaultV4" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Route IPv4 internet traffic through VPN" />
+        <CheckBox android:id="@+id/formDefaultV6" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Route IPv6 internet traffic through VPN" />
+        <EditText android:id="@+id/formSplitRoutesV4" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Additional IPv4 routes (comma-separated CIDRs)" android:inputType="text" />
+        <EditText android:id="@+id/formSplitRoutesV6" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Additional IPv6 routes (comma-separated CIDRs)" android:inputType="text" />
+        <EditText android:id="@+id/formExcludedApps" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Apps excluded from VPN (package names, comma-separated)" android:inputType="text" />
 
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Advanced" android:textStyle="bold" android:textSize="17sp" android:layout_marginTop="16dp" />
+        <EditText android:id="@+id/formObfuscation" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Obfuscation key (optional)" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
+        <EditText android:id="@+id/formRekey" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Rekey packet limit" android:inputType="number" android:singleLine="true" />
+        <EditText android:id="@+id/formRetryInterval" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Handshake retry interval (ms)" android:inputType="number" android:singleLine="true" />
+        <EditText android:id="@+id/formRetryLimit" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Handshake retry limit" android:inputType="number" android:singleLine="true" />
+
+        <Button android:id="@+id/saveFormButton" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Save configuration" android:layout_marginTop="12dp" />
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Advanced: import or edit raw client.toml" android:textStyle="bold" android:layout_marginTop="24dp" android:layout_marginBottom="8dp" />
+        <EditText android:id="@+id/configInput" android:layout_width="match_parent" android:layout_height="220dp"
+            android:gravity="top|start" android:fontFamily="monospace" android:textSize="13sp"
+            android:inputType="textMultiLine|textNoSuggestions" android:hint="Paste client.toml here"
+            android:scrollbars="vertical" android:background="#F5F5F5" android:padding="12dp" />
+        <Button android:id="@+id/saveConfigButton" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Save raw TOML" android:layout_marginTop="8dp" />
+        <TextView android:id="@+id/configStatusText" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="" android:textSize="13sp" android:textColor="#616161" android:layout_marginTop="12dp" />
     </LinearLayout>
 </ScrollView>

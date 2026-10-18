@@ -9,8 +9,9 @@
     anyhow.workspace=true
     bytes.workspace=true
     hex.workspace=true
-    libc.workspace=true
     ipnet.workspace=true
+    libc.workspace=true
+    rand.workspace=true
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-crypto={path="../../crates/rvpn-crypto"}
@@ -18,10 +19,9 @@
     rvpn-interface={path="../../crates/rvpn-interface"}
     rvpn-net={path="../../crates/rvpn-net"}
     rvpn-protocol={path="../../crates/rvpn-protocol"}
-    rvpn-transport={path="../../crates/rvpn-transport"}
-    rand.workspace=true
-    serde_json.workspace=true
     rvpn-routing={path="../../crates/rvpn-routing"}
+    rvpn-transport={path="../../crates/rvpn-transport"}
+    serde_json.workspace=true
     tokio.workspace=true
     tracing.workspace=true
     tracing-subscriber.workspace=true
