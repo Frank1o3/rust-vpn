@@ -1,109 +1,108 @@
-# GitHub Issues for rust-vpn
+# RVPN Issue Triage
 
-Repository: `Frank1o3/rust-vpn`
-Last checked: 2026-10-12
+This file tracks security and robustness work against the current checkout. The
+issue numbers refer to the existing `Frank1o3/rust-vpn` GitHub issues. Remote
+issue statuses were not checked or changed during this review; entries below
+describe local implementation and remaining work.
 
-Total open issues: 10
-Total closed issues: 0
+Last local review: 2026-10-18.
 
----
+## Active verification work
 
-## 1) #15 — [Security][Medium] Test kill-switch UID, interface, endpoint and IPv6 fail-closed behavior
+### #15 — Verify kill-switch UID, interface, endpoint, and IPv6 behavior
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Validate that Linux kill-switch rules for a protected UID only allow the required loopback, tunnel, and endpoint traffic and fail closed under reconnects, endpoint changes, and IPv6 conditions.
-- Risk: A stale or overly broad exception could allow protected traffic to escape the tunnel or break reconnect behavior.
-- Classification: Defense-in-depth security test issue.
-- Local progress (2026-10-12): Added model-level checks for exact IPv4/IPv6 endpoint exceptions, DNS on physical versus tunnel interfaces, bootstrap fail-closed behavior, and endpoint replacement. Runtime nftables behavior during reconnect and interface changes still needs integration verification.
-- Implementation review (2026-10-13): The Linux client installs the bootstrap policy before endpoint resolution and replaces rules in one nftables transaction. Code is in place; packet-capture verification during reconnect and interface changes remains open.
+- **Local state:** The Linux kill switch has model-level tests for UID and
+  interface rules, IPv4 and IPv6 endpoint exceptions, DNS blocking, and
+  fail-closed bootstrap behavior. Replacement is submitted as one nftables
+  transaction.
+- **Remaining:** Exercise the installed rules under endpoint changes,
+  reconnects, interface changes, tunnel loss, and IPv6 traffic. Capture on the
+  physical interface to confirm the expected packets are blocked or permitted.
+- **Risk:** A stale or overly broad exception could allow protected traffic to
+  escape the tunnel or break recovery.
 
-## 2) #14 — [Security][Medium] Fuzz IP and Ethernet routing parsers and validate source/destination consistency
+### #14 — Fuzz IP and Ethernet routing parsers
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Add adversarial parsing and routing tests for malformed IPv4/IPv6, fragmentation, extension headers, ARP, Ethernet/IP mismatch, and unsupported EtherTypes.
-- Risk: Parser edge cases could crash the daemon or bypass source-validation assumptions.
-- Classification: Network parser hardening and fuzzing issue.
-- Implementation review (2026-10-13): The routing parser validates IPv4 lengths/checksums, bounded IPv6 extension chains, ARP structure, and Ethernet/IP version consistency. The `routing_parse` fuzz target and parser/router unit coverage are present. Broader adversarial corpus and sustained fuzzing remain open.
+- **Local state:** The parser validates IPv4 lengths and checksums, bounded
+  IPv6 extension chains, ARP structure, and Ethernet/IP version consistency.
+  Parser/router tests and the `routing_parse` fuzz target exist.
+- **Remaining:** Expand adversarial seeds and run sustained fuzzing, especially
+  around fragments, extension chains, source mismatches, unsupported
+  EtherTypes, and empty effective peer prefixes.
+- **Risk:** Parser edge cases could crash the daemon or bypass source-validation
+  assumptions.
 
-## 3) #13 — [Security][Medium] Test DNS bootstrap and endpoint-resolution leaks against kill-switch expectations
+### #13 — Verify DNS and endpoint-resolution leak behavior
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Verify whether DNS resolution for the VPN endpoint or application traffic can leak outside the tunnel during bootstrap, reconnect, or tunnel loss.
-- Risk: DNS or endpoint lookups may escape the encrypted path and violate privacy or expected fail-closed behavior.
-- Classification: Privacy and traffic-leak validation issue.
-- Local progress (2026-10-12): Linux now installs the bootstrap kill switch before endpoint resolution and permits only loopback plus the numeric VPN endpoint until the tunnel interface is ready. A regression check covers this policy and ensures tunnel DNS settings do not make hostname endpoints valid for full-tunnel bootstrap. Packet-capture verification across bootstrap, reconnect, and tunnel loss is still outstanding.
-- Implementation review (2026-10-13): Bootstrap rule installation precedes endpoint resolution in the client startup path. Runtime packet-capture verification across bootstrap, reconnect, and tunnel loss remains open.
+- **Local state:** Linux installs the bootstrap kill switch before endpoint
+  resolution and permits only loopback plus the numeric VPN endpoint until the
+  tunnel is ready. Existing checks cover the modeled policy.
+- **Observed:** Manual use behind a MikroTik that rejects outbound traffic
+  with an unexpected LAN source address has shown no observed leaks.
+- **Remaining:** Add packet-capture checks during bootstrap, reconnect, tunnel
+  loss, DNS queries, and shutdown. The MikroTik behavior is useful evidence,
+  but does not directly show which packets reached the physical interface.
+- **Risk:** DNS or endpoint traffic could escape the encrypted path in an
+  untested transition.
 
-## 4) #12 — [Security][High impact if violated] Strengthen replay-window tests across reordering and key transitions
+### #12 — Expand replay-window transition verification
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Ensure the protocol's sliding replay window rejects duplicate packets and does not allow replay across reordering, rekeying, or key-phase transitions.
-- Risk: Replay bypass could enable an attacker to resend valid encrypted packets and trigger undesired actions or protocol confusion.
-- Classification: Cryptographic protocol hardening.
-- Implementation review (2026-10-13): Replay windows reject duplicates and stale packets, preserve out-of-order packets within the window, and keep previous-key-phase replay state separate during the grace period. Unit coverage is present; expanded transition/reordering verification remains open.
+- **Local state:** Replay windows reject duplicate and stale packets, allow
+  valid out-of-order packets within the window, and keep previous-key-phase
+  replay state separate during the grace period. Unit coverage exists.
+- **Remaining:** Extend tests across reordering, rekey overlap, reconnect, and
+  boundary sequence values; retain these cases as protocol regression tests.
+- **Risk:** A replay bypass could accept a previously authenticated packet or
+  confuse state across key transitions.
 
-## 5) #11 — [Security][High impact if violated] Verify AEAD nonce uniqueness across rekey and reconnect paths
+### #11 — Audit AEAD nonce uniqueness across session lifecycles
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Confirm the system never reuses an AEAD `(key, nonce)` pair across rekey, reconnect, or session reestablishment events.
-- Risk: Nonce reuse under the same key could compromise confidentiality and integrity of encrypted traffic.
-- Classification: High-impact cryptographic invariant review.
-- Implementation review (2026-10-13): Session nonces derive from key phase and sequence number, and rekey/reconnect derivation coverage checks independently derived session keys. A broader audit of every session-establishment path remains open.
+- **Local state:** Packet nonces derive from key phase and sequence number.
+  Tests check key/nonce separation across reconnect and rekey derivations.
+- **Remaining:** Review every client and server session-establishment path and
+  document the invariant alongside the regression coverage.
+- **Risk:** Reusing a nonce with the same AEAD key could compromise traffic
+  confidentiality and integrity.
 
-## 6) #10 — [Security][Medium] Remove stale Unix control sockets without unlinking a live listener
+### #7 — Validate kill-switch replacement failure behavior
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Fix stale-socket recovery in the IPC layer so a second daemon cannot delete a still-running listener's socket path by mistake.
-- Risk: Instance confusion or control-plane takeover could occur if a live listener is replaced by a different daemon instance.
-- Classification: Local control-plane availability and instance-confusion issue.
-- Local implementation status: **Implemented** (2026-10-13). Stale-socket recovery probes the existing listener and compares inode identity before unlinking; a live listener is preserved. Regression coverage is present.
+- **Local state:** Replacement is submitted as a single nftables batch so a
+  failed update should leave the previous policy installed.
+- **Remaining:** Add or run failure-injection verification against a Linux
+  kernel and confirm the prior rules remain active after rejected updates.
+- **Risk:** A failed update that removes the old policy could expose traffic
+  outside the tunnel.
 
-## 7) #9 — [Security][Medium] Bound IPC control-message size and connection resources
+## Implemented locally; review for upstream closure
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Limit IPC socket message size, number of in-flight connections, and idle connection lifetime to avoid memory exhaustion or daemon unresponsiveness.
-- Risk: An attacker with local socket access could send oversized or never-terminated messages and degrade or stall the daemon.
-- Classification: Local denial-of-service hardening issue.
-- Local implementation status: **Implemented** (2026-10-13). IPC reads have a 64 KiB message cap, 30-second idle timeout, and 128-connection semaphore bound. Regression coverage is present.
+### #10 — Recover stale Unix control sockets safely
 
-## 8) #8 — [Security][Medium-High] Rate-limit unauthenticated UDP cookie challenges
+The IPC layer probes an existing listener and preserves a live socket instead
+of unlinking it. The server status socket also recovers stale socket files
+after an unclean exit while refusing to remove active sockets or non-socket
+files. Regression coverage exists for IPC stale-socket handling.
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Add source-aware and global rate limiting around unauthenticated UDP cookie challenges to reduce CPU and bandwidth abuse during handshake floods.
-- Risk: A flood of spoofed UDP initiation packets could consume resources and produce reflection or amplification problems.
-- Classification: Remote denial-of-service risk assessment.
-- Local implementation status: **Implemented** (2026-10-13). Cookie challenges are limited per source IP and globally per second, with a bounded source table. Regression coverage is present; operational tuning under real handshake floods remains open.
+### #9 — Bound IPC control-message and connection resources
 
-## 9) #7 — [Security][High] Preserve kill-switch rules if replacement installation fails
+IPC reads have a 64 KiB message cap, a 30-second idle timeout, and a
+128-connection semaphore bound. Regression coverage exists.
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Ensure nftables kill-switch updates are atomic or rollback-safe so a failed reinstall does not delete an active protection policy and leave the system fail-open.
-- Risk: A failed update may remove the old rules while the replacement is invalid, exposing traffic outside the tunnel.
-- Classification: Conditional security issue tied to host firewall state.
-- Local implementation status: **Implemented** (2026-10-13). Client kill-switch replacement is submitted as one nftables batch; failed replacement leaves the installed policy in place. Runtime failure-injection verification remains open.
+### #8 — Rate-limit unauthenticated UDP cookie challenges
 
-## 10) #6 — [Security][High] Fail closed when a peer has an empty effective allowed_ips list
+Cookie challenges are limited per source IP and globally per second, using a
+bounded source table. Regression coverage exists; production tuning under
+handshake floods is operational follow-up rather than missing implementation.
 
-- Status: Open
-- Created: 2026-10-10
-- Summary: Investigate whether `allowed_ips` can resolve to an empty list and implicitly allow all source addresses for a peer; reject that case or require an explicit unrestricted opt-in.
-- Risk: A peer with valid credentials but no effective source prefix may be able to inject unauthorized traffic or spoof source addresses.
-- Classification: High-risk routing and authorization validation issue.
-- Local implementation status: **Implemented** (2026-10-13). Static peer configuration rejects empty prefixes. The server now also rejects certificate-authenticated peers whose effective prefix list resolves empty, before activating the session. Router source validation independently denies empty-prefix peers.
+### #6 — Fail closed for empty effective `allowed_ips`
 
----
+Static configuration rejects empty peer prefixes. Certificate-authenticated
+peers are rejected before session activation if their effective prefixes are
+empty, and the router independently denies empty-prefix peers.
 
-## Notes
+## Other recent fixes
 
-- The repository currently has no closed issues on GitHub.
-- The issue list is populated from the GitHub issue tracker for `Frank1o3/rust-vpn` and reflects the active security and robustness work items currently tracked there.
-- The per-issue implementation notes above describe this checkout; GitHub issue statuses remain open until their outstanding verification and tracker follow-up are completed.
+- Linux DNS teardown checks that `systemd-resolved` currently owns its D-Bus
+  name before asking it to revert per-link state. A missing or inactive
+  resolver no longer causes an activation attempt during teardown.
+- Linux kill-switch teardown treats an absent per-UID RVPN table as already
+  cleaned up.
