@@ -44,8 +44,8 @@ impl SystemNet {
             && let Some(connection) = connection.as_ref()
             && Self::network_manager_service_available(connection).await
         {
-            if let Err(error) = Self::set_networkmanager_device_unmanaged(name, connection).await {
-                tracing::warn!(interface = name, %error, "could not mark native RVPN interface unmanaged in NetworkManager");
+            if let Err(error) = Self::set_networkmanager_device_managed(name, connection).await {
+                tracing::warn!(interface = name, %error, "could not mark native RVPN interface managed in NetworkManager");
             }
             match self.set_dns_networkmanager(name, servers, connection).await {
                 Ok(()) => return Ok(()),
@@ -99,7 +99,7 @@ impl SystemNet {
         Self::revert_dns_resolv_conf_fallback().await
     }
 
-    async fn set_networkmanager_device_unmanaged(
+    async fn set_networkmanager_device_managed(
         name: &str,
         connection: &Connection,
     ) -> Result<(), NetError> {
@@ -129,11 +129,11 @@ impl SystemNet {
         .await
         .map_err(|e| NetError::Operation(e.to_string()))?;
         device_proxy
-            .set_property("Managed", false)
+            .set_property("Managed", true)
             .await
             .map_err(|e| {
                 NetError::Operation(format!(
-                    "NetworkManager could not mark interface {name} unmanaged: {e}"
+                    "NetworkManager could not mark interface {name} managed: {e}"
                 ))
             })
     }

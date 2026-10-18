@@ -76,11 +76,15 @@ impl VirtualInterface {
         {
             return Err(std::io::Error::last_os_error().into());
         }
+        let owner = unsafe { libc::geteuid() } as libc::c_int;
+        if unsafe { libc::ioctl(file.as_raw_fd(), libc::TUNSETOWNER as libc::Ioctl, owner) } < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
         let name = request.assigned_name()?;
         set_mtu(&name, config.mtu)?;
 
         let _ = set_up(&name);
-        tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, "created Linux virtual device");
+        tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, owner_uid = owner, "created Linux virtual device");
         Ok(Self {
             file: AsyncFd::new(file)?,
             name,
