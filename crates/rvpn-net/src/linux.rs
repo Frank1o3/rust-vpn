@@ -621,8 +621,66 @@ impl SystemNet {
         let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
         settings.insert("connection", connection_settings);
 
+        // NetworkManager checks a profile's TUN properties against the live
+        // device before activating it. Reusing the device path with only a
+        // mode setting makes an owned TUN fail that check ("tun owner setting
+        // mismatches"). Mirror the actual device properties in this
+        // temporary DNS-only profile.
+        let tun_device = Proxy::new(
+            connection,
+            "org.freedesktop.NetworkManager",
+            device_path.as_str(),
+            "org.freedesktop.NetworkManager.Device.Tun",
+        )
+        .await
+        .map_err(|e| NetError::Operation(e.to_string()))?;
+        let mode = tun_device
+            .get_property::<String>("Mode")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let owner = tun_device
+            .get_property::<i64>("Owner")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let group = tun_device
+            .get_property::<i64>("Group")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let no_pi = tun_device
+            .get_property::<bool>("NoPi")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let vnet_hdr = tun_device
+            .get_property::<bool>("VnetHdr")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+        let multi_queue = tun_device
+            .get_property::<bool>("MultiQueue")
+            .await
+            .map_err(|e| NetError::Operation(e.to_string()))?;
+
         let mut tun_settings: HashMap<&str, Value<'static>> = HashMap::new();
-        tun_settings.insert("mode", Value::from(1_u32));
+        tun_settings.insert(
+            "mode",
+            Value::from(match mode.as_str() {
+                "tun" => 1_u32,
+                "tap" => 2_u32,
+                other => {
+                    return Err(NetError::Operation(format!(
+                        "NetworkManager reported unsupported TUN mode {other:?} for {name}"
+                    )));
+                }
+            }),
+        );
+        if owner >= 0 {
+            tun_settings.insert("owner", Value::from(owner.to_string()));
+        }
+        if group >= 0 {
+            tun_settings.insert("group", Value::from(group.to_string()));
+        }
+        tun_settings.insert("pi", Value::from(!no_pi));
+        tun_settings.insert("vnet-hdr", Value::from(vnet_hdr));
+        tun_settings.insert("multi-queue", Value::from(multi_queue));
         settings.insert("tun", tun_settings);
 
         if !v4_dns.is_empty() {
