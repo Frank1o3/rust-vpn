@@ -270,13 +270,13 @@ impl OutboundQueueReceiver {
                         yielded_to_deficit = true;
                         continue;
                     }
-                    if let Some(bucket) = &mut peer_queue.rate_bucket {
-                        if let Err(delay) = bucket.consume_or_delay(packet_size) {
-                            peer_queue.in_round = false;
-                            wait_for = Some(wait_for.map_or(delay, |old| old.min(delay)));
-                            state.rotation.push_back(key);
-                            continue;
-                        }
+                    if let Some(bucket) = &mut peer_queue.rate_bucket
+                        && let Err(delay) = bucket.consume_or_delay(packet_size)
+                    {
+                        peer_queue.in_round = false;
+                        wait_for = Some(wait_for.map_or(delay, |old| old.min(delay)));
+                        state.rotation.push_back(key);
+                        continue;
                     }
                     peer_queue.deficit -= packet_size;
                     let mut packet = peer_queue.packets.pop_front();

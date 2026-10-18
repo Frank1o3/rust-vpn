@@ -1,14 +1,24 @@
 {
-    "java.compile.nullAnalysis.mode": "disabled",
-    "java.configuration.updateBuildConfiguration": "disabled",
-    "java.import.gradle.java.home": "/usr/lib/jvm/java-17-temurin",
-    "java.import.gradle.home": "/usr/lib/jvm/java-17-temurin",
-    "java.configuration.runtimes": [
-        {
-            "name": "JavaSE-17",
-            "path": "/usr/lib/jvm/java-17-temurin",
-            "default": true
-        }
-    ],
-    "java.import.gradle.wrapper.enabled": true,
+    "files.watcherExclude": {
+        "**/target/**": true
+    },
+    "search.exclude": {
+        "**/target": true
+    },
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true,
+        "editor.semanticHighlighting.enabled": true
+    },
+    "rust-analyzer.checkOnSave": true,
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.workspace": false,
+    "rust-analyzer.check.allTargets": false,
+    "rust-analyzer.cargo.allTargets": false,
+    "rust-analyzer.cachePriming.enable": false,
+    "rust-analyzer.lru.capacity": 64,
+    "rust-analyzer.procMacro.processes": 1,
+    "lldb.launch.sourceLanguages": [
+        "rust"
+    ]
 }

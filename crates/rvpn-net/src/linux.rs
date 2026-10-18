@@ -78,10 +78,9 @@ impl SystemNet {
         if Self::network_manager_manages_dns().await
             && let Some(connection) = connection.as_ref()
             && Self::network_manager_service_available(connection).await
+            && let Err(error) = Self::revert_dns_networkmanager(connection, name).await
         {
-            if let Err(error) = Self::revert_dns_networkmanager(connection, name).await {
-                tracing::debug!(interface = name, %error, "no active RVPN NetworkManager DNS profile to restore");
-            }
+            tracing::debug!(interface = name, %error, "no active RVPN NetworkManager DNS profile to restore");
         }
 
         if let Some(connection) = connection.as_ref()
@@ -254,6 +253,7 @@ impl SystemNet {
     /// Ask NetworkManager to create and activate a temporary TUN/TAP profile
     /// for the Linux client. The caller then attaches its packet queue by
     /// opening /dev/net/tun and issuing TUNSETIFF with the returned name.
+    #[allow(clippy::too_many_arguments)] // These settings map directly to distinct NetworkManager profile fields.
     pub async fn create_networkmanager_client_tun(
         &self,
         name: &str,
@@ -1077,10 +1077,7 @@ impl NetConfigurator for SystemNet {
                 "NetworkManager.conf sets `dns=default` under [main]; \
                  configuring RVPN DNS via NetworkManager instead of systemd-resolved"
             );
-            return match self
-                .set_dns_networkmanager(name, servers, &connection)
-                .await
-            {
+            return match self.set_dns_networkmanager(name, servers, connection).await {
                 Ok(()) => Ok(()),
                 Err(error) if Self::is_networkmanager_unmanaged_error(&error) => {
                     tracing::warn!(

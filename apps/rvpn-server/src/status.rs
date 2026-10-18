@@ -7,9 +7,9 @@ use anyhow::{Context, Result};
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
-use std::path::PathBuf;
-#[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
+#[cfg(unix)]
+use std::path::PathBuf;
 use tokio::sync::watch;
 #[cfg(unix)]
 use tokio::{
@@ -76,7 +76,10 @@ async fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     if !metadata.file_type().is_socket() {
-        anyhow::bail!("refusing to remove non-socket status path {}", path.display());
+        anyhow::bail!(
+            "refusing to remove non-socket status path {}",
+            path.display()
+        );
     }
 
     match UnixStream::connect(path).await {
@@ -86,7 +89,9 @@ async fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
         ),
         Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {
             match tokio::fs::remove_file(path).await {
-                Ok(()) => tracing::debug!(path = %path.display(), "removed stale server status socket"),
+                Ok(()) => {
+                    tracing::debug!(path = %path.display(), "removed stale server status socket")
+                }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
@@ -94,7 +99,10 @@ async fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).with_context(|| {
-            format!("checking existing server status socket at {}", path.display())
+            format!(
+                "checking existing server status socket at {}",
+                path.display()
+            )
         }),
     }
 }
