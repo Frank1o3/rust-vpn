@@ -2665,7 +2665,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2756,6 +2755,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
  "zbus 6.0.0",
 ]
 

@@ -17,3 +17,6 @@
     nftnl.workspace=true
     rtnetlink.workspace=true
     zbus.workspace=true
+
+[target.'cfg(windows)'.dependencies]
+    windows-sys.workspace=true

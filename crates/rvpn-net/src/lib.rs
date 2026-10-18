@@ -6,12 +6,18 @@ use thiserror::Error;
 mod linux;
 #[cfg(target_os = "linux")]
 mod linux_killswitch;
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+mod windows_killswitch;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 mod unsupported;
 
 #[cfg(target_os = "linux")]
 pub use linux::SystemNet;
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+pub use windows::SystemNet;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub use unsupported::SystemNet;
 
 #[derive(Debug, Error)]
