@@ -25,6 +25,58 @@ improving long-term operations.
   bounded TTL-aware caching, and local operations documentation.
 - Recovery for stale local status sockets after an unclean server exit.
 
+## New control and policy improvements
+
+### Directional peer links
+
+Current `[[links]]` entries are symmetric groups: every listed peer can send
+to every other peer in that group. Add directed receiver/transmitter lists so
+operators can allow one-way communication without treating every group member
+as equally trusted. Keep `between` as a symmetric shorthand for compatibility.
+
+For example, this grants laptops and tablets permission to send to Android,
+without granting Android permission to send back:
+
+```toml
+[[links]]
+receivers = ["android"]
+transmitters = ["laptop", "tablet"]
+```
+
+Each transmitter-to-receiver pair should be an explicit authorization edge;
+rules should not become transitive. A peer can appear in both roles across
+separate entries. Define broadcast and multicast behavior explicitly: TAP
+frames should be delivered only to receivers authorized for that transmitter.
+Also define how server-originated traffic interacts with peer link rules.
+Unmatched peer-to-peer traffic remains denied. Decide whether an edge allows
+strictly one-way packets or permits return packets for flows initiated by an
+authorized transmitter; the latter requires bounded flow tracking and clear
+timeouts, while strict one-way rules will block ordinary request/response
+traffic unless the reverse edge is also configured.
+
+### DNS forwarder controls
+
+The server currently exposes upstream addresses, request timeout, retry count,
+and cache capacity. Consider per-upstream settings and status, deterministic
+failover or parallel queries, configurable positive and negative cache
+behavior, and optional encrypted upstream transports such as DNS-over-TLS or
+DNS-over-HTTPS. Add controls only with clear privacy, routing, certificate
+validation, and fallback semantics; retain the current bounded defaults.
+
+### Liveness controls
+
+The client exposes an authenticated-packet timeout (90 seconds by default,
+zero disables it), while keepalive interval and jitter use fixed transport
+defaults (25 seconds with 20% jitter). The scheduler is shared by the UDP
+transport and resets on any socket activity, so traffic from one peer—or even
+unauthenticated datagrams—can defer keepalives for other idle peers on a server.
+Consider per-peer probe scheduling based on authenticated activity, configurable
+intervals and jitter, a separate dead-peer timeout, and explicit recovery
+behavior after missed probes. Keep NAT maintenance, dead-link detection, and
+rekey scheduling as distinct settings because they serve different purposes.
+Account for mobile power use and never treat unauthenticated or replayed
+traffic as proof that a peer is alive.
+
 ## Active improvement priorities
 
 ### 1. Verify leak prevention on Linux (issues #13 and #15)
