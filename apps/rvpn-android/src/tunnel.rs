@@ -49,12 +49,16 @@ pub async fn run_tunnel(
     config: AndroidTunnelConfig,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let tun = VirtualInterface::from_raw_fd(
-        config.tun_fd,
-        "rvpn-android".into(),
-        config.mtu,
-        DeviceMode::Tun,
-    )
+    // SAFETY: Android detached this descriptor from the established VPN interface and transfers
+    // ownership to this tunnel task, which closes it when `VirtualInterface` is dropped.
+    let tun = unsafe {
+        VirtualInterface::from_raw_fd(
+            config.tun_fd,
+            "rvpn-android".into(),
+            config.mtu,
+            DeviceMode::Tun,
+        )
+    }
     .context("opening Android TUN device")?;
     #[allow(unused_assignments)]
     let mut server = rvpn_config::resolve_endpoint(&config.server)

@@ -8,7 +8,10 @@ impl VirtualInterface {
         Err(InterfaceError::UnsupportedPlatform)
     }
     #[cfg(unix)]
-    pub fn from_raw_fd(
+    /// # Safety
+    ///
+    /// `fd` must be a valid, open descriptor transferred to the returned interface.
+    pub unsafe fn from_raw_fd(
         _: std::os::fd::RawFd,
         _: String,
         _: u16,

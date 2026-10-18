@@ -10,10 +10,7 @@ use rtnetlink::{
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use tokio::sync::OnceCell;
-use zbus::{
-    Connection, Proxy,
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
-};
+use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Proxy, Variant};
 
 use crate::linux_killswitch;
 
@@ -274,50 +271,50 @@ impl SystemNet {
             ));
         }
 
-        let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
-        let mut connection_settings: HashMap<&str, Value<'static>> = HashMap::new();
-        connection_settings.insert("id", Value::from(format!("RVPN Client {name}")));
-        connection_settings.insert("type", Value::from("tun"));
-        connection_settings.insert("interface-name", Value::from(name.to_owned()));
-        connection_settings.insert("autoconnect", Value::from(false));
+        let mut settings: HashMap<&str, HashMap<&str, Variant<'static>>> = HashMap::new();
+        let mut connection_settings: HashMap<&str, Variant<'static>> = HashMap::new();
+        connection_settings.insert("id", Variant::from(format!("RVPN Client {name}")));
+        connection_settings.insert("type", Variant::from("tun"));
+        connection_settings.insert("interface-name", Variant::from(name.to_owned()));
+        connection_settings.insert("autoconnect", Variant::from(false));
         settings.insert("connection", connection_settings);
 
-        let mut tun_settings: HashMap<&str, Value<'static>> = HashMap::new();
-        tun_settings.insert("mode", Value::from(mode));
-        tun_settings.insert("owner", Value::from(owner_uid.to_string()));
-        tun_settings.insert("group", Value::from(group_gid.to_string()));
-        tun_settings.insert("pi", Value::from(false));
+        let mut tun_settings: HashMap<&str, Variant<'static>> = HashMap::new();
+        tun_settings.insert("mode", Variant::from(mode));
+        tun_settings.insert("owner", Variant::from(owner_uid.to_string()));
+        tun_settings.insert("group", Variant::from(group_gid.to_string()));
+        tun_settings.insert("pi", Variant::from(false));
         settings.insert("tun", tun_settings);
 
-        let v4_addresses: Vec<HashMap<&str, Value<'static>>> = addresses
+        let v4_addresses: Vec<HashMap<&str, Variant<'static>>> = addresses
             .iter()
             .filter_map(|address| match address {
                 IpNet::V4(address) => {
                     let mut data = HashMap::new();
-                    data.insert("address", Value::from(address.addr().to_string()));
-                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    data.insert("address", Variant::from(address.addr().to_string()));
+                    data.insert("prefix", Variant::from(u32::from(address.prefix_len())));
                     Some(data)
                 }
                 IpNet::V6(_) => None,
             })
             .collect();
-        let v6_addresses: Vec<HashMap<&str, Value<'static>>> = addresses
+        let v6_addresses: Vec<HashMap<&str, Variant<'static>>> = addresses
             .iter()
             .filter_map(|address| match address {
                 IpNet::V6(address) => {
                     let mut data = HashMap::new();
-                    data.insert("address", Value::from(address.addr().to_string()));
-                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    data.insert("address", Variant::from(address.addr().to_string()));
+                    data.insert("prefix", Variant::from(u32::from(address.prefix_len())));
                     Some(data)
                 }
                 IpNet::V4(_) => None,
             })
             .collect();
 
-        let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        let mut ipv4_settings: HashMap<&str, Variant<'static>> = HashMap::new();
         ipv4_settings.insert(
             "method",
-            Value::from(
+            Variant::from(
                 if v4_addresses.is_empty() && dns_servers.iter().all(|a| a.is_ipv6()) {
                     "disabled"
                 } else {
@@ -326,7 +323,7 @@ impl SystemNet {
             ),
         );
         if !v4_addresses.is_empty() {
-            ipv4_settings.insert("address-data", Value::from(v4_addresses));
+            ipv4_settings.insert("address-data", Variant::from(v4_addresses));
         }
         let v4_dns: Vec<String> = dns_servers
             .iter()
@@ -334,16 +331,16 @@ impl SystemNet {
             .map(ToString::to_string)
             .collect();
         if !v4_dns.is_empty() {
-            ipv4_settings.insert("dns-data", Value::from(v4_dns));
-            ipv4_settings.insert("dns-priority", Value::from(-1_i32));
-            ipv4_settings.insert("ignore-auto-dns", Value::from(true));
+            ipv4_settings.insert("dns-data", Variant::from(v4_dns));
+            ipv4_settings.insert("dns-priority", Variant::from(-1_i32));
+            ipv4_settings.insert("ignore-auto-dns", Variant::from(true));
         }
         settings.insert("ipv4", ipv4_settings);
 
-        let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        let mut ipv6_settings: HashMap<&str, Variant<'static>> = HashMap::new();
         ipv6_settings.insert(
             "method",
-            Value::from(
+            Variant::from(
                 if v6_addresses.is_empty() && dns_servers.iter().all(|a| a.is_ipv4()) {
                     "disabled"
                 } else {
@@ -352,7 +349,7 @@ impl SystemNet {
             ),
         );
         if !v6_addresses.is_empty() {
-            ipv6_settings.insert("address-data", Value::from(v6_addresses));
+            ipv6_settings.insert("address-data", Variant::from(v6_addresses));
         }
         let v6_dns: Vec<String> = dns_servers
             .iter()
@@ -360,17 +357,17 @@ impl SystemNet {
             .map(ToString::to_string)
             .collect();
         if !v6_dns.is_empty() {
-            ipv6_settings.insert("dns-data", Value::from(v6_dns));
-            ipv6_settings.insert("dns-priority", Value::from(-1_i32));
-            ipv6_settings.insert("ignore-auto-dns", Value::from(true));
+            ipv6_settings.insert("dns-data", Variant::from(v6_dns));
+            ipv6_settings.insert("dns-priority", Variant::from(-1_i32));
+            ipv6_settings.insert("ignore-auto-dns", Variant::from(true));
         }
         settings.insert("ipv6", ipv6_settings);
 
         let root = ObjectPath::try_from("/")
             .map_err(|e| NetError::Operation(format!("invalid NetworkManager object path: {e}")))?;
-        let mut options: HashMap<&str, Value<'static>> = HashMap::new();
-        options.insert("persist", Value::from("volatile"));
-        options.insert("bind-activation", Value::from("dbus-client"));
+        let mut options: HashMap<&str, Variant<'static>> = HashMap::new();
+        options.insert("persist", Variant::from("volatile"));
+        options.insert("bind-activation", Variant::from("dbus-client"));
         let manager = Proxy::new(
             &connection,
             "org.freedesktop.NetworkManager",
@@ -383,7 +380,7 @@ impl SystemNet {
             .call::<_, _, (
                 OwnedObjectPath,
                 OwnedObjectPath,
-                HashMap<String, OwnedValue>,
+                HashMap<String, OwnedVariant>,
             )>(
                 "AddAndActivateConnection2",
                 &(settings, root.clone(), root, options),
@@ -583,26 +580,26 @@ impl SystemNet {
             }
         }
 
-        let v4_addresses: Vec<HashMap<&str, Value<'static>>> = tunnel_addresses
+        let v4_addresses: Vec<HashMap<&str, Variant<'static>>> = tunnel_addresses
             .iter()
             .filter_map(|address| match address {
                 IpNet::V4(address) => {
                     let mut data = HashMap::new();
-                    data.insert("address", Value::from(address.addr().to_string()));
-                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    data.insert("address", Variant::from(address.addr().to_string()));
+                    data.insert("prefix", Variant::from(u32::from(address.prefix_len())));
                     Some(data)
                 }
                 IpNet::V6(_) => None,
             })
             .collect();
 
-        let v6_addresses: Vec<HashMap<&str, Value<'static>>> = tunnel_addresses
+        let v6_addresses: Vec<HashMap<&str, Variant<'static>>> = tunnel_addresses
             .iter()
             .filter_map(|address| match address {
                 IpNet::V6(address) => {
                     let mut data = HashMap::new();
-                    data.insert("address", Value::from(address.addr().to_string()));
-                    data.insert("prefix", Value::from(u32::from(address.prefix_len())));
+                    data.insert("address", Variant::from(address.addr().to_string()));
+                    data.insert("prefix", Variant::from(u32::from(address.prefix_len())));
                     Some(data)
                 }
                 IpNet::V4(_) => None,
@@ -630,13 +627,13 @@ impl SystemNet {
             ));
         }
 
-        let mut connection_settings: HashMap<&str, Value<'static>> = HashMap::new();
-        connection_settings.insert("id", Value::from(format!("RVPN DNS {name}")));
-        connection_settings.insert("type", Value::from("tun"));
-        connection_settings.insert("interface-name", Value::from(name.to_owned()));
-        connection_settings.insert("autoconnect", Value::from(false));
+        let mut connection_settings: HashMap<&str, Variant<'static>> = HashMap::new();
+        connection_settings.insert("id", Variant::from(format!("RVPN DNS {name}")));
+        connection_settings.insert("type", Variant::from("tun"));
+        connection_settings.insert("interface-name", Variant::from(name.to_owned()));
+        connection_settings.insert("autoconnect", Variant::from(false));
 
-        let mut settings: HashMap<&str, HashMap<&str, Value<'static>>> = HashMap::new();
+        let mut settings: HashMap<&str, HashMap<&str, Variant<'static>>> = HashMap::new();
         settings.insert("connection", connection_settings);
 
         // NetworkManager checks a profile's TUN properties against the live
@@ -677,10 +674,10 @@ impl SystemNet {
             .await
             .map_err(|e| NetError::Operation(e.to_string()))?;
 
-        let mut tun_settings: HashMap<&str, Value<'static>> = HashMap::new();
+        let mut tun_settings: HashMap<&str, Variant<'static>> = HashMap::new();
         tun_settings.insert(
             "mode",
-            Value::from(match mode.as_str() {
+            Variant::from(match mode.as_str() {
                 "tun" => 1_u32,
                 "tap" => 2_u32,
                 other => {
@@ -691,23 +688,23 @@ impl SystemNet {
             }),
         );
         if owner >= 0 {
-            tun_settings.insert("owner", Value::from(owner.to_string()));
+            tun_settings.insert("owner", Variant::from(owner.to_string()));
         }
         if group >= 0 {
-            tun_settings.insert("group", Value::from(group.to_string()));
+            tun_settings.insert("group", Variant::from(group.to_string()));
         }
-        tun_settings.insert("pi", Value::from(!no_pi));
-        tun_settings.insert("vnet-hdr", Value::from(vnet_hdr));
-        tun_settings.insert("multi-queue", Value::from(multi_queue));
+        tun_settings.insert("pi", Variant::from(!no_pi));
+        tun_settings.insert("vnet-hdr", Variant::from(vnet_hdr));
+        tun_settings.insert("multi-queue", Variant::from(multi_queue));
         settings.insert("tun", tun_settings);
 
         if !v4_dns.is_empty() {
-            let mut ipv4_settings: HashMap<&str, Value<'static>> = HashMap::new();
-            ipv4_settings.insert("method", Value::from("manual"));
-            ipv4_settings.insert("address-data", Value::from(v4_addresses));
+            let mut ipv4_settings: HashMap<&str, Variant<'static>> = HashMap::new();
+            ipv4_settings.insert("method", Variant::from("manual"));
+            ipv4_settings.insert("address-data", Variant::from(v4_addresses));
             ipv4_settings.insert(
                 "dns-data",
-                Value::from(
+                Variant::from(
                     servers
                         .iter()
                         .filter(|a| a.is_ipv4())
@@ -715,18 +712,18 @@ impl SystemNet {
                         .collect::<Vec<_>>(),
                 ),
             );
-            ipv4_settings.insert("dns-priority", Value::from(-1_i32));
-            ipv4_settings.insert("ignore-auto-dns", Value::from(true));
+            ipv4_settings.insert("dns-priority", Variant::from(-1_i32));
+            ipv4_settings.insert("ignore-auto-dns", Variant::from(true));
             settings.insert("ipv4", ipv4_settings);
         }
 
         if !v6_dns.is_empty() {
-            let mut ipv6_settings: HashMap<&str, Value<'static>> = HashMap::new();
-            ipv6_settings.insert("method", Value::from("manual"));
-            ipv6_settings.insert("address-data", Value::from(v6_addresses));
+            let mut ipv6_settings: HashMap<&str, Variant<'static>> = HashMap::new();
+            ipv6_settings.insert("method", Variant::from("manual"));
+            ipv6_settings.insert("address-data", Variant::from(v6_addresses));
             ipv6_settings.insert(
                 "dns-data",
-                Value::from(
+                Variant::from(
                     servers
                         .iter()
                         .filter(|a| a.is_ipv6())
@@ -734,17 +731,17 @@ impl SystemNet {
                         .collect::<Vec<_>>(),
                 ),
             );
-            ipv6_settings.insert("dns-priority", Value::from(-1_i32));
-            ipv6_settings.insert("ignore-auto-dns", Value::from(true));
+            ipv6_settings.insert("dns-priority", Variant::from(-1_i32));
+            ipv6_settings.insert("ignore-auto-dns", Variant::from(true));
             settings.insert("ipv6", ipv6_settings);
         }
 
         let specific_object = ObjectPath::try_from("/")
             .map_err(|e| NetError::Operation(format!("invalid NetworkManager object path: {e}")))?;
-        let options: HashMap<&str, Value<'static>> = HashMap::new();
+        let options: HashMap<&str, Variant<'static>> = HashMap::new();
 
         manager
-            .call::<_, _, (OwnedObjectPath, OwnedObjectPath, HashMap<String, OwnedValue>)>(
+            .call::<_, _, (OwnedObjectPath, OwnedObjectPath, HashMap<String, OwnedVariant>)>(
                 "AddAndActivateConnection2",
                 &(settings, device_path, specific_object, options),
             )

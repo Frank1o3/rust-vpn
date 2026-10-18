@@ -6,5 +6,5 @@
     version.workspace=true
 
 [dependencies]
-    ipnet="2.12.2"
+    ipnet.workspace=true
     rvpn-core={path="../rvpn-core"}

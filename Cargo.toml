@@ -44,25 +44,38 @@
     [workspace.dependencies]
         anyhow="1.0.104"
         bytes="1.12.1"
+        caps="0.5.6"
         chacha20="0.10.2"
         chacha20poly1305="0.11"
+        criterion={version="0.8.2", default-features=false}
         ed25519-dalek="3.0.0"
         hex="0.4.3"
+        hickory-server={version="0.26.3", default-features=false, features=["resolver"]}
         hkdf="0.13"
         hmac="0.13"
-        interprocess={version="2.4.5", features=["tokio"]}
+        interprocess={version="2.4.6", features=["tokio"]}
         ipnet="2.11"
-        libc="0.2.190"
+        jni="0.22.4"
+        libc="0.2.191"
+        mnl="0.3.1"
+        nftnl="0.9.4"
         rand="0.10.3"
-        serde_json="1.0.151"
+        rtnetlink="0.23.0"
+        serde_json="1.0.154"
         serde={version="1.0.229", features=["derive"]}
         sha2="0.11.1"
         socket2="0.6.5"
         thiserror="2.0.21"
         tokio={version="1.53.1", features=["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"]}
+        tokio-util="0.7.20"
         toml="1.1.8"
         tracing="0.1.44"
         tracing-subscriber="0.3.23"
+        tao="0.37.1"
+        tray-icon={version="0.26.1", default-features=false, features=["ksni"]}
+        futures-util="0.3.34"
+        zbus={version="6.0.0", default-features=false, features=["proxy", "tokio"]}
         wintun="0.5.1"
+        windows-sys={version="0.61.2", features=["Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"]}
         x25519-dalek={version="3.0.0", features=["static_secrets"]}
         zeroize="1.9.1"

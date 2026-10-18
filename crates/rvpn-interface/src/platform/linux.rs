@@ -86,7 +86,7 @@ impl VirtualInterface {
         let _ = set_up(&name);
         tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, owner_uid = owner, "created Linux virtual device");
         Ok(Self {
-            file: AsyncFd::new(file)?,
+            file: register_file(file)?,
             name,
             mtu: config.mtu,
             mode: config.mode,
@@ -132,14 +132,20 @@ impl VirtualInterface {
 
         tracing::info!(interface = %name, mtu = config.mtu, mode = ?config.mode, "attached to NetworkManager-created Linux virtual device");
         Ok(Self {
-            file: AsyncFd::new(file)?,
+            file: register_file(file)?,
             name: name.to_owned(),
             mtu: config.mtu,
             mode: config.mode,
         })
     }
 
-    pub fn from_raw_fd(
+    /// Takes ownership of `fd` and registers it for asynchronous I/O.
+    ///
+    /// # Safety
+    ///
+    /// `fd` must be a valid, open file descriptor that is not owned elsewhere. The caller must
+    /// not use or close it after this call, because `VirtualInterface` closes it when dropped.
+    pub unsafe fn from_raw_fd(
         fd: RawFd,
         name: String,
         mtu: u16,
@@ -153,7 +159,7 @@ impl VirtualInterface {
         }
         let file = unsafe { File::from_raw_fd(fd) };
         Ok(Self {
-            file: AsyncFd::new(file)?,
+            file: register_file(file)?,
             name,
             mtu,
             mode,
@@ -234,6 +240,12 @@ impl VirtualInterface {
             }
         }
     }
+}
+
+fn register_file(file: File) -> Result<AsyncFd<File>, InterfaceError> {
+    // SAFETY: `File` owns a valid open descriptor and keeps that descriptor stable until the
+    // returned `AsyncFd` is dropped.
+    Ok(unsafe { AsyncFd::register(file).map_err(std::io::Error::from)? })
 }
 
 fn validate_packet(packet: &[u8], mtu: u16, mode: DeviceMode) -> Result<(), InterfaceError> {
@@ -356,8 +368,12 @@ mod tests {
         let mut fds = [0; 2];
         let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) };
         assert_eq!(rc, 0);
-        let dev = VirtualInterface::from_raw_fd(fds[0], "test-tun".into(), 1400, DeviceMode::Tun)
-            .unwrap();
+        // SAFETY: the socketpair owns both descriptors, and ownership of `fds[0]` is transferred
+        // to the virtual interface for the duration of the test.
+        let dev = unsafe {
+            VirtualInterface::from_raw_fd(fds[0], "test-tun".into(), 1400, DeviceMode::Tun)
+        }
+        .unwrap();
         assert_eq!(dev.name(), "test-tun");
         assert_eq!(dev.mtu(), 1400);
         assert_eq!(dev.mode(), DeviceMode::Tun);

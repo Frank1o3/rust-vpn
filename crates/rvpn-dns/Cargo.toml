@@ -7,8 +7,8 @@
 
 [dependencies]
     anyhow.workspace=true
-    hickory-server={version="0.26.3", default-features=false, features=["resolver"]}
+    hickory-server.workspace=true
     ipnet.workspace=true
     tokio.workspace=true
-    tokio-util="0.7.20"
+    tokio-util.workspace=true
     tracing.workspace=true

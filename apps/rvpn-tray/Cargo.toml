@@ -8,13 +8,13 @@
 [dependencies]
     anyhow.workspace=true
     bytes.workspace=true
-    caps="0.5.6"
+    caps.workspace=true
     libc.workspace=true
     rvpn-config={path="../../crates/rvpn-config"}
     rvpn-core={path="../../crates/rvpn-core"}
     rvpn-ipc={path="../../crates/rvpn-ipc"}
-    tao="0.37.0"
+    tao.workspace=true
     tokio.workspace=true
     tracing.workspace=true
     tracing-subscriber.workspace=true
-    tray-icon={version="0.25.0", default-features=false, features=["ksni"]}
+    tray-icon.workspace=true
