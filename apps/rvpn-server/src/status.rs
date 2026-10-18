@@ -8,6 +8,8 @@ use anyhow::{Context, Result};
 use std::io;
 #[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use tokio::sync::watch;
 #[cfg(unix)]
 use tokio::{
@@ -31,7 +33,7 @@ pub fn socket_path() -> PathBuf {
 
 #[cfg(unix)]
 pub async fn serve(mut status: watch::Receiver<String>) -> Result<()> {
-    use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
 
     let path = socket_path();
     let parent = path.parent().context("status socket path has no parent")?;
