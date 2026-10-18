@@ -4,7 +4,7 @@ use rtnetlink::{
     Handle, LinkMessageBuilder, LinkUnspec, RouteMessageBuilder,
     packet_route::{
         address::AddressAttribute,
-        route::{RouteAddress, RouteAttribute},
+        route::{RouteAddress, RouteAttribute, RouteScope},
     },
 };
 use std::collections::HashMap;
@@ -34,6 +34,34 @@ impl SystemNet {
             rtnetlink::new_connection().map_err(|e| NetError::Operation(e.to_string()))?;
         tokio::spawn(connection);
         Ok(Self { handle })
+    }
+
+    /// Configure DNS for a client tunnel without creating a NetworkManager profile.
+    pub async fn set_dns_native(&self, name: &str, servers: &[IpAddr]) -> Result<(), NetError> {
+        let Ok(connection) = Self::system_bus().await else {
+            return Self::set_dns_resolv_conf_fallback(servers).await;
+        };
+        if !Self::resolved_service_available(&connection)
+            .await
+            .unwrap_or(false)
+        {
+            return Self::set_dns_resolv_conf_fallback(servers).await;
+        }
+        self.set_dns_resolved(name, servers, &connection).await
+    }
+
+    /// Restore DNS after a client tunnel configured with `set_dns_native` is closed.
+    pub async fn revert_dns_native(&self, name: &str) -> Result<(), NetError> {
+        let Ok(connection) = Self::system_bus().await else {
+            return Self::revert_dns_resolv_conf_fallback().await;
+        };
+        if !Self::resolved_service_available(&connection)
+            .await
+            .unwrap_or(false)
+        {
+            return Self::revert_dns_resolv_conf_fallback().await;
+        }
+        self.revert_dns_resolved(name, &connection).await
     }
 
     async fn index(&self, name: &str) -> Result<u32, NetError> {
@@ -745,6 +773,9 @@ impl SystemNet {
                 if let Some(index) = route.interface_index {
                     builder = builder.output_interface(index);
                 }
+                if route.gateway.is_none() && route.interface_index.is_some() {
+                    builder = builder.scope(RouteScope::Link);
+                }
                 Ok(builder.build())
             }
             IpNet::V6(net) => {
@@ -768,6 +799,9 @@ impl SystemNet {
                 }
                 if let Some(index) = route.interface_index {
                     builder = builder.output_interface(index);
+                }
+                if route.gateway.is_none() && route.interface_index.is_some() {
+                    builder = builder.scope(RouteScope::Link);
                 }
                 Ok(builder.build())
             }
