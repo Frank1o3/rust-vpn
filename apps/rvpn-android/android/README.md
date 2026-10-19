@@ -8,7 +8,7 @@ Android 10+ (API 29+) VPN client for the RVPN protocol.
 ┌────────────────────────────────────────────────────────┐
 │               Android UI (MainActivity)                │
 │  - Connect/Disconnect toggle                           │
-│  - Server, PSK, tunnel IP, DNS configuration           │
+│  - Server, authentication, tunnel IP, DNS configuration│
 │  - Requests VPN permission via VpnService.prepare()    │
 └───────────────────────────┬────────────────────────────┘
                             │
@@ -63,4 +63,4 @@ cargo ndk -t armeabi-v7a -o apps/rvpn-android/android/app/src/main/jniLibs build
    ./gradlew assembleDebug
    adb install app/build/outputs/apk/debug/app-debug.apk
    ```
-4. Enter the RVPN server IP:port and the 64-hex-character PSK, then tap **Connect**.
+4. Import a client configuration or enter the server, pinned-key or certificate credentials, and tunnel settings, then tap **Connect**.

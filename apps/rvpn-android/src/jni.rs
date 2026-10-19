@@ -171,7 +171,6 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
     vpn_service: JObject<'local>,
     server_str: JString<'local>,
     auth_mode_str: JString<'local>,
-    psk_hex_str: JString<'local>,
     local_identity_seed_str: JString<'local>,
     peer_public_key_str: JString<'local>,
     local_certificate_str: JString<'local>,
@@ -246,7 +245,6 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             }
 
             let auth_mode = read_str!(auth_mode_str, "auth mode");
-            let _psk_hex = read_str!(psk_hex_str, "psk");
             let local_identity_seed_hex = read_str!(local_identity_seed_str, "local identity seed");
             let peer_public_key_hex = read_str!(peer_public_key_str, "peer public key");
             let local_certificate_hex = read_str!(local_certificate_str, "local certificate");

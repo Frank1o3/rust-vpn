@@ -34,12 +34,9 @@
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="Authentication" android:textStyle="bold" android:layout_marginTop="12dp" />
         <RadioGroup android:id="@+id/formAuthMode" android:layout_width="match_parent" android:layout_height="wrap_content">
-            <RadioButton android:id="@+id/authPsk" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Shared key (PSK)" />
             <RadioButton android:id="@+id/authPinned" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pinned server key" />
             <RadioButton android:id="@+id/authCertificate" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Certificate" />
         </RadioGroup>
-        <EditText android:id="@+id/formPsk" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:hint="Pre-shared key (64 hex characters)" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
         <EditText android:id="@+id/formIdentitySeed" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="This device's private identity seed" android:inputType="textNoSuggestions" android:fontFamily="monospace" />
         <EditText android:id="@+id/formPeerKey" android:layout_width="match_parent" android:layout_height="wrap_content"

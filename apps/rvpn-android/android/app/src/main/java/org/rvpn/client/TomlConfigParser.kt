@@ -33,7 +33,6 @@ private data class TomlRoutingSection(
 @Serializable
 private data class TomlAuthSection(
     val mode: String? = null,
-    @SerialName("pre_shared_key") val preSharedKey: String? = null,
     @SerialName("local_identity_seed") val localIdentitySeed: String? = null,
     @SerialName("peer_public_key") val peerPublicKey: String? = null,
     @SerialName("local_certificate") val localCertificate: String? = null,
@@ -56,7 +55,6 @@ private data class RvpnClientToml(
     val server: String? = null,
     @SerialName("dns_replace") val dnsReplace: Boolean? = null,
     @SerialName("obfuscation_key") val obfuscationKey: String? = null,
-    @SerialName("pre_shared_key") val preSharedKey: String? = null,
     @SerialName("interface") val iface: TomlInterfaceSection = TomlInterfaceSection(),
     val routing: TomlRoutingSection = TomlRoutingSection(),
     val auth: TomlAuthSection = TomlAuthSection(),
@@ -78,6 +76,10 @@ object TomlConfigParser {
     /** Parses client.toml and layers values over base configuration. */
     fun toRvpnConfig(text: String, base: RvpnConfig): RvpnConfig {
         val parsed: RvpnClientToml = toml.decodeFromString(RvpnClientToml.serializer(), text)
+        val authMode = parsed.auth.mode ?: base.authMode
+        require(authMode == "pinned-key" || authMode == "certificate") {
+            "PSK authentication was removed in protocol v3; use pinned-key or certificate credentials"
+        }
 
         val iface = parsed.iface
         val addresses = iface.addresses
@@ -109,12 +111,7 @@ object TomlConfigParser {
 
             obfuscationKey = parsed.obfuscationKey ?: base.obfuscationKey,
 
-            authMode = parsed.auth.mode ?: base.authMode,
-
-            preSharedKey =
-                parsed.auth.preSharedKey
-                    ?: parsed.preSharedKey
-                    ?: base.preSharedKey,
+            authMode = authMode,
 
             localIdentitySeed = parsed.auth.localIdentitySeed ?: base.localIdentitySeed,
             peerPublicKey = parsed.auth.peerPublicKey ?: base.peerPublicKey,
@@ -189,7 +186,6 @@ object TomlConfigParser {
         append("\n[auth]\n")
         append("    mode = ").append(quoted(config.authMode)).append("\n")
         when (config.authMode) {
-            "psk" -> append("    pre_shared_key = ").append(quoted(config.preSharedKey)).append("\n")
             "pinned-key" -> {
                 append("    local_identity_seed = ").append(quoted(config.localIdentitySeed)).append("\n")
                 append("    peer_public_key = ").append(quoted(config.peerPublicKey)).append("\n")

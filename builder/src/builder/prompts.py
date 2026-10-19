@@ -75,14 +75,17 @@ def prompt_network(text: str, default: str) -> str:
     while True:
         value = prompt(text, default=default, required=True)
         try:
-            ipaddress.ip_interface(value)
+            network = ipaddress.ip_network(value, strict=False)
         except ValueError:
             console.print(
-                "  [red]please enter a valid IP address with CIDR prefix, "
-                "e.g. 10.42.0.1/24.[/red]"
+                "  [red]please enter a valid tunnel subnet with CIDR prefix, "
+                "e.g. 10.42.0.0/24.[/red]"
             )
             continue
-        return str(ipaddress.ip_interface(value))
+        if network.num_addresses < 3:
+            console.print("  [red]the subnet must have room for a server and at least one peer.[/red]")
+            continue
+        return str(network)
 
 
 def prompt_interface_name(text: str, default: str) -> str:
@@ -215,6 +218,24 @@ def prompt_index_group(text: str, count: int) -> list[int]:
             continue
         if len(set(indexes)) != len(indexes) or len(indexes) < 2:
             console.print("  [red]choose at least two distinct peers.[/red]")
+            continue
+        if any(index < 1 or index > count for index in indexes):
+            console.print(f"  [red]peer numbers must be between 1 and {count}.[/red]")
+            continue
+        return indexes
+
+
+def prompt_index_list(text: str, count: int) -> list[int]:
+    while True:
+        value = prompt(text, required=True)
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        try:
+            indexes = [int(part) for part in parts]
+        except ValueError:
+            console.print("  [red]enter peer numbers separated by commas, e.g. 1,2.[/red]")
+            continue
+        if not indexes or len(set(indexes)) != len(indexes):
+            console.print("  [red]choose one or more distinct peers.[/red]")
             continue
         if any(index < 1 or index > count for index in indexes):
             console.print(f"  [red]peer numbers must be between 1 and {count}.[/red]")

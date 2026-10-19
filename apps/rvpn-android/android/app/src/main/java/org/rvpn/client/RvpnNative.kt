@@ -80,8 +80,7 @@ object RvpnNative {
      *
      * @param vpnService The running Android [VpnService] instance (used to call protect(fd)).
      * @param server The server address in host:port format (e.g. "10.0.0.1:9000").
-     * @param authMode One of "psk", "pinned-key", or "certificate".
-     * @param pskHex 64-hex-char PSK; used when authMode == "psk", otherwise ignored (pass "").
+     * @param authMode One of "pinned-key" or "certificate".
      * @param localIdentitySeedHex 64-hex-char Ed25519 seed; used by "pinned-key" and
      *   "certificate" modes, otherwise ignored (pass "").
      * @param peerPublicKeyHex 64-hex-char Ed25519 public key of the server; used only
@@ -101,7 +100,6 @@ object RvpnNative {
         vpnService: VpnService,
         server: String,
         authMode: String,
-        pskHex: String,
         localIdentitySeedHex: String,
         peerPublicKeyHex: String,
         localCertificateHex: String,

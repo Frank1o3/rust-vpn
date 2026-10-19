@@ -165,7 +165,6 @@ class RvpnService : VpnService() {
                 vpnService = this,
                 server = config.server,
                 authMode = config.authMode,
-                pskHex = config.preSharedKey,
                 localIdentitySeedHex = config.localIdentitySeed,
                 peerPublicKeyHex = config.peerPublicKey,
                 localCertificateHex = config.localCertificate,

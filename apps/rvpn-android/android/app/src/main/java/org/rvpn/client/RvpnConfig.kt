@@ -9,9 +9,8 @@ import android.content.Context
 data class RvpnConfig(
     val server: String = "",
     val dnsReplace: Boolean = false,
-    /** "psk", "pinned-key", or "certificate". */
-    val authMode: String = "psk",
-    val preSharedKey: String = "",
+    /** "pinned-key" or "certificate". */
+    val authMode: String = "pinned-key",
     /** Hex-encoded 32-byte obfuscation key shared with the server. */
     val obfuscationKey: String = "",
     /** Used by pinned-key and certificate modes: this device's own Ed25519 seed. */
@@ -46,7 +45,6 @@ data class RvpnConfig(
         private const val KEY_SERVER = "server"
         private const val KEY_DNS_REPLACE = "dns_replace"
         private const val KEY_AUTH_MODE = "auth_mode"
-        private const val KEY_PSK = "psk"
         private const val KEY_OBFUSCATION_KEY = "obfuscation_key"
         private const val KEY_LOCAL_IDENTITY_SEED = "local_identity_seed"
         private const val KEY_PEER_PUBLIC_KEY = "peer_public_key"
@@ -71,12 +69,13 @@ data class RvpnConfig(
 
         fun load(context: Context): RvpnConfig {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedAuthMode = prefs.getString(KEY_AUTH_MODE, "pinned-key")
+            val authMode = if (savedAuthMode == "certificate") "certificate" else "pinned-key"
 
             return RvpnConfig(
                 server = prefs.getString(KEY_SERVER, "") ?: "",
                 dnsReplace = prefs.getBoolean(KEY_DNS_REPLACE, false),
-                authMode = prefs.getString(KEY_AUTH_MODE, "psk") ?: "psk",
-                preSharedKey = prefs.getString(KEY_PSK, "") ?: "",
+                authMode = authMode,
                 obfuscationKey = prefs.getString(KEY_OBFUSCATION_KEY, "") ?: "",
                 localIdentitySeed = prefs.getString(KEY_LOCAL_IDENTITY_SEED, "") ?: "",
                 peerPublicKey = prefs.getString(KEY_PEER_PUBLIC_KEY, "") ?: "",
@@ -107,7 +106,6 @@ data class RvpnConfig(
                 .putString(KEY_SERVER, config.server)
                 .putBoolean(KEY_DNS_REPLACE, config.dnsReplace)
                 .putString(KEY_AUTH_MODE, config.authMode)
-                .putString(KEY_PSK, config.preSharedKey)
                 .putString(KEY_OBFUSCATION_KEY, config.obfuscationKey)
                 .putString(KEY_LOCAL_IDENTITY_SEED, config.localIdentitySeed)
                 .putString(KEY_PEER_PUBLIC_KEY, config.peerPublicKey)

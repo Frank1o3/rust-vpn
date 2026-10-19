@@ -83,14 +83,28 @@ class ClientOptions:
     mode: str
     mtu: int
     tap_name: Optional[str]
+    dns_replace: bool
     dns_servers: str
     default_route: bool
     gateway: Optional[str]
-    endpoint_gateway: Optional[str]
     default_route_v6: bool
     gateway_v6: Optional[str]
-    endpoint_gateway_v6: Optional[str]
     routes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DnsOptions:
+    upstreams: list[str] = field(default_factory=list)
+    timeout_ms: int = 2000
+    attempts: int = 2
+    cache_entries: int = 1024
+
+
+@dataclass
+class LinkGroup:
+    between: list[str] = field(default_factory=list)
+    receivers: list[str] = field(default_factory=list)
+    transmitters: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,13 +129,16 @@ class SetupConfig:
     obfuscation_key: str
     auth_mode: str
     security: SecurityPolicy
-    dns_upstreams: list[str] = field(default_factory=list)
+    dns: DnsOptions = field(default_factory=DnsOptions)
+    tx_mib_per_sec: int = 0
+    rx_mib_per_sec: int = 0
+    usage_history_enabled: bool = False
+    usage_history_path: str = "/var/lib/rvpn/usage-history.json"
+    usage_history_retention_days: int = 30
     ca_name: str = ""
     ca: Optional[KeyPair] = None
     server_identity: Optional[KeyPair] = None
     cert_valid_days: int = 3650
-    ca_default_allowed_ips: list[str] = field(default_factory=list)
-    revoked_subjects: list[str] = field(default_factory=list)
 
 
 @dataclass

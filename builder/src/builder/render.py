@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from .models import PeerSetup, SetupConfig, issue_certificate
+from .models import LinkGroup, PeerSetup, SetupConfig, issue_certificate
 from .prompts import console
 
 try:  # optional dependency
@@ -110,11 +110,35 @@ def render_server_toml(
             lines.append(f"    tunnel_cidr_v6={toml_str(setup.tunnel_cidr_v6)}")
         lines.append("")
 
-    if setup.dns_upstreams:
+    if setup.dns.upstreams:
         lines.extend(
             [
                 "[dns]",
-                f"    upstreams={toml_list(setup.dns_upstreams)}",
+                f"    upstreams={toml_list(setup.dns.upstreams)}",
+                f"    timeout_ms={setup.dns.timeout_ms}",
+                f"    attempts={setup.dns.attempts}",
+                f"    cache_entries={setup.dns.cache_entries}",
+                "",
+            ]
+        )
+
+    if setup.tx_mib_per_sec or setup.rx_mib_per_sec:
+        lines.extend(
+            [
+                "[limits]",
+                f"    tx_mib_per_sec={setup.tx_mib_per_sec}",
+                f"    rx_mib_per_sec={setup.rx_mib_per_sec}",
+                "",
+            ]
+        )
+
+    if setup.usage_history_enabled:
+        lines.extend(
+            [
+                "[usage_history]",
+                "    enabled=true",
+                f"    path={toml_str(setup.usage_history_path)}",
+                f"    retention_days={setup.usage_history_retention_days}",
                 "",
             ]
         )
@@ -128,8 +152,6 @@ def render_server_toml(
                 f"    ca_public_key={toml_str(setup.ca.public_key)}",
                 f"    local_identity_seed={toml_str(setup.server_identity.seed)}",
                 f"    local_certificate={toml_str(issue_server_certificate(setup))}",
-                f"    default_allowed_ips={toml_list(setup.ca_default_allowed_ips)}",
-                f"    revoked_subjects={toml_list(setup.revoked_subjects)}",
                 "",
                 "    # Per-peer certificate subjects are restricted to their assigned tunnel addresses.",
                 "",
@@ -168,7 +190,13 @@ def render_server_toml(
 
     if links:
         for group in links:
-            lines.extend(["[[links]]", f"    between={toml_list(group)}", ""])
+            lines.append("[[links]]")
+            if group.between:
+                lines.append(f"    between={toml_list(group.between)}")
+            else:
+                lines.append(f"    receivers={toml_list(group.receivers)}")
+                lines.append(f"    transmitters={toml_list(group.transmitters)}")
+            lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -176,6 +204,7 @@ def render_server_toml(
 def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
     lines = [f"# RVPN Client configuration for '{peer.name}' (generated)", ""]
     lines.append(f"server={toml_str(setup.client_server_address)}")
+    lines.append(f"dns_replace={'true' if peer.client.dns_replace else 'false'}")
     if setup.obfuscation_enabled:
         lines.append(f"obfuscation_key={toml_str(setup.obfuscation_key)}")
     lines.append("")
@@ -206,17 +235,11 @@ def render_client_toml(setup: SetupConfig, peer: PeerSetup) -> str:
     lines.append(f"    default_route={'true' if interface.default_route else 'false'}")
     if interface.gateway:
         lines.append(f"    gateway={toml_str(interface.gateway)}")
-    if interface.endpoint_gateway:
-        lines.append(f"    endpoint_gateway={toml_str(interface.endpoint_gateway)}")
     lines.append(
         f"    default_route_v6={'true' if interface.default_route_v6 else 'false'}"
     )
     if interface.gateway_v6:
         lines.append(f"    gateway_v6={toml_str(interface.gateway_v6)}")
-    if interface.endpoint_gateway_v6:
-        lines.append(
-            f"    endpoint_gateway_v6={toml_str(interface.endpoint_gateway_v6)}"
-        )
     if interface.routes:
         lines.append(f"    routes={toml_list(interface.routes)}")
     lines.append("")

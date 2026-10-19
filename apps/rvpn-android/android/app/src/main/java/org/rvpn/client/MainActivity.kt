@@ -252,7 +252,6 @@ class MainActivity : AppCompatActivity() {
     private fun populateForm(config: RvpnConfig) {
         fun field(id: Int, value: String) { findViewById<EditText>(id).setText(value) }
         field(R.id.formServer, config.server)
-        field(R.id.formPsk, config.preSharedKey)
         field(R.id.formIdentitySeed, config.localIdentitySeed)
         field(R.id.formPeerKey, config.peerPublicKey)
         field(R.id.formCertificate, config.localCertificate)
@@ -272,9 +271,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<android.widget.CheckBox>(R.id.formDefaultV4).isChecked = config.useDefaultRouteV4
         findViewById<android.widget.CheckBox>(R.id.formDefaultV6).isChecked = config.useDefaultRouteV6
         val authId = when (config.authMode) {
-            "pinned-key" -> R.id.authPinned
             "certificate" -> R.id.authCertificate
-            else -> R.id.authPsk
+            else -> R.id.authPinned
         }
         findViewById<android.widget.RadioGroup>(R.id.formAuthMode).check(authId)
         updateFormVisibility()
@@ -282,8 +280,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateFormVisibility() {
         val auth = findViewById<android.widget.RadioGroup>(R.id.formAuthMode).checkedRadioButtonId
-        findViewById<EditText>(R.id.formPsk).visibility = if (auth == R.id.authPsk) View.VISIBLE else View.GONE
-        findViewById<EditText>(R.id.formIdentitySeed).visibility = if (auth == R.id.authPsk) View.GONE else View.VISIBLE
+        findViewById<EditText>(R.id.formIdentitySeed).visibility = View.VISIBLE
         findViewById<EditText>(R.id.formPeerKey).visibility = if (auth == R.id.authPinned) View.VISIBLE else View.GONE
         findViewById<EditText>(R.id.formCertificate).visibility = if (auth == R.id.authCertificate) View.VISIBLE else View.GONE
         findViewById<EditText>(R.id.formCaKey).visibility = if (auth == R.id.authCertificate) View.VISIBLE else View.GONE
@@ -318,13 +315,12 @@ class MainActivity : AppCompatActivity() {
             val ipv6 = if (ipv6Enabled) cidr(R.id.formIpv6, 64) else null
             if (ipv6Enabled && ipv6 == null) throw IllegalArgumentException("Enter the device IPv6 address or turn IPv6 off")
             val authMode = when (findViewById<android.widget.RadioGroup>(R.id.formAuthMode).checkedRadioButtonId) {
-                R.id.authPinned -> "pinned-key"
                 R.id.authCertificate -> "certificate"
-                else -> "psk"
+                else -> "pinned-key"
             }
             val updated = base.copy(
                 server = value(R.id.formServer), authMode = authMode,
-                preSharedKey = value(R.id.formPsk), localIdentitySeed = value(R.id.formIdentitySeed),
+                localIdentitySeed = value(R.id.formIdentitySeed),
                 peerPublicKey = value(R.id.formPeerKey), localCertificate = value(R.id.formCertificate),
                 caPublicKey = value(R.id.formCaKey), tunnelAddress = ipv4.first, tunnelPrefixLength = ipv4.second,
                 ipv6Enabled = ipv6Enabled, tunnelAddressV6 = ipv6?.first ?: "", tunnelPrefixLengthV6 = ipv6?.second ?: 64,
@@ -341,7 +337,6 @@ class MainActivity : AppCompatActivity() {
             if (updated.server.isBlank()) throw IllegalArgumentException("Enter the VPN server address")
             if (updated.mtu !in 576..65535) throw IllegalArgumentException("MTU must be between 576 and 65535")
             val authValid = when (authMode) {
-                "psk" -> updated.preSharedKey.length == 64
                 "pinned-key" -> updated.localIdentitySeed.length == 64 && updated.peerPublicKey.length == 64
                 else -> updated.localIdentitySeed.length == 64 && updated.localCertificate.length == 224 && updated.caPublicKey.length == 64
             }
@@ -366,7 +361,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val authValid = when (config.authMode) {
-            "psk" -> config.preSharedKey.length == 64
             "pinned-key" -> config.localIdentitySeed.length == 64 && config.peerPublicKey.length == 64
             "certificate" -> config.localIdentitySeed.length == 64 &&
                     config.localCertificate.length == 224 && config.caPublicKey.length == 64
