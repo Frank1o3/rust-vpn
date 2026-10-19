@@ -6,7 +6,7 @@ use crate::network::{
     ClientRoutingConfig, ConfigValidation, HandshakeConfig, InterfaceConfig, LivenessConfig,
     RekeyConfig,
 };
-use crate::util::{decode_certificate, decode_psk, validate_endpoint_syntax};
+use crate::util::{decode_certificate, decode_key32, validate_endpoint_syntax};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -64,17 +64,17 @@ impl AuthMode {
                 local_identity_seed,
                 peer_public_key,
             } => rvpn_crypto::AuthConfig::PinnedKey {
-                local_seed: decode_psk(local_identity_seed)?,
-                peer_public_key: decode_psk(peer_public_key)?,
+                local_seed: decode_key32(local_identity_seed)?,
+                peer_public_key: decode_key32(peer_public_key)?,
             },
             Self::Certificate {
                 local_identity_seed,
                 local_certificate,
                 ca_public_key,
             } => rvpn_crypto::AuthConfig::Certificate {
-                local_seed: decode_psk(local_identity_seed)?,
+                local_seed: decode_key32(local_identity_seed)?,
                 local_certificate: decode_certificate(local_certificate)?,
-                ca_public_key: decode_psk(ca_public_key)?,
+                ca_public_key: decode_key32(ca_public_key)?,
             },
         })
     }
@@ -132,6 +132,6 @@ impl ClientConfig {
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.obfuscation_key.as_deref().map(decode_psk).transpose()
+        self.obfuscation_key.as_deref().map(decode_key32).transpose()
     }
 }

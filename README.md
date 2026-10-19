@@ -71,20 +71,26 @@ before using it on a host with important existing network configuration.
 
 ## Authentication modes
 
-RVPN supports two peer authentication modes, in increasing order of
-strength: pinned Ed25519 key and certificate authority-issued identity.
-Certificate auth is the intended primary mode going forward; see
-[configuration](docs/configuration.md) for setup of each. (Pre-shared-key
-"psk" mode was removed in v3.1)
+Protocol v3 supports pinned Ed25519 keys and certificate authority-issued
+Ed25519 identities. These are different enrollment and trust-management
+models; neither mode changes the tunnel encryption suite. Servers reject
+incompatible older protocol versions. See [configuration](docs/configuration.md)
+for both formats and the [builder guide](builder/README.md) for generating
+server and peer files.
+
+The current server also supports directed peer links, tunnel-bound DNS
+forwarding, per-peer traffic limits, persistent usage history, metrics, and
+validated live reload of peer authentication, links, DNS, and limits. See
+[configuration](docs/configuration.md) and
+[operations](docs/operations.md) for their settings and operational effects.
 
 ## Important security notes
 
 - RVPN has not undergone an independent security audit. Review the handshake
   and crypto code yourself, or wait for community review, before relying on
   it for anything sensitive.
-- Do not commit real `local_identity_seed`, `pre_shared_key`, or
-  `obfuscation_key` values. Treat them as passwords; rotate values exposed in
-  logs, chats, or screenshots.
+- Do not commit real `local_identity_seed` or `obfuscation_key` values. Treat
+  them as passwords; rotate values exposed in logs, chats, or screenshots.
 - Server `allowed_ips` are anti-spoofing policy. Each peer should receive only
   its own tunnel addresses, for example `10.42.0.2/32` and `fd42::2/128`.
 - The current tray UI must run as the desktop user, while interface and route

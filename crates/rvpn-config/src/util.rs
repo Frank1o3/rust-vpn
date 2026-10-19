@@ -9,12 +9,12 @@ pub(crate) fn validate_endpoint(endpoint: SocketAddr) -> Result<(), ConfigError>
     Ok(())
 }
 
-pub(crate) fn decode_psk(value: &str) -> Result<[u8; 32], ConfigError> {
+pub(crate) fn decode_key32(value: &str) -> Result<[u8; 32], ConfigError> {
     if value.len() != 64 {
-        return Err(ConfigError::InvalidPreSharedKey);
+        return Err(ConfigError::InvalidKeyEncoding);
     }
     let mut bytes = [0; 32];
-    hex::decode_to_slice(value, &mut bytes).map_err(|_| ConfigError::InvalidPreSharedKey)?;
+    hex::decode_to_slice(value, &mut bytes).map_err(|_| ConfigError::InvalidKeyEncoding)?;
     Ok(bytes)
 }
 

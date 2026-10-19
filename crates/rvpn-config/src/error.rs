@@ -7,10 +7,8 @@ pub enum ConfigError {
     Parse(#[source] toml::de::Error),
     #[error("invalid configuration: {0}")]
     Invalid(&'static str),
-    #[error(
-        "pre_shared_key, identity seeds, and public keys must be exactly 32 bytes encoded as hexadecimal"
-    )]
-    InvalidPreSharedKey,
+    #[error("key material must be exactly 32 bytes encoded as hexadecimal")]
+    InvalidKeyEncoding,
     #[error("certificate values must be exactly 112 bytes encoded as hexadecimal")]
     InvalidCertificateEncoding,
     #[error("failed to resolve server endpoint '{host}': {source}")]

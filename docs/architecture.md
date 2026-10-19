@@ -47,9 +47,11 @@ multiple scheduling rounds.
 
 ## Sessions and peers
 
-The handshake authenticates with PSK, pinned keys, or certificates. The server
-can update a peer's UDP endpoint only after a valid authenticated packet, which
-allows NAT rebinding without trusting unauthenticated traffic.
+The version 3 handshake authenticates peers with pinned Ed25519 keys or
+certificate authority-issued Ed25519 identities. The server can update a
+peer's UDP endpoint only after a valid authenticated packet, which allows NAT
+rebinding without trusting unauthenticated traffic. Rekey and liveness
+settings are configurable independently of the peer authentication mode.
 
 Each peer has `allowed_ips`. Incoming packets whose inner source address is not
 in that peer's list are dropped. This is intentional anti-spoofing policy.
@@ -57,12 +59,29 @@ in that peer's list are dropped. This is intentional anti-spoofing policy.
 ## Peer-to-peer routing
 
 By default, peers can reach the server (and the internet, if forwarding is
-enabled) but not each other. `rvpn-routing` implements symmetric `[[links]]`
-groups: any two peers named in the same group can exchange traffic directly,
-in either TUN (IP-routed) or TAP (Ethernet/MAC-learned) mode. Forwarded IP
+enabled) but not each other. `rvpn-routing` implements symmetric `between`
+groups and directed `receivers` / `transmitters` groups. Directed links grant
+only the configured transmitter-to-receiver edges; permissions do not become
+transitive. Both forms work in TUN (IP-routed) and TAP (Ethernet/MAC-learned)
+mode, with TAP broadcast and multicast filtered for each sender. Forwarded IP
 packets lose one TTL/hop-limit, same as a normal router hop. Peer-to-peer
-traffic never touches the server's own firewall/forwarding rules — it's
-routed inside RVPN before it would reach them.
+traffic is routed inside RVPN and never touches the server's own
+firewall/forwarding rules.
+
+## DNS and operations
+
+The optional server DNS forwarder listens on configured tunnel addresses over
+UDP and TCP port 53. It supports numeric upstreams, bounded retries and
+timeouts, and an optional TTL-aware response cache. Linux clients can install
+DNS through NetworkManager, systemd-resolved, or a backed-up resolver-file
+fallback; cleanup restores the prior resolver state.
+
+Server operators can configure independent per-peer ingress policing and
+egress shaping, optional daily usage history, a local peer-status socket, and
+a loopback-only token-authenticated metrics endpoint. A validated `SIGHUP`
+reload applies peer authentication, link, DNS, and traffic-limit changes;
+interface, forwarding, and transport-security settings require restart. See
+[configuration](configuration.md) and [operations](operations.md).
 
 ## Interface modes and MTU
 

@@ -33,6 +33,7 @@ private data class TomlRoutingSection(
 @Serializable
 private data class TomlAuthSection(
     val mode: String? = null,
+    @SerialName("pre_shared_key") val unsupportedLegacyKey: String? = null,
     @SerialName("local_identity_seed") val localIdentitySeed: String? = null,
     @SerialName("peer_public_key") val peerPublicKey: String? = null,
     @SerialName("local_certificate") val localCertificate: String? = null,
@@ -55,6 +56,7 @@ private data class RvpnClientToml(
     val server: String? = null,
     @SerialName("dns_replace") val dnsReplace: Boolean? = null,
     @SerialName("obfuscation_key") val obfuscationKey: String? = null,
+    @SerialName("pre_shared_key") val unsupportedLegacyKey: String? = null,
     @SerialName("interface") val iface: TomlInterfaceSection = TomlInterfaceSection(),
     val routing: TomlRoutingSection = TomlRoutingSection(),
     val auth: TomlAuthSection = TomlAuthSection(),
@@ -77,7 +79,11 @@ object TomlConfigParser {
     fun toRvpnConfig(text: String, base: RvpnConfig): RvpnConfig {
         val parsed: RvpnClientToml = toml.decodeFromString(RvpnClientToml.serializer(), text)
         val authMode = parsed.auth.mode ?: base.authMode
-        require(authMode == "pinned-key" || authMode == "certificate") {
+        require(
+            (authMode == "pinned-key" || authMode == "certificate") &&
+                parsed.auth.unsupportedLegacyKey == null &&
+                parsed.unsupportedLegacyKey == null
+        ) {
             "PSK authentication was removed in protocol v3; use pinned-key or certificate credentials"
         }
 

@@ -526,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         "\nDone. The generated files include the current RVPN server/client options."
     )
     console.print(
-        "[yellow]Keep generated private keys, PSKs, certificates, and obfuscation keys "
+        "[yellow]Keep generated private keys, certificates, and obfuscation keys "
         "out of source control.[/yellow]"
     )
     return 0

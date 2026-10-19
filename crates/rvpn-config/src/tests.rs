@@ -38,7 +38,7 @@ fn client_without_auth_is_rejected() {
 }
 
 #[test]
-fn legacy_pre_shared_key_configuration_is_rejected() {
+fn legacy_authentication_fields_are_rejected() {
     let client_toml = format!(
         "server = '127.0.0.1:9000'\npre_shared_key = '{}'",
         "a".repeat(64)
@@ -51,11 +51,11 @@ fn legacy_pre_shared_key_configuration_is_rejected() {
     );
     assert!(ServerConfig::from_toml(&server_toml).is_err());
 
-    let peer_psk_toml = format!(
+    let peer_legacy_auth_toml = format!(
         "bind = '0.0.0.0:9000'\n[[peers]]\nname = 'laptop'\nallowed_ips = ['10.42.0.2/32']\npre_shared_key = '{}'",
         "a".repeat(64)
     );
-    assert!(ServerConfig::from_toml(&peer_psk_toml).is_err());
+    assert!(ServerConfig::from_toml(&peer_legacy_auth_toml).is_err());
 }
 
 #[test]

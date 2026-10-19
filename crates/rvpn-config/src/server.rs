@@ -8,7 +8,7 @@ use crate::network::{
     ConfigValidation, ForwardingConfig, HandshakeConfig, InterfaceConfig, LivenessConfig,
     RekeyConfig,
 };
-use crate::util::{decode_certificate, decode_psk, validate_endpoint};
+use crate::util::{decode_certificate, decode_key32, validate_endpoint};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -188,7 +188,7 @@ impl ServerConfig {
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.obfuscation_key.as_deref().map(decode_psk).transpose()
+        self.obfuscation_key.as_deref().map(decode_key32).transpose()
     }
 
     pub fn peer_identities(&self) -> Result<Vec<PeerIdentity>, ConfigError> {
@@ -325,11 +325,11 @@ pub struct CertificateAuthorityConfig {
 
 impl CertificateAuthorityConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        decode_psk(&self.ca_public_key)?;
-        decode_psk(&self.local_identity_seed)?;
+        decode_key32(&self.ca_public_key)?;
+        decode_key32(&self.local_identity_seed)?;
         decode_certificate(&self.local_certificate)?;
         for subject in &self.revoked_subjects {
-            decode_psk(subject)?;
+            decode_key32(subject)?;
         }
         for prefixes in
             std::iter::once(&self.default_allowed_ips).chain(self.peer_overrides.values())
@@ -347,9 +347,9 @@ impl CertificateAuthorityConfig {
 
     pub fn to_auth_config(&self) -> Result<rvpn_crypto::AuthConfig, ConfigError> {
         Ok(rvpn_crypto::AuthConfig::Certificate {
-            local_seed: decode_psk(&self.local_identity_seed)?,
+            local_seed: decode_key32(&self.local_identity_seed)?,
             local_certificate: decode_certificate(&self.local_certificate)?,
-            ca_public_key: decode_psk(&self.ca_public_key)?,
+            ca_public_key: decode_key32(&self.ca_public_key)?,
         })
     }
 
