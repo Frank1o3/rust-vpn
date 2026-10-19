@@ -308,9 +308,20 @@ pub async fn run_server_loop(
     let mut pending: PendingHandshakes = PendingHandshakes::new();
     let per_source_pending_limit =
         per_source_pending_limit(&identities, certificate_authority.as_ref());
-    let mut router = Router::new(Links::from_groups(
-        config.links.iter().map(|link| link.between.as_slice()),
-    ));
+    let link_edges = config.links.iter().flat_map(|link| {
+        let symmetric_edges = link.between.iter().enumerate().flat_map(|(index, a)| {
+            link.between[index + 1..]
+                .iter()
+                .flat_map(move |b| [(a.clone(), b.clone()), (b.clone(), a.clone())])
+        });
+        let directed_edges = link.transmitters.iter().flat_map(|transmitter| {
+            link.receivers
+                .iter()
+                .map(move |receiver| (transmitter.clone(), receiver.clone()))
+        });
+        symmetric_edges.chain(directed_edges)
+    });
+    let mut router = Router::new(Links::from_directed_pairs(link_edges));
     if config.links.is_empty() {
         tracing::info!("no [[links]] configured; peers cannot reach each other");
     } else {

@@ -17,7 +17,15 @@ pub struct Config {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinkConfig {
+    /// Symmetric shorthand: every distinct pair can communicate both ways.
+    #[serde(default)]
     pub between: Vec<String>,
+    /// Peers allowed to receive traffic from `transmitters`.
+    #[serde(default)]
+    pub receivers: Vec<String>,
+    /// Peers allowed to send traffic to `receivers`.
+    #[serde(default)]
+    pub transmitters: Vec<String>,
 }
 
 impl Config {

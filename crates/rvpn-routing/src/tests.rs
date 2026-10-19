@@ -45,6 +45,18 @@ fn router(links: &[&[&str]]) -> Router {
     router
 }
 
+fn directional_router() -> Router {
+    let links = Links::from_directed_pairs([
+        ("laptop".to_owned(), "phone".to_owned()),
+        ("tablet".to_owned(), "phone".to_owned()),
+    ]);
+    let mut router = Router::new(links);
+    router.register(sid(1), "laptop", vec!["10.42.0.2/32".parse().unwrap()]);
+    router.register(sid(2), "phone", vec!["10.42.0.3/32".parse().unwrap()]);
+    router.register(sid(3), "tablet", vec!["10.42.0.4/32".parse().unwrap()]);
+    router
+}
+
 #[test]
 fn peers_are_isolated_without_a_link() {
     let router = router(&[]);
@@ -71,6 +83,27 @@ fn a_link_is_symmetric_and_does_not_extend_to_third_peers() {
     );
     assert_eq!(
         router.route_ip(sid(1), &to_tablet),
+        Verdict::Drop(DropReason::NoLink)
+    );
+}
+
+#[test]
+fn directed_links_allow_only_authorized_sender_to_receiver_edges() {
+    let router = directional_router();
+    let laptop_to_phone = ipv4([10, 42, 0, 2], [10, 42, 0, 3], 64);
+    let phone_to_laptop = ipv4([10, 42, 0, 3], [10, 42, 0, 2], 64);
+    let laptop_to_tablet = ipv4([10, 42, 0, 2], [10, 42, 0, 4], 64);
+
+    assert_eq!(
+        router.route_ip(sid(1), &laptop_to_phone),
+        Verdict::Forward(Delivery::to_peer(sid(2)))
+    );
+    assert_eq!(
+        router.route_ip(sid(2), &phone_to_laptop),
+        Verdict::Drop(DropReason::NoLink)
+    );
+    assert_eq!(
+        router.route_ip(sid(1), &laptop_to_tablet),
         Verdict::Drop(DropReason::NoLink)
     );
 }

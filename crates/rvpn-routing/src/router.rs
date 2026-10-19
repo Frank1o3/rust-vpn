@@ -70,38 +70,37 @@ pub enum Verdict {
 
 #[derive(Clone, Debug, Default)]
 pub struct Links {
-    pairs: HashSet<(String, String)>,
+    edges: HashSet<(String, String)>,
 }
 
 impl Links {
     pub fn from_groups<'a>(groups: impl IntoIterator<Item = &'a [String]>) -> Self {
-        let mut pairs = HashSet::new();
+        let mut edges = HashSet::new();
         for group in groups {
             for (index, a) in group.iter().enumerate() {
                 for b in &group[index + 1..] {
                     if a != b {
-                        pairs.insert(Self::key(a, b));
+                        edges.insert((a.clone(), b.clone()));
+                        edges.insert((b.clone(), a.clone()));
                     }
                 }
             }
         }
-        Self { pairs }
+        Self { edges }
     }
 
-    fn key(a: &str, b: &str) -> (String, String) {
-        if a <= b {
-            (a.to_owned(), b.to_owned())
-        } else {
-            (b.to_owned(), a.to_owned())
+    pub fn from_directed_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Self {
+        Self {
+            edges: pairs.into_iter().collect(),
         }
     }
 
     pub fn linked(&self, a: &str, b: &str) -> bool {
-        a != b && self.pairs.contains(&Self::key(a, b))
+        a != b && self.edges.contains(&(a.to_owned(), b.to_owned()))
     }
 
     pub fn is_empty(&self) -> bool {
-        self.pairs.is_empty()
+        self.edges.is_empty()
     }
 }
 

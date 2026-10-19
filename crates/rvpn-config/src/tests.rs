@@ -331,6 +331,30 @@ fn parses_links_between_peers() {
 }
 
 #[test]
+fn parses_and_validates_directional_peer_links() {
+    let config = ServerConfig::from_toml(&two_peer_toml(
+        "[[links]]\nreceivers = ['phone']\ntransmitters = ['laptop']",
+    ))
+    .unwrap();
+    assert_eq!(config.links[0].receivers, ["phone"]);
+    assert_eq!(config.links[0].transmitters, ["laptop"]);
+
+    assert!(ServerConfig::from_toml(&two_peer_toml("[[links]]\nreceivers = ['phone']")).is_err());
+    assert!(
+        ServerConfig::from_toml(&two_peer_toml(
+            "[[links]]\nreceivers = ['phone']\ntransmitters = ['phone']"
+        ))
+        .is_err()
+    );
+    assert!(
+        ServerConfig::from_toml(&two_peer_toml(
+            "[[links]]\nreceivers = ['phone', 'phone']\ntransmitters = ['laptop']"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn rejects_bad_links_and_duplicate_peer_names() {
     assert!(matches!(
         ServerConfig::from_toml(&two_peer_toml("[[links]]\nbetween = ['laptop', 'nobody']")),

@@ -160,26 +160,69 @@ impl ServerConfig {
     }
 
     fn validate_links(&self) -> Result<(), ConfigError> {
-        let mut names = std::collections::HashSet::new();
+        let mut peer_names = std::collections::HashSet::new();
         for peer in &self.peers {
-            if !names.insert(peer.name.as_str()) {
+            if !peer_names.insert(peer.name.as_str()) {
                 return Err(ConfigError::DuplicatePeerName(peer.name.clone()));
             }
         }
         for link in &self.links {
+            let symmetric = !link.between.is_empty();
+            let directed = !link.receivers.is_empty() || !link.transmitters.is_empty();
+            if symmetric == directed {
+                return Err(ConfigError::Invalid(
+                    "each [[links]] entry needs either `between` or both `receivers` and `transmitters`",
+                ));
+            }
+            if directed && (link.receivers.is_empty() || link.transmitters.is_empty()) {
+                return Err(ConfigError::Invalid(
+                    "directed [[links]] entries need non-empty `receivers` and `transmitters`",
+                ));
+            }
+
             let mut members = std::collections::HashSet::new();
-            for name in &link.between {
-                let known = names.contains(name.as_str())
+            let candidate_names = if symmetric {
+                link.between.iter().collect::<Vec<_>>()
+            } else {
+                link.receivers
+                    .iter()
+                    .chain(link.transmitters.iter())
+                    .collect::<Vec<_>>()
+            };
+            for name in candidate_names {
+                let known = peer_names.contains(name.as_str())
                     || (self.certificate_authority.is_some() && name.starts_with("cert:"));
                 if !known {
                     return Err(ConfigError::UnknownLinkPeer(name.clone()));
                 }
                 members.insert(name.as_str());
             }
-            if members.len() < 2 {
+            if symmetric && members.len() < 2 {
                 return Err(ConfigError::Invalid(
                     "each [[links]] entry needs `between` to name at least two distinct peers",
                 ));
+            }
+            if directed {
+                let receivers = link
+                    .receivers
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>();
+                let transmitters = link
+                    .transmitters
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>();
+                if receivers.len() != link.receivers.len()
+                    || transmitters.len() != link.transmitters.len()
+                {
+                    return Err(ConfigError::Invalid(
+                        "directed [[links]] receiver and transmitter lists must not contain duplicates",
+                    ));
+                }
+                if receivers.iter().any(|name| transmitters.contains(name)) {
+                    return Err(ConfigError::Invalid(
+                        "directed [[links]] entries cannot authorize a peer to itself",
+                    ));
+                }
             }
         }
         Ok(())

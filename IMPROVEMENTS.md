@@ -24,15 +24,20 @@ improving long-term operations.
 - Tunnel-bound DNS forwarding with configurable retries and timeouts, optional
   bounded TTL-aware caching, and local operations documentation.
 - Recovery for stale local status sockets after an unclean server exit.
+- Directed transmitter-to-receiver peer links, with symmetric `between`
+  groups retained as shorthand. TAP broadcast and multicast forwarding uses the
+  same per-sender receiver authorization.
 
 ## New control and policy improvements
 
-### Directional peer links
+### Directional peer links — implemented
 
-Current `[[links]]` entries are symmetric groups: every listed peer can send
-to every other peer in that group. Add directed receiver/transmitter lists so
-operators can allow one-way communication without treating every group member
-as equally trusted. Keep `between` as a symmetric shorthand for compatibility.
+`[[links]]` accepts directed receiver/transmitter lists so operators can allow
+one-way communication without treating every group member as equally trusted.
+`between` remains a symmetric shorthand for compatibility. Each
+transmitter-to-receiver pair is an explicit authorization edge, rules do not
+become transitive, and TAP broadcast/multicast is filtered per sender. These
+are policy and configuration changes; they do not alter the wire protocol.
 
 For example, this grants laptops and tablets permission to send to Android,
 without granting Android permission to send back:
@@ -43,16 +48,10 @@ receivers = ["android"]
 transmitters = ["laptop", "tablet"]
 ```
 
-Each transmitter-to-receiver pair should be an explicit authorization edge;
-rules should not become transitive. A peer can appear in both roles across
-separate entries. Define broadcast and multicast behavior explicitly: TAP
-frames should be delivered only to receivers authorized for that transmitter.
-Also define how server-originated traffic interacts with peer link rules.
-Unmatched peer-to-peer traffic remains denied. Decide whether an edge allows
-strictly one-way packets or permits return packets for flows initiated by an
-authorized transmitter; the latter requires bounded flow tracking and clear
-timeouts, while strict one-way rules will block ordinary request/response
-traffic unless the reverse edge is also configured.
+An edge authorizes packets only in its configured direction. Ordinary
+request/response protocols therefore need an explicit reverse edge. Server-
+originated local traffic follows server routing and is not restricted by peer
+link edges. Unmatched peer-to-peer traffic remains denied.
 
 ### DNS forwarder controls
 
@@ -94,6 +93,16 @@ Audit nonce uniqueness across every handshake, rekey, reconnect, and key-phase
 transition. Expand replay-window tests for reordering and transitions. Maintain
 the routing parser fuzz corpus and run sustained fuzzing as part of release
 hardening.
+
+The current handshake uses ephemeral X25519, Ed25519 peer authentication, and
+ChaCha20-Poly1305 session protection. A future protocol-versioned security
+upgrade worth evaluating is a hybrid X25519 plus post-quantum KEM handshake,
+with the combined secret bound into the authenticated transcript and an
+explicit negotiation policy that cannot silently downgrade. That changes
+handshake wire messages and key derivation, so it belongs in a protocol version
+such as 3.2 after selecting maintained implementations and defining
+interoperability and downgrade tests. It is a forward-looking confidentiality
+upgrade, not a defect in the current directed-link change.
 
 ### 3. Measure the packet hot path
 

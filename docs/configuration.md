@@ -128,15 +128,30 @@ timeout_secs = 90        # 0 disables; otherwise >= 60
 ### Peer-to-peer links
 
 By default peers are isolated: they can reach the server and the internet
-(when forwarding is on) but not each other. To let peers talk directly, add
-link groups. Each group is symmetric and every member can reach every other:
+(when forwarding is on) but not each other. Use `between` for symmetric access:
 
 ```toml
     [[links]]
     between = ["laptop", "phone"]
 ```
 
-Names must match `[[peers]]` entries (or `cert:<subject-prefix>` when using a
-certificate authority). Packets are checked against the sender's `allowed_ips`
-before delivery, and forwarded IP packets lose one TTL/hop-limit. Peer-to-peer
-traffic is forwarded inside RVPN and never touches the server's firewall.
+For one-way access, list the allowed receivers and transmitters. The example
+allows laptop and tablet to send to Android, but does not authorize replies from
+Android to those peers:
+
+```toml
+    [[links]]
+    receivers = ["android"]
+    transmitters = ["laptop", "tablet"]
+```
+
+Each transmitter-to-receiver pair is a direct authorization edge; permissions
+do not become transitive. One-way means packets in only that direction, so
+ordinary request/reply protocols need a separate reverse edge. For TAP, a
+broadcast or multicast frame is delivered only to receivers authorized for its
+sender. Server-originated local traffic follows normal server routing and is
+not restricted by peer link edges. Names must match `[[peers]]` entries (or
+`cert:<subject-prefix>` when using a certificate authority). Packets are
+checked against the sender's `allowed_ips` before delivery, and forwarded IP
+packets lose one TTL/hop-limit. Peer-to-peer traffic is forwarded inside RVPN
+and never touches the server's firewall.
