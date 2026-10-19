@@ -78,7 +78,34 @@ traffic as proof that a peer is alive.
 
 ## Active improvement priorities
 
-### 1. Verify leak prevention on Linux (issues #13 and #15)
+### 1. Design and implement a post-quantum protocol version
+
+Treat this as the leading security upgrade. Specify a new, intentionally
+incompatible protocol version (target 3.2) with mandatory hybrid X25519 and
+ML-KEM key establishment. Combine both secrets using a reviewed construction
+and bind the algorithm suite, both key shares, identities, roles, and version
+into the authenticated transcript and key derivation. Fail the handshake if
+either component fails. A new binary must not negotiate or fall back to 3.1;
+the existing exact-version packet check should remain fail-closed.
+
+The KEM adds bytes to initial handshakes and rekeys, not to ordinary data
+packets. Measure the resulting datagram sizes with the configured obfuscation
+padding and representative IPv4/IPv6 path MTUs. Design bounded handshake
+fragmentation or a handshake-specific padding policy rather than relying on IP
+fragmentation. Keep reassembly bounded by size, count, time, and peer/source so
+large unauthenticated handshakes cannot become a resource-exhaustion path.
+
+As part of the protocol design, decide whether 3.2 also requires hybrid
+Ed25519 plus ML-DSA peer authentication. Key establishment protects captured
+traffic against future decryption; hybrid signatures address future quantum
+forgery of peer identities. Treat those as separate security properties and
+include identity, certificate, revocation, and enrollment format impacts in
+the decision. Use maintained, reviewed implementations and obtain an
+independent protocol review before release. Add downgrade, transcript-binding,
+key-separation, packet-size, loss, replay, and malformed-fragment regression
+coverage. Do not ship a classical-only fallback in the new protocol.
+
+### 2. Verify leak prevention on Linux (issues #13 and #15)
 
 Turn the existing nftables model checks into repeatable integration checks.
 Capture traffic during bootstrap, endpoint changes, reconnects, tunnel loss,
@@ -87,44 +114,34 @@ MikroTik that rejects traffic with an unexpected LAN source address has shown
 no observed leaks. Keep that as useful environment evidence, while adding
 captures that directly establish which packets reached the physical network.
 
-### 2. Complete protocol assurance (issues #11, #12, and #14)
+### 3. Complete protocol assurance (issues #11, #12, and #14)
 
 Audit nonce uniqueness across every handshake, rekey, reconnect, and key-phase
 transition. Expand replay-window tests for reordering and transitions. Maintain
 the routing parser fuzz corpus and run sustained fuzzing as part of release
 hardening.
 
-The current handshake uses ephemeral X25519, Ed25519 peer authentication, and
-ChaCha20-Poly1305 session protection. A future protocol-versioned security
-upgrade worth evaluating is a hybrid X25519 plus post-quantum KEM handshake,
-with the combined secret bound into the authenticated transcript and an
-explicit negotiation policy that cannot silently downgrade. That changes
-handshake wire messages and key derivation, so it belongs in a protocol version
-such as 3.2 after selecting maintained implementations and defining
-interoperability and downgrade tests. It is a forward-looking confidentiality
-upgrade, not a defect in the current directed-link change.
-
-### 3. Measure the packet hot path
+### 4. Measure the packet hot path
 
 The existing Criterion benchmark covers transport buffer-pool and adaptive
 MTU operations. Add measurements for packet authentication, routing, queue
 scheduling, and TUN/TAP injection at small and near-MTU sizes. Record throughput
 and tail latency before changing copies, locks, or batching.
 
-### 4. Validate kill-switch replacement failure behavior (issue #7)
+### 5. Validate kill-switch replacement failure behavior (issue #7)
 
 The replacement is submitted as one nftables batch so a failed update should
 leave the installed policy intact. Confirm that behavior with failure
 injection against a Linux kernel.
 
-### 5. Improve congestion diagnosis
+### 6. Improve congestion diagnosis
 
 The transport already records MTU changes, send errors, oversized packets,
 backpressure, and per-peer queue delay and drops. Improve attribution so
 operators can distinguish path congestion from local queue pressure and
 receiver-side overload. Keep the existing bounded queue behavior.
 
-### 6. Improve long-running operations
+### 7. Improve long-running operations
 
 - Add validated live reload for peer configuration, DNS upstreams, and limits.
 - Offer optional persistent usage history with explicit retention and reset
