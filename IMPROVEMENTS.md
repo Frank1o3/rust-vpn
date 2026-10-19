@@ -105,47 +105,11 @@ independent protocol review before release. Add downgrade, transcript-binding,
 key-separation, packet-size, loss, replay, and malformed-fragment regression
 coverage. Do not ship a classical-only fallback in the new protocol.
 
-### 2. Verify leak prevention on Linux (issues #13 and #15)
-
-Turn the existing nftables model checks into repeatable integration checks.
-Capture traffic during bootstrap, endpoint changes, reconnects, tunnel loss,
-and shutdown; cover DNS plus IPv4 and IPv6. Current manual use behind a
-MikroTik that rejects traffic with an unexpected LAN source address has shown
-no observed leaks. Keep that as useful environment evidence, while adding
-captures that directly establish which packets reached the physical network.
-
-### 3. Complete protocol assurance (issues #11, #12, and #14)
-
-Audit nonce uniqueness across every handshake, rekey, reconnect, and key-phase
-transition. Expand replay-window tests for reordering and transitions. Maintain
-the routing parser fuzz corpus and run sustained fuzzing as part of release
-hardening.
-
-### 4. Measure the packet hot path
-
-The existing Criterion benchmark covers transport buffer-pool and adaptive
-MTU operations. Add measurements for packet authentication, routing, queue
-scheduling, and TUN/TAP injection at small and near-MTU sizes. Record throughput
-and tail latency before changing copies, locks, or batching.
-
-The Criterion suite now also measures packet seal/open, IPv4 routing, and
-enqueue/dequeue scheduling at 64-byte and near-1400-byte sizes. These
-in-process measurements do not include kernel TUN/TAP injection or network
-throughput and tail latency; those still require a controlled Linux device and
-benchmark environment.
-
 ### 5. Validate kill-switch replacement failure behavior (issue #7)
 
 The replacement is submitted as one nftables batch so a failed update should
 leave the installed policy intact. Confirm that behavior with failure
 injection against a Linux kernel.
-
-### 6. Improve congestion diagnosis
-
-The transport already records MTU changes, send errors, oversized packets,
-backpressure, and per-peer queue delay and drops. Improve attribution so
-operators can distinguish path congestion from local queue pressure and
-receiver-side overload. Keep the existing bounded queue behavior.
 
 ### 7. Improve long-running operations
 
