@@ -118,9 +118,11 @@ def render_server_toml(
                 f"    timeout_ms={setup.dns.timeout_ms}",
                 f"    attempts={setup.dns.attempts}",
                 f"    cache_entries={setup.dns.cache_entries}",
-                "",
             ]
         )
+        if setup.dns.blocked_domains:
+            lines.append(f"    blocked_domains={toml_list(setup.dns.blocked_domains)}")
+        lines.append("")
 
     if setup.tx_mib_per_sec or setup.rx_mib_per_sec:
         lines.extend(

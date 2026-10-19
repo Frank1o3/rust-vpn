@@ -64,11 +64,12 @@ link edges. Unmatched peer-to-peer traffic remains denied.
 ### DNS forwarder controls
 
 The server currently exposes upstream addresses, request timeout, retry count,
-and cache capacity. Consider per-upstream settings and status, deterministic
-failover or parallel queries, configurable positive and negative cache
-behavior, and optional encrypted upstream transports such as DNS-over-TLS or
-DNS-over-HTTPS. Add controls only with clear privacy, routing, certificate
-validation, and fallback semantics; retain the current bounded defaults.
+cache capacity, and an optional domain blocklist that covers subdomains.
+Consider per-upstream settings and status, deterministic failover or parallel
+queries, configurable positive and negative cache behavior, and optional
+encrypted upstream transports such as DNS-over-TLS or DNS-over-HTTPS. Add
+controls only with clear privacy, routing, certificate validation, and fallback
+semantics; retain the current bounded defaults.
 
 ### Liveness controls
 
@@ -94,8 +95,6 @@ available. Do not design a bespoke cryptographic protocol for it in advance.
 
 - Per-peer rolling or monthly usage quotas with warnings and a documented
   reset policy.
-- Named peer enrollment profiles with expiry and revocation, reusing the
-  existing QR/import format.
 - Optional server-side DNS policy profiles with per-peer opt-in and visible
   block counts.
 - Connection diagnostics for endpoint reachability, DNS path, MTU, handshake

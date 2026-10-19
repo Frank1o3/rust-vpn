@@ -71,6 +71,20 @@ TTL-aware response cache holds up to `cache_entries` responses (maximum 65536);
 set it to zero to disable caching. Keep the DNS listener on tunnel addresses;
 do not expose it on the server's public address.
 
+Optionally set `blocked_domains` to a list of domain names. Each listed domain
+and its subdomains are answered locally: A lookups return `0.0.0.0` and AAAA
+lookups return `::`. For example:
+
+```toml
+[dns]
+upstreams = ["1.1.1.1:53", "9.9.9.9:53"]
+blocked_domains = ["example-ads.test", "tracker.example.net"]
+```
+
+Clients must send DNS through the tunnel DNS listener for this policy to
+apply. Direct IP connections and DNS sent to another resolver are outside
+this blocklist. Domain filtering is not an application or network firewall.
+
 The server reloads peer authentication, peer links, DNS settings, and rate
 limits on `SIGHUP` after parsing and validating the complete configuration.
 Changes to bind, interfaces, forwarding, handshake/rekey/liveness settings,
@@ -78,6 +92,22 @@ obfuscation, or usage-history storage require a restart. A peer authentication
 change closes active sessions so peers must authenticate under the new policy.
 DNS listeners restart when DNS settings change; if the new listener cannot be
 started, RVPN attempts to restore the previous DNS configuration.
+
+### Certificate peer lifecycle
+
+For a certificate-mode server, the builder can enroll, renew, or revoke peers
+using the CA signing seed saved beside the generated server config. Enrollment
+adds a certificate subject and its tunnel address override; renewal issues a
+new certificate for the same peer identity; revocation adds the subject to
+`certificate_authority.revoked_subjects` and removes its address override.
+After enrollment or revocation, reload the server with `SIGHUP`. Peers must
+reconnect after renewal to use the new certificate. Certificate validity is
+checked during authentication, so expiry prevents new authenticated sessions.
+Keep the CA seed offline and restrict access to it: possession allows issuing
+certificates trusted by that server.
+
+See the [builder guide](../builder/README.md#managing-certificate-peers) for
+the command syntax.
 
 `[usage_history]` is disabled by default. When enabled, `path` is required;
 RVPN writes daily per-peer packet, payload-byte, and drop totals, retaining at

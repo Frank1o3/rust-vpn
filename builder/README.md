@@ -18,10 +18,8 @@ each certificate subject to that peer's assigned tunnel addresses. Clients
 trust the CA and present their own certificates.
 
 The builder writes `ca-private-seed.hex` with mode 0600. Keep it backed up
-offline: it is needed to issue certificates for additional peers later. The
-CA seed is not included in `server.toml`. The current wizard creates a fresh
-CA on each run; it does not yet import an existing CA or enroll a peer into an
-existing server config. The server and client configs, the CA seed, and
+offline: it is needed to issue or renew certificates later. The CA seed is not
+included in `server.toml`. The server and client configs, the CA seed, and
 Android QR images are written with mode 0600 because they contain private
 credentials.
 
@@ -48,13 +46,47 @@ those values.
 ## Tunnel DNS
 
 The builder can enable the server's tunnel-bound DNS forwarder and asks for
-numeric upstream `IP:port` addresses, timeout, retry count, and cache size.
+numeric upstream `IP:port` addresses, timeout, retry count, cache size, and
+optional blocked domains. A blocked domain covers its exact name and all its
+subdomains; blocked A and AAAA lookups return `0.0.0.0` and `::` respectively.
+Enter names such as `ads.example.net`, without a URL path or wildcard.
 When enabled, generated clients default
 to the server's tunnel interface address or addresses, such as
 `10.20.43.1, fd42::1`. The client resolver uses standard DNS port 53; the
 builder does not append a port to `dns_servers`. The server forwards those
 queries to the configured upstreams. If tunnel DNS is disabled, client DNS
 defaults to empty and can be entered manually.
+
+## Managing certificate peers
+
+The following commands use the existing certificate-mode server config and CA
+seed (by default `ca-private-seed.hex` beside the server config):
+
+```sh
+uv run builder enroll \
+  --server-config ../rvpn-setup/server.toml \
+  --name phone \
+  --server vpn.example.net:9000 \
+  --android
+
+uv run builder renew \
+  --server-config ../rvpn-setup/server.toml \
+  --client-config ../rvpn-setup/client-phone.toml \
+  --valid-days 3650
+
+uv run builder revoke \
+  --server-config ../rvpn-setup/server.toml \
+  --client-config ../rvpn-setup/client-phone.toml
+```
+
+Enrollment assigns the next available address in the configured tunnel
+subnet, creates a client config, and adds that certificate subject's address
+override to the server config. Renewal replaces the client certificate while
+keeping its identity key. Revocation records the subject and removes its
+address override. Send `SIGHUP` to the server after enrollment or revocation;
+the peer must reconnect after renewal to present its updated certificate.
+These commands require the CA private seed and should be run on a trusted
+administrative machine.
 
 Generated server configs that enable internet forwarding also require the
 host forwarding sysctls described in [operations](../docs/operations.md).

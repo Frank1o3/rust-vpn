@@ -5,11 +5,13 @@ use hickory_server::{
     Server,
     proto::rr::Name,
     resolver::config::{NameServerConfig, ResolverOpts},
+    store::blocklist::{BlocklistConfig, BlocklistZoneHandler},
     store::forwarder::{ForwardConfig, ForwardZoneHandler},
     zone_handler::{Catalog, ZoneHandler},
 };
 use ipnet::IpNet;
 use std::{
+    io::Cursor,
     net::{IpAddr, SocketAddr},
     sync::Arc,
     time::Duration,
@@ -39,7 +41,7 @@ pub async fn start(
 }
 
 /// Resolver controls for the embedded DNS forwarder.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DnsOptions {
     /// Maximum time to wait for an upstream response.
     pub timeout: Duration,
@@ -47,6 +49,8 @@ pub struct DnsOptions {
     pub attempts: usize,
     /// Maximum number of DNS responses kept in the TTL-aware cache. Zero disables caching.
     pub cache_entries: u64,
+    /// Domains to block, including subdomains.
+    pub blocked_domains: Vec<String>,
 }
 
 impl Default for DnsOptions {
@@ -55,6 +59,7 @@ impl Default for DnsOptions {
             timeout: Duration::from_secs(2),
             attempts: 2,
             cache_entries: 1024,
+            blocked_domains: Vec::new(),
         }
     }
 }
@@ -132,11 +137,27 @@ async fn start_on_port_with_options(
     .build()
     .map_err(|error| anyhow::anyhow!("building DNS forwarder: {error}"))?;
 
+    let mut handlers: Vec<Arc<dyn ZoneHandler>> = Vec::new();
+    if !options.blocked_domains.is_empty() {
+        let mut blocklist = BlocklistZoneHandler::try_from_config(
+            Name::root(),
+            BlocklistConfig {
+                wildcard_match: true,
+                min_wildcard_depth: 2,
+                ..BlocklistConfig::default()
+            },
+            None,
+        )
+        .map_err(|error| anyhow::anyhow!("creating DNS blocklist: {error}"))?;
+        blocklist
+            .add(Cursor::new(options.blocked_domains.join("\n")))
+            .context("loading configured DNS blocked domains")?;
+        handlers.push(Arc::new(blocklist));
+    }
+    handlers.push(Arc::new(forwarder));
+
     let mut catalog = Catalog::new();
-    catalog.upsert(
-        Name::root().into(),
-        vec![Arc::new(forwarder) as Arc<dyn ZoneHandler>],
-    );
+    catalog.upsert(Name::root().into(), handlers);
     let mut server = Server::with_access(catalog, [], allowed_networks.iter().copied());
 
     let mut bound_addresses = Vec::with_capacity(listen_addresses.len());

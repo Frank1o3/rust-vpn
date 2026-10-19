@@ -150,6 +150,34 @@ def prompt_dns_upstreams(text: str, default: str) -> list[str]:
             console.print(f"  [red]{error}[/red]")
 
 
+def prompt_domain_list(text: str, default: str = "") -> list[str]:
+    while True:
+        value = prompt(text, default=default)
+        if not value:
+            return []
+        domains = [part.rstrip(".").lower() for part in re.split(r"[,\s]+", value) if part]
+        invalid = [domain for domain in domains if not _valid_domain(domain)]
+        if invalid:
+            console.print(
+                "  [red]enter hostnames such as example.com; wildcards and URL paths are not supported.[/red]"
+            )
+            continue
+        return list(dict.fromkeys(domains))
+
+
+def _valid_domain(value: str) -> bool:
+    if not value or len(value) > 253:
+        return False
+    labels = value.split(".")
+    return all(
+        0 < len(label) <= 63
+        and label[0] != "-"
+        and label[-1] != "-"
+        and all(character.isascii() and (character.isalnum() or character == "-") for character in label)
+        for label in labels
+    )
+
+
 def _normalize_dns_upstream(value: str) -> str:
     if value.startswith("["):
         closing = value.find("]")

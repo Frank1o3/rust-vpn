@@ -89,6 +89,7 @@ async fn start_forwarder(
                 timeout: Duration::from_millis(config.timeout_ms),
                 attempts: config.attempts,
                 cache_entries: config.cache_entries,
+                blocked_domains: config.blocked_domains.clone(),
             },
         )
         .await?,

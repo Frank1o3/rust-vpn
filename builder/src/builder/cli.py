@@ -31,6 +31,7 @@ from .prompts import (
     prompt_bool,
     prompt_cidr_list,
     prompt_choice,
+    prompt_domain_list,
     prompt_dns_servers,
     prompt_dns_upstreams,
     prompt_endpoint_host,
@@ -41,6 +42,7 @@ from .prompts import (
     prompt_ip,
     prompt_network,
 )
+from .peers import enroll_peer, renew_peer, revoke_peer
 from .render import render_client_toml, render_server_toml, emit_android_qr
 
 
@@ -183,6 +185,9 @@ def ask_server() -> SetupConfig:
             dns.attempts = prompt_int("DNS retries (1-5)", 2, minimum=1, maximum=5)
             dns.cache_entries = prompt_int(
                 "DNS cache entries (0 disables)", 1024, minimum=0, maximum=65536
+            )
+            dns.blocked_domains = prompt_domain_list(
+                "Domains to block (comma/space-separated; optional; includes subdomains)"
             )
 
     forwarding_enabled = prompt_bool("Enable internet gateway / NAT forwarding", True)
@@ -499,6 +504,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("rvpn-setup"),
         help="directory to write server.toml and client-*.toml into",
     )
+    commands = parser.add_subparsers(dest="command")
+
+    enroll = commands.add_parser("enroll", help="enroll a peer using an existing certificate authority")
+    enroll.add_argument("--server-config", type=Path, required=True)
+    enroll.add_argument("--ca-seed", type=Path, help="CA seed file (defaults beside server config)")
+    enroll.add_argument("--name", required=True, help="peer name used for the generated filename")
+    enroll.add_argument("--server", required=True, help="client endpoint, e.g. vpn.example.net:9000")
+    enroll.add_argument("--output", type=Path, help="client TOML path (defaults beside server config)")
+    enroll.add_argument("--valid-days", type=int, default=3650)
+    enroll.add_argument("--android", action="store_true", help="also generate a QR image")
+
+    renew = commands.add_parser("renew", help="renew a certificate in an existing client config")
+    renew.add_argument("--server-config", type=Path, required=True)
+    renew.add_argument("--ca-seed", type=Path, help="CA seed file (defaults beside server config)")
+    renew.add_argument("--client-config", type=Path, required=True)
+    renew.add_argument("--valid-days", type=int, default=3650)
+
+    revoke = commands.add_parser("revoke", help="revoke a peer certificate in the server config")
+    revoke.add_argument("--server-config", type=Path, required=True)
+    revoke.add_argument("--client-config", type=Path, required=True)
     return parser
 
 
@@ -506,6 +531,38 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "enroll":
+            server_path, client_path = enroll_peer(
+                server_config_path=args.server_config,
+                ca_seed_path=args.ca_seed,
+                name=args.name,
+                endpoint=args.server,
+                output_path=args.output,
+                valid_days=args.valid_days,
+                android=args.android,
+            )
+            console.print(f"[green]Enrolled peer; updated[/green] {server_path}")
+            console.print(f"[green]Wrote client config[/green] {client_path}")
+            console.print("Reload the server config with SIGHUP to activate the new peer.")
+            return 0
+        if args.command == "renew":
+            client_path = renew_peer(
+                server_config_path=args.server_config,
+                ca_seed_path=args.ca_seed,
+                client_config_path=args.client_config,
+                valid_days=args.valid_days,
+            )
+            console.print(f"[green]Renewed certificate in[/green] {client_path}")
+            console.print("Reconnect the peer to authenticate with the renewed certificate.")
+            return 0
+        if args.command == "revoke":
+            server_path = revoke_peer(
+                server_config_path=args.server_config,
+                client_config_path=args.client_config,
+            )
+            console.print(f"[green]Revoked peer; updated[/green] {server_path}")
+            console.print("Reload the server config with SIGHUP to apply the revocation.")
+            return 0
         server_path, client_paths, ca_seed_path = generate(args.output_dir)
     except KeyboardInterrupt:
         console.print("\n[yellow]Setup cancelled.[/yellow]")

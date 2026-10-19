@@ -87,6 +87,9 @@ pub struct DnsConfig {
     /// Maximum cached DNS responses. Zero disables caching.
     #[serde(default = "default_dns_cache_entries")]
     pub cache_entries: u64,
+    /// Domains blocked by the tunnel DNS forwarder, including their subdomains.
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
 }
 
 fn default_dns_timeout_ms() -> u64 {
@@ -108,6 +111,7 @@ impl Default for DnsConfig {
             timeout_ms: default_dns_timeout_ms(),
             attempts: default_dns_attempts(),
             cache_entries: default_dns_cache_entries(),
+            blocked_domains: Vec::new(),
         }
     }
 }
@@ -166,6 +170,16 @@ impl ServerConfig {
         if self.dns.cache_entries > 65_536 {
             return Err(ConfigError::Invalid(
                 "DNS cache_entries must not exceed 65536",
+            ));
+        }
+        if !self.dns.blocked_domains.is_empty() && self.dns.upstreams.is_empty() {
+            return Err(ConfigError::Invalid(
+                "dns.blocked_domains requires at least one DNS upstream",
+            ));
+        }
+        if self.dns.blocked_domains.iter().any(|domain| !valid_domain(domain)) {
+            return Err(ConfigError::Invalid(
+                "dns.blocked_domains must contain valid DNS domain names",
             ));
         }
         if self.usage_history.enabled
@@ -266,6 +280,19 @@ impl ServerConfig {
         }
         Ok(())
     }
+}
+
+fn valid_domain(domain: &str) -> bool {
+    let domain = domain.strip_suffix('.').unwrap_or(domain);
+    !domain.is_empty()
+        && domain.len() <= 253
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 #[derive(Clone, Deserialize, Serialize)]

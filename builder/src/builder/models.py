@@ -98,6 +98,7 @@ class DnsOptions:
     timeout_ms: int = 2000
     attempts: int = 2
     cache_entries: int = 1024
+    blocked_domains: list[str] = field(default_factory=list)
 
 
 @dataclass

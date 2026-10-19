@@ -39,7 +39,7 @@
         authors=["Frank1o3"]
         edition="2024"
         license="BSD-3-Clause"
-        version="0.3.2"
+        version="0.3.3"
 
     [workspace.dependencies]
         anyhow="1.0.104"
@@ -51,7 +51,7 @@
         ed25519-dalek="3.0.0"
         futures-util="0.3.34"
         hex="0.4.3"
-        hickory-server={version="0.26.3", default-features=false, features=["resolver"]}
+        hickory-server={version="0.26.3", default-features=false, features=["blocklist", "resolver"]}
         hkdf="0.13"
         hmac="0.13"
         interprocess={version="2.4.6", features=["tokio"]}
