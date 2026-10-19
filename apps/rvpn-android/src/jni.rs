@@ -326,7 +326,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             let config = AndroidTunnelConfig {
                 tun_fd,
                 server: server_rust,
-                dns_replace: dns_replace != 0,
+                dns_replace: dns_replace != true,
                 auth,
                 obfuscation_key,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },
