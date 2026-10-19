@@ -14,6 +14,12 @@ obfuscation_key = "<optional 64-hex key>"
 tx_mib_per_sec = 0
 rx_mib_per_sec = 0
 
+[usage_history]
+enabled = false
+# Required when enabled. Prefer an owner-only directory such as /var/lib/rvpn.
+path = "/var/lib/rvpn/usage-history.json"
+retention_days = 30 # 1 to 3650 daily buckets
+
 [interface]
 name = "rvpn-server0"
 mode = "tun"
@@ -64,6 +70,21 @@ servers. Upstream requests time out after `timeout_ms` and are retried up to
 TTL-aware response cache holds up to `cache_entries` responses (maximum 65536);
 set it to zero to disable caching. Keep the DNS listener on tunnel addresses;
 do not expose it on the server's public address.
+
+The server reloads peer authentication, peer links, DNS settings, and rate
+limits on `SIGHUP` after parsing and validating the complete configuration.
+Changes to bind, interfaces, forwarding, handshake/rekey/liveness settings,
+obfuscation, or usage-history storage require a restart. A peer authentication
+change closes active sessions so peers must authenticate under the new policy.
+DNS listeners restart when DNS settings change; if the new listener cannot be
+started, RVPN attempts to restore the previous DNS configuration.
+
+`[usage_history]` is disabled by default. When enabled, `path` is required;
+RVPN writes daily per-peer packet, payload-byte, and drop totals, retaining at
+most `retention_days` UTC days. The file is written atomically with owner-only
+permissions on Unix. To reset it, stop the server, remove the configured file,
+and start the server again. Keep the file in a directory writable only by the
+server account because it records peer usage over time.
 
 ## Linux client
 

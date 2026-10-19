@@ -1,3 +1,4 @@
+mod dns_reload;
 mod firewall;
 mod handshake;
 mod network;
@@ -6,6 +7,7 @@ mod portal;
 mod state;
 mod status;
 mod tunnel;
+mod usage_history;
 
 use anyhow::{Context, Result};
 use ipnet::IpNet;
@@ -14,11 +16,13 @@ use rvpn_crypto::AEAD_TAG_LEN;
 use rvpn_interface::{DEFAULT_MTU, TunConfig, VirtualInterface};
 use rvpn_protocol::HEADER_LEN;
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{env, time::Duration};
+use std::env;
 
+use dns_reload::DnsReloader;
 use firewall::ForwardingGuard;
 use network::configure_server_interface;
 use tunnel::run_server_loop;
+use usage_history::UsageHistory;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
@@ -34,6 +38,18 @@ async fn main() -> Result<()> {
                 path.display()
             )
         })?)?;
+    let usage_history = if config.usage_history.enabled {
+        Some(UsageHistory::open(
+            config
+                .usage_history
+                .path
+                .clone()
+                .expect("validated usage history path"),
+            config.usage_history.retention_days,
+        )?)
+    } else {
+        None
+    };
     let identities = config.peer_identities()?;
     let certificate_authority = config.certificate_authority.clone();
     let obfuscation = config
@@ -119,33 +135,16 @@ async fn main() -> Result<()> {
     configure_server_interface(primary_dev, &config).await?;
     let forwarding = ForwardingGuard::install(&config.forwarding, primary_dev.name(), mtu).await?;
 
-    let dns = if config.dns.upstreams.is_empty() {
-        None
-    } else {
-        let interface_networks: Vec<IpNet> = config
-            .interface
-            .address
-            .iter()
-            .chain(&config.interface.addresses)
-            .map(|address| address.parse())
-            .collect::<std::result::Result<_, _>>()
-            .context("parsing configured tunnel prefixes for DNS access control")?;
-        let listen_addresses: Vec<_> = interface_networks.iter().map(IpNet::addr).collect();
-        Some(
-            rvpn_dns::start_with_options(
-                &listen_addresses,
-                &interface_networks,
-                &config.dns.upstreams,
-                rvpn_dns::DnsOptions {
-                    timeout: Duration::from_millis(config.dns.timeout_ms),
-                    attempts: config.dns.attempts,
-                    cache_entries: config.dns.cache_entries,
-                },
-            )
-            .await
-            .context("starting embedded DNS forwarder")?,
-        )
-    };
+    let dns_networks: Vec<IpNet> = config
+        .interface
+        .address
+        .iter()
+        .chain(&config.interface.addresses)
+        .map(|address| address.parse())
+        .collect::<std::result::Result<_, _>>()
+        .context("parsing configured tunnel prefixes for DNS access control")?;
+    let dns_addresses: Vec<_> = dns_networks.iter().map(IpNet::addr).collect();
+    let dns = DnsReloader::start(dns_addresses, dns_networks, config.dns.clone()).await?;
 
     tracing::info!(
         bind = %transport.local_addr()?,
@@ -160,6 +159,7 @@ async fn main() -> Result<()> {
     let shutdown = Box::pin(shutdown_signal());
     let result = run_server_loop(
         transport,
+        path,
         config,
         identities,
         certificate_authority,
@@ -168,14 +168,14 @@ async fn main() -> Result<()> {
         tun,
         tap,
         forwarding,
+        usage_history,
+        dns.clone(),
         shutdown,
     )
     .await;
-    if let Some(dns) = dns {
-        dns.shutdown()
-            .await
-            .context("stopping embedded DNS forwarder")?;
-    }
+    dns.shutdown()
+        .await
+        .context("stopping embedded DNS forwarder")?;
     result
 }
 

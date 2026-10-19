@@ -27,6 +27,14 @@ improving long-term operations.
 - Directed transmitter-to-receiver peer links, with symmetric `between`
   groups retained as shorthand. TAP broadcast and multicast forwarding uses the
   same per-sender receiver authorization.
+- Validated `SIGHUP` reload for peer authentication, links, DNS settings, and
+  traffic limits. Authentication changes close active sessions so peers must
+  reconnect under the updated policy.
+- Optional persistent daily peer usage history with a configured file path,
+  UTC-day retention, atomic writes, and a documented reset procedure. It is
+  disabled by default.
+- Linux DNS startup logs identify the selected NetworkManager,
+  systemd-resolved, or `/etc/resolv.conf` path and explain fallback decisions.
 
 ## New control and policy improvements
 
@@ -76,48 +84,11 @@ rekey scheduling as distinct settings because they serve different purposes.
 Account for mobile power use and never treat unauthenticated or replayed
 traffic as proof that a peer is alive.
 
-## Active improvement priorities
+## Deferred security considerations
 
-### 1. Design and implement a post-quantum protocol version
-
-Treat this as the leading security upgrade. Specify a new, intentionally
-incompatible protocol version (target 3.2) with mandatory hybrid X25519 and
-ML-KEM key establishment. Combine both secrets using a reviewed construction
-and bind the algorithm suite, both key shares, identities, roles, and version
-into the authenticated transcript and key derivation. Fail the handshake if
-either component fails. A new binary must not negotiate or fall back to 3.1;
-the existing exact-version packet check should remain fail-closed.
-
-The KEM adds bytes to initial handshakes and rekeys, not to ordinary data
-packets. Measure the resulting datagram sizes with the configured obfuscation
-padding and representative IPv4/IPv6 path MTUs. Design bounded handshake
-fragmentation or a handshake-specific padding policy rather than relying on IP
-fragmentation. Keep reassembly bounded by size, count, time, and peer/source so
-large unauthenticated handshakes cannot become a resource-exhaustion path.
-
-As part of the protocol design, decide whether 3.2 also requires hybrid
-Ed25519 plus ML-DSA peer authentication. Key establishment protects captured
-traffic against future decryption; hybrid signatures address future quantum
-forgery of peer identities. Treat those as separate security properties and
-include identity, certificate, revocation, and enrollment format impacts in
-the decision. Use maintained, reviewed implementations and obtain an
-independent protocol review before release. Add downgrade, transcript-binding,
-key-separation, packet-size, loss, replay, and malformed-fragment regression
-coverage. Do not ship a classical-only fallback in the new protocol.
-
-### 5. Validate kill-switch replacement failure behavior (issue #7)
-
-The replacement is submitted as one nftables batch so a failed update should
-leave the installed policy intact. Confirm that behavior with failure
-injection against a Linux kernel.
-
-### 7. Improve long-running operations
-
-- Add validated live reload for peer configuration, DNS upstreams, and limits.
-- Offer optional persistent usage history with explicit retention and reset
-  behavior; current counters reset on restart.
-- Add clear startup diagnostics for the selected Linux DNS backend and why
-  NetworkManager, systemd-resolved, or the resolv.conf fallback was chosen.
+Post-quantum protocol work is deferred until it is a practical requirement and
+mature, independently reviewed algorithms and implementation guidance are
+available. Do not design a bespoke cryptographic protocol for it in advance.
 
 ## Product directions
 

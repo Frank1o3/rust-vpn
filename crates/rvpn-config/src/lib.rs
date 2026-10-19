@@ -15,7 +15,7 @@ pub use network::{
 };
 pub use server::{
     CertificateAuthorityConfig, DnsConfig, PeerIdentity, PeerLimitsConfig, ServerConfig,
-    ServerPeerConfig,
+    ServerPeerConfig, UsageHistoryConfig,
 };
 pub use util::{
     default_client_config_path, default_config_dir, default_server_config_path,

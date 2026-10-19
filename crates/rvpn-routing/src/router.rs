@@ -134,6 +134,24 @@ impl Router {
         }
     }
 
+    /// Replaces peer link policy and rebuilds each active peer's authorized
+    /// receiver set without discarding learned TAP MAC ownership.
+    pub fn replace_links(&mut self, links: Links) {
+        self.links = links;
+        let names: HashMap<SessionId, String> = self
+            .peers
+            .iter()
+            .map(|(id, peer)| (*id, peer.name.clone()))
+            .collect();
+        for (id, peer) in &mut self.peers {
+            peer.linked = names
+                .iter()
+                .filter(|(other_id, name)| **other_id != *id && self.links.linked(&peer.name, name))
+                .map(|(other_id, _)| *other_id)
+                .collect();
+        }
+    }
+
     pub fn register(
         &mut self,
         session: SessionId,

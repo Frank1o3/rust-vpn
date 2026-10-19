@@ -75,6 +75,33 @@ queue. Handshake and keepalive packets are excluded. Counters reset when the
 server process restarts and are available through the local status socket and
 metrics portal described below.
 
+### Live server configuration reload
+
+After editing the server's TOML file, send the server process `SIGHUP` to
+reload peer authentication, peer links, DNS settings, and traffic limits:
+
+```sh
+sudo systemctl kill --signal=HUP rvpn-server.service
+```
+
+The server validates the full file before applying anything. Invalid files and
+changes to startup-only settings are rejected and logged; restart the service
+to change bind address, interfaces, forwarding, handshake/rekey/liveness,
+obfuscation, or usage-history storage settings. Changing peer authentication
+closes active peer sessions, which must reconnect and authenticate using the
+new configuration. Changing DNS settings briefly restarts the DNS listeners;
+RVPN restores the previous settings if the replacement cannot start.
+
+### Optional persistent usage history
+
+The in-memory status counters still reset on restart. Operators can separately
+enable `[usage_history]` in the server config to retain per-peer daily packet,
+payload-byte, and drop totals. Choose a file path in a directory writable only
+by the server account. History is checkpointed every minute and on graceful
+shutdown; retention is configured in UTC days. To reset it, stop the server,
+delete the configured history file, and start the service again. The history
+file is a local accounting record, not a backup or tamper-proof audit log.
+
 ## Installing as systemd services (recommended)
 
 Use `./build.sh` rather than hand-editing the unit files — it builds the

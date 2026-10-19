@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 #[cfg(unix)]
 use ipnet::IpNet;
 use rvpn_config::{CertificateAuthorityConfig, PeerIdentity, ServerConfig};
@@ -14,18 +14,21 @@ use rvpn_transport::{OutboundQueue, SendOptions, TransportError, UdpTransport};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 use tokio::{
     sync::watch,
     time::{Instant, interval, sleep},
 };
 
+use crate::dns_reload::DnsReloader;
 use crate::firewall::ForwardingGuard;
 use crate::handshake::{
     CookieChallengeLimiter, begin_initial, begin_rekey, challenge_or_admit, finish_pending,
     maybe_send_rekey, per_source_pending_limit, retransmit_pending,
 };
 use crate::state::{ActivePeer, PendingHandshakes, close_all};
+use crate::usage_history::UsageHistory;
 
 const MAX_CONSECUTIVE_RECV_ERRORS: u32 = 50;
 
@@ -141,6 +144,113 @@ fn register_new_peers(router: &mut Router, active: &HashMap<SessionId, ActivePee
             tracing::debug!(peer = %peer.identity.name, session_id = ?id, "registered peer with router");
         }
     }
+}
+
+fn links_for_config(config: &ServerConfig) -> Links {
+    let edges = config.links.iter().flat_map(|link| {
+        let symmetric = link.between.iter().enumerate().flat_map(|(index, a)| {
+            link.between[index + 1..]
+                .iter()
+                .flat_map(move |b| [(a.clone(), b.clone()), (b.clone(), a.clone())])
+        });
+        let directed = link.transmitters.iter().flat_map(|transmitter| {
+            link.receivers
+                .iter()
+                .map(move |receiver| (transmitter.clone(), receiver.clone()))
+        });
+        symmetric.chain(directed)
+    });
+    Links::from_directed_pairs(edges)
+}
+
+fn config_projection<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
+    serde_json::to_vec(value).context("serializing configuration for reload comparison")
+}
+
+async fn reload_config(
+    path: &Path,
+    config: &mut ServerConfig,
+    identities: &mut Vec<PeerIdentity>,
+    certificate_authority: &mut Option<CertificateAuthorityConfig>,
+    active: &mut HashMap<SessionId, ActivePeer>,
+    pending: &mut PendingHandshakes,
+    router: &mut Router,
+    per_source_limit: &mut usize,
+    outbound: &OutboundQueue,
+    transport: &UdpTransport,
+    obfuscation: Option<&ObfuscationKey>,
+    dns_reloader: &DnsReloader,
+) -> Result<bool> {
+    let text = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading reloaded configuration {}", path.display()))?;
+    let candidate = ServerConfig::from_toml(&text)?;
+    let static_current = config_projection(&(
+        config.bind,
+        &config.interface,
+        &config.handshake,
+        &config.rekey,
+        &config.forwarding,
+        &config.liveness,
+        &config.obfuscation_key,
+        &config.usage_history,
+    ))?;
+    let static_candidate = config_projection(&(
+        candidate.bind,
+        &candidate.interface,
+        &candidate.handshake,
+        &candidate.rekey,
+        &candidate.forwarding,
+        &candidate.liveness,
+        &candidate.obfuscation_key,
+        &candidate.usage_history,
+    ))?;
+    if static_current != static_candidate {
+        bail!(
+            "reload changed startup-only settings (bind, interface, forwarding, handshake, rekey, liveness, obfuscation, or usage-history storage); restart the server to apply them"
+        );
+    }
+
+    let current_peers = config_projection(&(&config.peers, &config.certificate_authority))?;
+    let next_peers = config_projection(&(&candidate.peers, &candidate.certificate_authority))?;
+    let auth_changed = current_peers != next_peers;
+    let links_changed = config_projection(&config.links)? != config_projection(&candidate.links)?;
+    let dns_changed = config.dns != candidate.dns;
+    let limits_changed = config.limits != candidate.limits;
+    if !auth_changed && !links_changed && !dns_changed && !limits_changed {
+        return Ok(false);
+    }
+
+    let next_identities = candidate.peer_identities()?;
+    if dns_changed {
+        dns_reloader.replace(candidate.dns.clone()).await?;
+    }
+    if auth_changed {
+        close_all(transport, active, obfuscation).await;
+        for session_id in active.keys().copied().collect::<Vec<_>>() {
+            router.unregister(session_id);
+        }
+        active.clear();
+        *pending = PendingHandshakes::default();
+        tracing::info!("peer authentication configuration changed; active sessions were closed");
+    }
+    if links_changed {
+        router.replace_links(links_for_config(&candidate));
+    }
+    if limits_changed {
+        let tx_rate = candidate.limits.tx_mib_per_sec.saturating_mul(1024 * 1024);
+        let rx_rate = candidate.limits.rx_mib_per_sec.saturating_mul(1024 * 1024);
+        outbound.set_rate_bytes_per_sec(tx_rate);
+        for peer in active.values_mut() {
+            peer.rx_limiter = crate::state::PeerRateLimiter::new(rx_rate);
+        }
+    }
+
+    *identities = next_identities;
+    *certificate_authority = candidate.certificate_authority.clone();
+    *per_source_limit = per_source_pending_limit(identities, certificate_authority.as_ref());
+    *config = candidate;
+    Ok(true)
 }
 
 fn log_drop(peer: &str, kind: PacketKind, payload: &[u8], reason: DropReason) {
@@ -292,36 +402,26 @@ async fn route_inbound(
 #[allow(clippy::too_many_arguments)]
 pub async fn run_server_loop(
     transport: UdpTransport,
-    config: ServerConfig,
-    identities: Vec<PeerIdentity>,
-    certificate_authority: Option<CertificateAuthorityConfig>,
+    config_path: std::path::PathBuf,
+    mut config: ServerConfig,
+    mut identities: Vec<PeerIdentity>,
+    mut certificate_authority: Option<CertificateAuthorityConfig>,
     obfuscation: Option<ObfuscationKey>,
     cookie_key: rvpn_crypto::CookieKey,
     tun: Option<VirtualInterface>,
     tap: Option<VirtualInterface>,
     mut forwarding: ForwardingGuard,
+    mut usage_history: Option<UsageHistory>,
+    dns_reloader: DnsReloader,
     mut shutdown_signal: impl std::future::Future<Output = Result<()>> + Unpin,
 ) -> Result<()> {
     let obfuscation = obfuscation.as_ref();
     let mut active: HashMap<SessionId, ActivePeer> = HashMap::new();
     let mut cookie_limiter = CookieChallengeLimiter::default();
     let mut pending: PendingHandshakes = PendingHandshakes::new();
-    let per_source_pending_limit =
+    let mut per_source_pending_limit =
         per_source_pending_limit(&identities, certificate_authority.as_ref());
-    let link_edges = config.links.iter().flat_map(|link| {
-        let symmetric_edges = link.between.iter().enumerate().flat_map(|(index, a)| {
-            link.between[index + 1..]
-                .iter()
-                .flat_map(move |b| [(a.clone(), b.clone()), (b.clone(), a.clone())])
-        });
-        let directed_edges = link.transmitters.iter().flat_map(|transmitter| {
-            link.receivers
-                .iter()
-                .map(move |receiver| (transmitter.clone(), receiver.clone()))
-        });
-        symmetric_edges.chain(directed_edges)
-    });
-    let mut router = Router::new(Links::from_directed_pairs(link_edges));
+    let mut router = Router::new(links_for_config(&config));
     if config.links.is_empty() {
         tracing::info!("no [[links]] configured; peers cannot reach each other");
     } else {
@@ -338,6 +438,10 @@ pub async fn run_server_loop(
     let mut sweep = interval(Duration::from_secs(10));
     let mut stats_log = interval(Duration::from_secs(60));
     let mut status_tick = interval(Duration::from_secs(1));
+    let mut usage_tick = tokio::time::interval_at(
+        Instant::now() + Duration::from_secs(60),
+        Duration::from_secs(60),
+    );
     let (status_tx, status_rx) = watch::channel(String::from(
         "STATUS\tname\tconnected\trx_packets\trx_payload_bytes\trx_wire_bytes\ttx_packets\ttx_payload_bytes\ttx_wire_bytes\trx_mib_per_sec\ttx_mib_per_sec\trx_limit_mib_per_sec\ttx_limit_mib_per_sec\trx_limited_drops\ttx_queue_drops\tdropped_packets\trekeys\tkey_phase\tlast_activity_secs\tavg_queue_delay_ms\tmax_queue_delay_ms\n",
     ));
@@ -366,6 +470,8 @@ pub async fn run_server_loop(
     let idle_timeout = config.liveness.timeout();
     let rekey_grace_period = config.rekey.grace_period();
     let mut recv_errors = 0u32;
+    #[cfg(unix)]
+    let mut reload_signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
     let result: Result<()> = async {
         let plane = DataPlane {
@@ -383,6 +489,31 @@ pub async fn run_server_loop(
                 signal = &mut shutdown_signal => {
                     signal?;
                     return Ok(());
+                }
+                _ = async {
+                    #[cfg(unix)]
+                    { reload_signal.recv().await; }
+                    #[cfg(not(unix))]
+                    { std::future::pending::<()>().await; }
+                } => {
+                    match reload_config(
+                        &config_path,
+                        &mut config,
+                        &mut identities,
+                        &mut certificate_authority,
+                        &mut active,
+                        &mut pending,
+                        &mut router,
+                        &mut per_source_pending_limit,
+                        &outbound,
+                        &transport,
+                        obfuscation,
+                        &dns_reloader,
+                    ).await {
+                        Ok(true) => tracing::info!("server configuration reloaded"),
+                        Ok(false) => tracing::debug!("configuration reload found no changes"),
+                        Err(error) => tracing::error!(%error, "server configuration reload rejected"),
+                    }
                 }
                 () = &mut retry_sleep => {
                     if let Err(error) = retransmit_pending(&transport, obfuscation, &mut pending, &config.handshake).await {
@@ -489,6 +620,14 @@ pub async fn run_server_loop(
                     );
                     previous_status.retain(|session_id, _| present.contains(session_id));
                     let _ = status_tx.send(snapshot);
+                }
+                _ = usage_tick.tick(), if usage_history.is_some() => {
+                    if let Some(history) = usage_history.as_mut() {
+                        history.record(active.iter());
+                        if let Err(error) = history.flush() {
+                            tracing::error!(%error, "could not persist peer usage history");
+                        }
+                    }
                 }
                 () = keepalive.wait_for_due() => {
                     for peer in active.values_mut() {
@@ -737,6 +876,13 @@ pub async fn run_server_loop(
         }
     }
     .await;
+
+    if let Some(history) = usage_history.as_mut() {
+        history.record(active.iter());
+        if let Err(error) = history.flush() {
+            tracing::error!(%error, "could not persist peer usage history during shutdown");
+        }
+    }
 
     drop(status_tx);
     if let Err(error) = status_task.await {

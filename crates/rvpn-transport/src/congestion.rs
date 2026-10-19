@@ -5,7 +5,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -28,7 +28,7 @@ pub struct QueuedDatagram {
 pub struct OutboundQueue {
     capacity: usize,
     per_peer_capacity: usize,
-    rate_bytes_per_sec: Option<u64>,
+    rate_bytes_per_sec: AtomicU64,
     queued: Arc<AtomicUsize>,
     state: Arc<Mutex<QueueState>>,
     ready: Arc<Notify>,
@@ -96,6 +96,13 @@ impl RateBucket {
         }
     }
 
+    fn set_rate(&mut self, rate_bytes_per_sec: u64) {
+        self.rate_bytes_per_sec = rate_bytes_per_sec;
+        self.capacity = rate_bytes_per_sec.max(65_535);
+        self.tokens = self.tokens.min(self.capacity);
+        self.updated = Instant::now();
+    }
+
     fn consume_or_delay(&mut self, bytes: usize) -> Result<(), Duration> {
         let now = Instant::now();
         let replenished = now
@@ -141,7 +148,7 @@ impl OutboundQueue {
         let queue = Arc::new(Self {
             capacity,
             per_peer_capacity: capacity.min(MAX_PEER_QUEUE),
-            rate_bytes_per_sec: (rate_bytes_per_sec != 0).then_some(rate_bytes_per_sec),
+            rate_bytes_per_sec: AtomicU64::new(rate_bytes_per_sec),
             queued: Arc::clone(&queued),
             state: Arc::clone(&state),
             ready: Arc::clone(&ready),
@@ -162,6 +169,23 @@ impl OutboundQueue {
 
     pub fn queued_len(&self) -> usize {
         self.queued.load(Ordering::Relaxed)
+    }
+
+    /// Changes the per-peer transmit rate without replacing the queue or
+    /// discarding queued packets. Zero disables shaping.
+    pub fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: u64) {
+        self.rate_bytes_per_sec
+            .store(rate_bytes_per_sec, Ordering::Relaxed);
+        let mut state = self.state.lock().expect("outbound queue mutex poisoned");
+        for peer in state.peers.values_mut() {
+            if rate_bytes_per_sec == 0 {
+                peer.rate_bucket = None;
+            } else if let Some(bucket) = &mut peer.rate_bucket {
+                bucket.set_rate(rate_bytes_per_sec);
+            } else {
+                peer.rate_bucket = Some(RateBucket::new(rate_bytes_per_sec));
+            }
+        }
     }
 
     pub fn try_enqueue(&self, peer: SocketAddr, payload: Bytes) -> Result<(), TransportError> {
@@ -197,10 +221,10 @@ impl OutboundQueue {
         if !state.peers.contains_key(&key) && state.peers.len() >= MAX_TRACKED_PEERS {
             return Err(TransportError::Backpressure);
         }
-        let peer_queue = state
-            .peers
-            .entry(key)
-            .or_insert_with(|| PeerQueue::new(self.rate_bytes_per_sec));
+        let peer_queue = state.peers.entry(key).or_insert_with(|| {
+            let rate = self.rate_bytes_per_sec.load(Ordering::Relaxed);
+            PeerQueue::new((rate != 0).then_some(rate))
+        });
         if peer_queue.packets.len() >= self.per_peer_capacity {
             return Err(TransportError::Backpressure);
         }

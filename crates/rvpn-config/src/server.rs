@@ -1,6 +1,6 @@
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use crate::ConfigError;
 use crate::basic::{AuthMode, LinkConfig};
@@ -33,11 +33,13 @@ pub struct ServerConfig {
     pub dns: DnsConfig,
     #[serde(default)]
     pub limits: PeerLimitsConfig,
+    #[serde(default)]
+    pub usage_history: UsageHistoryConfig,
     pub obfuscation_key: Option<String>,
 }
 
 /// Optional per-peer data-plane limits, in MiB/s. Zero disables a direction.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeerLimitsConfig {
     /// Peer-to-server authenticated payload rate.
@@ -48,8 +50,29 @@ pub struct PeerLimitsConfig {
     pub tx_mib_per_sec: u64,
 }
 
+/// Optional daily peer-usage history persisted by the server.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UsageHistoryConfig {
+    pub enabled: bool,
+    /// Required when enabled. The server creates parent directories as needed.
+    pub path: Option<PathBuf>,
+    /// Number of daily buckets to retain (1 to 3650).
+    pub retention_days: u16,
+}
+
+impl Default for UsageHistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: None,
+            retention_days: 30,
+        }
+    }
+}
+
 /// Optional DNS forwarding service for VPN peers.
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DnsConfig {
     /// Upstream DNS servers. An empty list disables the embedded DNS service.
@@ -143,6 +166,22 @@ impl ServerConfig {
         if self.dns.cache_entries > 65_536 {
             return Err(ConfigError::Invalid(
                 "DNS cache_entries must not exceed 65536",
+            ));
+        }
+        if self.usage_history.enabled
+            && self
+                .usage_history
+                .path
+                .as_ref()
+                .is_none_or(|p| p.as_os_str().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "usage_history.path is required when usage_history.enabled is true",
+            ));
+        }
+        if !(1..=3650).contains(&self.usage_history.retention_days) {
+            return Err(ConfigError::Invalid(
+                "usage_history.retention_days must be between 1 and 3650",
             ));
         }
         Ok(())

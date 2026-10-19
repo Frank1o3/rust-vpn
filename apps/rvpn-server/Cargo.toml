@@ -21,6 +21,7 @@
     rvpn-protocol={path="../../crates/rvpn-protocol"}
     rvpn-routing={path="../../crates/rvpn-routing"}
     rvpn-transport={path="../../crates/rvpn-transport"}
+    serde.workspace=true
     serde_json.workspace=true
     tokio.workspace=true
     tracing.workspace=true
