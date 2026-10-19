@@ -128,6 +128,12 @@ MTU operations. Add measurements for packet authentication, routing, queue
 scheduling, and TUN/TAP injection at small and near-MTU sizes. Record throughput
 and tail latency before changing copies, locks, or batching.
 
+The Criterion suite now also measures packet seal/open, IPv4 routing, and
+enqueue/dequeue scheduling at 64-byte and near-1400-byte sizes. These
+in-process measurements do not include kernel TUN/TAP injection or network
+throughput and tail latency; those still require a controlled Linux device and
+benchmark environment.
+
 ### 5. Validate kill-switch replacement failure behavior (issue #7)
 
 The replacement is submitted as one nftables batch so a failed update should
