@@ -28,14 +28,13 @@ pub async fn create_client_devices(
     Ok((tun, None, false))
 }
 
-pub async fn install_bootstrap_kill_switch(config: &ClientConfig) -> Result<bool> {
+pub async fn install_bootstrap_kill_switch(
+    config: &ClientConfig,
+    endpoint: SocketAddr,
+) -> Result<bool> {
     if !config.routing.default_route && !config.routing.default_route_v6 {
         return Ok(false);
     }
-    let endpoint = config
-        .server
-        .parse::<SocketAddr>()
-        .context("Windows default-route bootstrap requires a numeric VPN endpoint")?;
     SystemNet::new()?
         .install_kill_switch(&KillSwitchSpec {
             endpoint,

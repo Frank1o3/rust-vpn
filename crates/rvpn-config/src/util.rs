@@ -108,3 +108,35 @@ pub fn read_config_file(path: impl AsRef<std::path::Path>) -> Result<String, Con
 
     std::fs::read_to_string(path).map_err(ConfigError::Io)
 }
+
+/// Replace the top-level `server` value while preserving the rest of the TOML
+/// document, including comments and formatting.
+pub fn replace_client_server(input: &str, server: &str) -> String {
+    let replacement = format!("server = {}", toml::Value::String(server.to_owned()));
+    let mut output = String::with_capacity(input.len() + replacement.len());
+    let mut replaced = false;
+    let mut in_section = false;
+
+    for line in input.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            in_section = true;
+        }
+        if !in_section && trimmed.starts_with("server") {
+            let after_key = &trimmed["server".len()..];
+            if after_key.trim_start().starts_with('=') {
+                let newline = if line.ends_with('\n') { "\n" } else { "" };
+                output.push_str(&replacement);
+                output.push_str(newline);
+                replaced = true;
+                continue;
+            }
+        }
+        output.push_str(line);
+    }
+
+    if !replaced {
+        output.insert_str(0, &format!("{replacement}\n"));
+    }
+    output
+}

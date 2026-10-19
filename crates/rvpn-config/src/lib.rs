@@ -19,5 +19,6 @@ pub use server::{
 };
 pub use util::{
     default_client_config_path, default_config_dir, default_server_config_path,
-    jittered_retry_interval, read_config_file, resolve_endpoint, validate_endpoint_syntax,
+    jittered_retry_interval, read_config_file, replace_client_server, resolve_endpoint,
+    validate_endpoint_syntax,
 };

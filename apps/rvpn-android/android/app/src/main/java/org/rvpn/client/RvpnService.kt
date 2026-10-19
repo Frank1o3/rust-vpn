@@ -175,7 +175,8 @@ class RvpnService : VpnService() {
                 mtu = tunnelMtu,
                 rekeyPacketLimit = config.rekeyPacketLimit,
                 retryIntervalMs = config.retryIntervalMs,
-                retryLimit = config.retryLimit
+                retryLimit = config.retryLimit,
+                dnsReplace = config.dnsReplace
             )
 
             if (error.isNotEmpty()) {
@@ -191,10 +192,27 @@ class RvpnService : VpnService() {
             // startTunnel() only launches Rust. It does NOT mean the handshake
             // has succeeded yet.
             isConnected = false
+            var savedResolvedServer = false
 
             monitorJob?.cancel()
             monitorJob = serviceScope.launch {
                 while (isActive) {
+                    if (!savedResolvedServer && config.dnsReplace) {
+                        val resolvedServer = RvpnNative.getResolvedServer()
+                        if (resolvedServer.isNotBlank()) {
+                            if (resolvedServer != config.server) {
+                                val updated = config.copy(
+                                    server = resolvedServer,
+                                    rawClientToml = if (config.rawClientToml.isBlank()) "" else
+                                        TomlConfigParser.replaceServer(config.rawClientToml, resolvedServer)
+                                )
+                                RvpnConfig.save(this@RvpnService, updated)
+                                Log.i(TAG, "Replaced saved DNS endpoint with $resolvedServer")
+                            }
+                            savedResolvedServer = true
+                        }
+                    }
+
                     if (RvpnNative.isTunnelConnected()) {
                         if (!isConnected) {
                             isConnected = true

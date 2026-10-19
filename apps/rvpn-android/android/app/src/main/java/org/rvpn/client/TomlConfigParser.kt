@@ -54,6 +54,7 @@ private data class TomlRekeySection(
 @Serializable
 private data class RvpnClientToml(
     val server: String? = null,
+    @SerialName("dns_replace") val dnsReplace: Boolean? = null,
     @SerialName("obfuscation_key") val obfuscationKey: String? = null,
     @SerialName("pre_shared_key") val preSharedKey: String? = null,
     @SerialName("interface") val iface: TomlInterfaceSection = TomlInterfaceSection(),
@@ -104,6 +105,7 @@ object TomlConfigParser {
 
         return base.copy(
             server = parsed.server ?: base.server,
+            dnsReplace = parsed.dnsReplace ?: base.dnsReplace,
 
             obfuscationKey = parsed.obfuscationKey ?: base.obfuscationKey,
 
@@ -168,6 +170,7 @@ object TomlConfigParser {
             append('"')
         }
         append("server = ").append(quoted(config.server)).append("\n")
+        append("dns_replace = ").append(config.dnsReplace).append("\n")
         if (config.obfuscationKey.isNotBlank()) append("obfuscation_key = ").append(quoted(config.obfuscationKey)).append("\n")
         append("\n[interface]\n")
         append("    address = ").append(quoted("${config.tunnelAddress}/${config.tunnelPrefixLength}")).append("\n")
@@ -210,5 +213,27 @@ object TomlConfigParser {
         val ip = parts[0]
         val prefix = parts.getOrNull(1)?.toIntOrNull() ?: if (ip.contains(":")) 64 else 24
         return ip to prefix
+    }
+
+    /** Updates the top-level server value without reformatting imported TOML. */
+    fun replaceServer(text: String, server: String): String {
+        val replacement = "server = \"${server.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+        val lines = text.lines().toMutableList()
+        var inSection = false
+        var index = -1
+        for (lineIndex in lines.indices) {
+            val trimmed = lines[lineIndex].trimStart()
+            if (trimmed.startsWith("[")) inSection = true
+            if (!inSection && trimmed.substringBefore('=').trim() == "server") {
+                index = lineIndex
+                break
+            }
+        }
+        if (index >= 0) {
+            lines[index] = replacement
+        } else {
+            lines.add(0, replacement)
+        }
+        return lines.joinToString("\n")
     }
 }

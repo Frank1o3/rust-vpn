@@ -8,6 +8,7 @@ import android.content.Context
  */
 data class RvpnConfig(
     val server: String = "",
+    val dnsReplace: Boolean = false,
     /** "psk", "pinned-key", or "certificate". */
     val authMode: String = "psk",
     val preSharedKey: String = "",
@@ -43,6 +44,7 @@ data class RvpnConfig(
         private const val PREFS_NAME = "rvpn_prefs"
 
         private const val KEY_SERVER = "server"
+        private const val KEY_DNS_REPLACE = "dns_replace"
         private const val KEY_AUTH_MODE = "auth_mode"
         private const val KEY_PSK = "psk"
         private const val KEY_OBFUSCATION_KEY = "obfuscation_key"
@@ -72,6 +74,7 @@ data class RvpnConfig(
 
             return RvpnConfig(
                 server = prefs.getString(KEY_SERVER, "") ?: "",
+                dnsReplace = prefs.getBoolean(KEY_DNS_REPLACE, false),
                 authMode = prefs.getString(KEY_AUTH_MODE, "psk") ?: "psk",
                 preSharedKey = prefs.getString(KEY_PSK, "") ?: "",
                 obfuscationKey = prefs.getString(KEY_OBFUSCATION_KEY, "") ?: "",
@@ -102,6 +105,7 @@ data class RvpnConfig(
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_SERVER, config.server)
+                .putBoolean(KEY_DNS_REPLACE, config.dnsReplace)
                 .putString(KEY_AUTH_MODE, config.authMode)
                 .putString(KEY_PSK, config.preSharedKey)
                 .putString(KEY_OBFUSCATION_KEY, config.obfuscationKey)

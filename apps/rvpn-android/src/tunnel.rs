@@ -17,6 +17,7 @@ use tokio::{
 pub struct AndroidTunnelConfig {
     pub tun_fd: RawFd,
     pub server: String,
+    pub dns_replace: bool,
     pub auth: rvpn_crypto::AuthConfig,
     pub obfuscation_key: Option<[u8; 32]>,
     pub mtu: u16,
@@ -64,6 +65,10 @@ pub async fn run_tunnel(
     let mut server = rvpn_config::resolve_endpoint(&config.server)
         .await
         .context("resolving RVPN server endpoint")?;
+    crate::jni::set_resolved_server(server.to_string());
+    if config.dns_replace {
+        tracing::info!(%server, "DNS replacement enabled; Android client config will use the resolved IP");
+    }
     tracing::info!(endpoint = %config.server, %server, "resolved RVPN server endpoint");
 
     let local_bind: SocketAddr = if server.is_ipv6() {

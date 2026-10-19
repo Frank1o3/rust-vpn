@@ -46,6 +46,9 @@ object RvpnNative {
      */
     external fun getTunnelError(): String
 
+    /** Returns the endpoint resolved by native code for the current tunnel. */
+    external fun getResolvedServer(): String
+
     /**
      * Signals the background tunnel event loop to gracefully shut down.
      * Returns true if a running tunnel was signaled.
@@ -108,6 +111,7 @@ object RvpnNative {
         mtu: Int,
         rekeyPacketLimit: Long,
         retryIntervalMs: Long,
-        retryLimit: Int
+        retryLimit: Int,
+        dnsReplace: Boolean
     ): String
 }

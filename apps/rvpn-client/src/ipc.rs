@@ -51,6 +51,7 @@ impl Daemon {
             config,
             Some(Arc::clone(&gui_state)),
             Some(shutdown_fut),
+            Some(config_path),
         ));
         *guard = Some(Session {
             shutdown_tx,

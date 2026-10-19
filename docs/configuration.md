@@ -67,15 +67,16 @@ do not expose it on the server's public address.
 
 ## Linux client
 
-When either default route is enabled, configure `server` with a numeric IP
-address (for example, `203.0.113.10:51820`). Endpoint resolution happens before
-the VPN routes and Linux kill switch are active, so a hostname would require a
-DNS lookup over the physical network. While the Linux kill switch is active,
-plain UDP and TCP DNS on physical interfaces is blocked; DNS through loopback
-or the tunnel interface remains available.
+`server` may be a hostname or numeric IP address. The client resolves it before
+installing the bootstrap kill switch and before setting up VPN routes. Set
+`dns_replace = true` to write the resolved IP back to the client config after
+resolution; the default is `false`, which keeps the hostname and resolves it
+again on each new connection. This is useful with dynamic DNS when the server's
+public address can change.
 
 ```toml
-server = "203.0.113.10:9000"
+server = "vpn.example.net:9000"
+dns_replace = false
 obfuscation_key = "<same optional key>"
 
 [interface]

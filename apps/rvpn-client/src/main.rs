@@ -11,7 +11,9 @@ use rvpn_crypto::{AEAD_TAG_LEN, AuthConfig, ObfuscationKey};
 use rvpn_interface::{DEFAULT_MTU, VirtualInterface};
 use rvpn_protocol::{HEADER_LEN, ProtectedSession};
 use rvpn_transport::{TransportConfig, UdpTransport, default_udp_payload_mtu};
-use std::{env, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    env, future::Future, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc, time::Duration,
+};
 
 use handshake::establish;
 use platform::{
@@ -38,7 +40,7 @@ fn main() -> Result<()> {
             match arg {
                 Some(path) if path != "--daemon" => {
                     let config = ClientConfig::from_toml(&rvpn_config::read_config_file(&path)?)?;
-                    run_client(config, None, None).await
+                    run_client(config, None, None, Some(PathBuf::from(path))).await
                 }
                 _ => {
                     let daemon = Daemon::new();
@@ -127,9 +129,14 @@ pub(crate) async fn run_client(
     config: ClientConfig,
     gui_state: Option<GuiStateHandle>,
     shutdown: Option<ShutdownFuture>,
+    config_path: Option<PathBuf>,
 ) -> Result<()> {
-    let bootstrap_kill_switch = install_bootstrap_kill_switch(&config).await?;
-    let result = run_client_inner(config, gui_state, shutdown).await;
+    tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
+    let initial_server = rvpn_config::resolve_endpoint(&config.server)
+        .await
+        .context("resolving server endpoint")?;
+    let bootstrap_kill_switch = install_bootstrap_kill_switch(&config, initial_server).await?;
+    let result = run_client_inner(config, gui_state, shutdown, config_path, initial_server).await;
     if !bootstrap_kill_switch {
         return result;
     }
@@ -146,16 +153,31 @@ pub(crate) async fn run_client(
 }
 
 async fn run_client_inner(
-    config: ClientConfig,
+    mut config: ClientConfig,
     gui_state: Option<GuiStateHandle>,
     shutdown: Option<ShutdownFuture>,
+    config_path: Option<PathBuf>,
+    mut server: SocketAddr,
 ) -> Result<()> {
-    tracing::info!(endpoint = %config.server, "resolving RVPN server endpoint");
-    let mut server: SocketAddr = rvpn_config::resolve_endpoint(&config.server)
-        .await
-        .context("resolving server endpoint")?;
     config.validate_resolved(server)?;
     tracing::info!(%server, "resolved RVPN server endpoint");
+
+    if config.dns_replace {
+        config.server = server.to_string();
+        if let Some(path) = config_path {
+            let current = std::fs::read_to_string(&path).with_context(|| {
+                format!(
+                    "reading client config {} for DNS replacement",
+                    path.display()
+                )
+            })?;
+            let updated = rvpn_config::replace_client_server(&current, &config.server);
+            std::fs::write(&path, updated).with_context(|| {
+                format!("writing resolved server address to {}", path.display())
+            })?;
+            tracing::info!(path = %path.display(), server = %config.server, "replaced client config hostname with resolved IP");
+        }
+    }
 
     if let Some(state) = &gui_state {
         let mut state = state.lock().unwrap_or_else(|e| e.into_inner());

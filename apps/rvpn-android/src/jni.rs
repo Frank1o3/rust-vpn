@@ -22,6 +22,7 @@ use tokio::sync::watch;
 static TUNNEL_RUNNING: AtomicBool = AtomicBool::new(false);
 static TUNNEL_CONNECTED: AtomicBool = AtomicBool::new(false);
 static TUNNEL_ERROR: Mutex<Option<String>> = Mutex::new(None);
+static RESOLVED_SERVER: Mutex<Option<String>> = Mutex::new(None);
 static SHUTDOWN_TX: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
 static TUNNEL_STATS: Mutex<Option<(Arc<TunnelStats>, Instant)>> = Mutex::new(None);
 static LOGGER_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -47,6 +48,23 @@ fn set_tunnel_error(message: impl Into<String>) {
     TUNNEL_CONNECTED.store(false, Ordering::SeqCst);
     let mut guard = TUNNEL_ERROR.lock().unwrap();
     *guard = Some(message.into());
+}
+
+pub(crate) fn set_resolved_server(server: String) {
+    *RESOLVED_SERVER.lock().unwrap() = Some(server);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_rvpn_client_RvpnNative_getResolvedServer<'local>(
+    mut unowned_env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    unowned_env
+        .with_env(|env| -> jni::errors::Result<jstring> {
+            let server = RESOLVED_SERVER.lock().unwrap().clone().unwrap_or_default();
+            Ok(env.new_string(server)?.into_raw())
+        })
+        .resolve::<LogErrorAndDefault>()
 }
 
 #[unsafe(no_mangle)]
@@ -164,6 +182,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
     rekey_limit: jlong,
     retry_interval_ms: jlong,
     retry_limit: jint,
+    dns_replace: jboolean,
 ) -> jstring {
     unowned_env
         .with_env(|env| -> jni::errors::Result<jstring> {
@@ -175,6 +194,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             }
 
             TUNNEL_CONNECTED.store(false, Ordering::SeqCst);
+            *RESOLVED_SERVER.lock().unwrap() = None;
             {
                 let mut error = TUNNEL_ERROR.lock().unwrap();
                 *error = None;
@@ -308,6 +328,7 @@ pub extern "system" fn Java_org_rvpn_client_RvpnNative_startTunnel<'local>(
             let config = AndroidTunnelConfig {
                 tun_fd,
                 server: server_rust,
+                dns_replace: dns_replace != 0,
                 auth,
                 obfuscation_key,
                 mtu: if mtu <= 0 { 1400 } else { mtu as u16 },

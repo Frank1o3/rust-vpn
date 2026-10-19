@@ -76,6 +76,9 @@ impl AuthMode {
 #[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     pub server: String,
+    /// Replace a hostname with its resolved IP in the saved client config.
+    #[serde(default)]
+    pub dns_replace: bool,
     pub auth: Option<AuthMode>,
     #[serde(default)]
     pub interface: InterfaceConfig,
@@ -99,13 +102,6 @@ impl ClientConfig {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         validate_endpoint_syntax(&self.server)?;
-        if (self.routing.default_route || self.routing.default_route_v6)
-            && self.server.parse::<SocketAddr>().is_err()
-        {
-            return Err(ConfigError::Invalid(
-                "default-route configurations require a numeric server IP to avoid pre-tunnel DNS lookups",
-            ));
-        }
         self.auth_config()?;
         self.interface
             .validate()

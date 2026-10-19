@@ -80,14 +80,13 @@ fn client_interface_name(configured: Option<&str>, tap: bool) -> String {
     }
 }
 
-pub async fn install_bootstrap_kill_switch(config: &ClientConfig) -> Result<bool> {
+pub async fn install_bootstrap_kill_switch(
+    config: &ClientConfig,
+    endpoint: SocketAddr,
+) -> Result<bool> {
     if !config.routing.default_route && !config.routing.default_route_v6 {
         return Ok(false);
     }
-    let endpoint = config
-        .server
-        .parse::<SocketAddr>()
-        .context("default-route bootstrap requires a numeric VPN endpoint")?;
     let uid = unsafe { libc::geteuid() };
     let net = SystemNet::new().context("opening Linux networking backend")?;
     net.install_kill_switch(&KillSwitchSpec {
@@ -97,7 +96,7 @@ pub async fn install_bootstrap_kill_switch(config: &ClientConfig) -> Result<bool
     })
     .await
     .context("installing Linux bootstrap kill switch")?;
-    tracing::info!(uid, %endpoint, "Linux bootstrap kill switch is active before endpoint resolution");
+    tracing::info!(uid, %endpoint, "Linux bootstrap kill switch is active after endpoint resolution");
     Ok(true)
 }
 

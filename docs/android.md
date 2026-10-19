@@ -78,6 +78,9 @@ cargo ndk -t armeabi-v7a -o apps/rvpn-android/android/app/src/main/jniLibs build
 
    Either path is parsed by the app's TOML config parser and saved to
    app-private storage; there's no manual per-field server/PSK entry.
+   The top-level `dns_replace` setting is optional and defaults to `false`.
+   When enabled, Android saves the resolved server IP into the imported config
+   after resolving the hostname.
 2. Switch to the **Main** tab and tap **Connect**. The app requests VPN
    permission via `VpnService.prepare()` the first time, then starts the
    foreground tunnel service.
