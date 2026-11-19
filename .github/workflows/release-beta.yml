@@ -123,7 +123,7 @@ jobs:
 
       - name: Build Android native libraries
         env:
-          BUILD_RELEASE_NATIVE: ${{ inputs.build_release_native || 'true' }}
+          BUILD_RELEASE_NATIVE: ${{ github.event_name == 'workflow_dispatch' && inputs.build_release_native == false && 'false' || 'true' }}
         run: |
           mkdir -p apps/rvpn-android/android/app/src/main/jniLibs
           FLAGS=()
@@ -182,7 +182,7 @@ jobs:
 
           text = Path("Cargo.toml").read_text()
           match = re.search(
-              r"(?ms)^\\[workspace\\.package\\]\\s*(.*?)(?=^\\[|\\Z)",
+              r"(?ms)^\[workspace\.package\]\s*(.*?)(?=^\[|\Z)",
               text,
           )
           if not match:
