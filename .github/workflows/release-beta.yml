@@ -187,7 +187,7 @@ jobs:
           )
           if not match:
               raise SystemExit("Cargo.toml is missing [workspace.package]")
-          version = re.search(r'^\\s*version\\s*=\\s*"([^"]+)"', match.group(1), re.M)
+          version = re.search(r'^\s*version\s*=\s*"([^"]+)"', match.group(1), re.M)
           if not version:
               raise SystemExit("[workspace.package].version is missing")
           print(version.group(1))
