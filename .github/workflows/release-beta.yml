@@ -1,0 +1,235 @@
+name: Build and Publish Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_release_native:
+        description: Build the Android native Rust library in release mode
+        type: boolean
+        default: true
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/**"
+      - "crates/**"
+      - ".github/workflows/release-beta.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rvpn-beta-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Build Linux applications
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libdbus-1-dev libx11-dev \
+            libxkbcommon-dev libwayland-dev libgtk-3-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build client, server, and tray
+        run: |
+          cargo build --locked --release -p rvpn-client -p rvpn-server -p rvpn-tray
+
+      - name: Package Linux binaries
+        run: |
+          mkdir -p dist/linux-x86_64
+          install -m 0755 target/release/rvpn-client dist/linux-x86_64/
+          install -m 0755 target/release/rvpn-server dist/linux-x86_64/
+          install -m 0755 target/release/rvpn-tray dist/linux-x86_64/
+          cat > dist/linux-x86_64/README.txt <<'EOF'
+          RVPN Linux x86_64 applications
+
+          Binaries:
+            rvpn-client
+            rvpn-server
+            rvpn-tray
+
+          These are dynamically linked Linux binaries. Install the runtime
+          libraries required by your distribution before running them.
+          EOF
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rvpn-linux-x86_64
+          path: dist/linux-x86_64/
+          if-no-files-found: error
+
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android NDK
+        run: |
+          NDK_PATH="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$NDK_PATH" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125"
+            NDK_PATH="$ANDROID_HOME/ndk/26.1.10909125"
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
+
+      - name: Install Rust and Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android,armv7-linux-androideabi
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: Cache cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: ${{ runner.os }}-cargo-ndk-v3
+
+      - name: Install cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk
+          fi
+
+      - name: Build Android native libraries
+        env:
+          BUILD_RELEASE_NATIVE: ${{ inputs.build_release_native || 'true' }}
+        run: |
+          mkdir -p apps/rvpn-android/android/app/src/main/jniLibs
+          FLAGS=()
+          if [ "$BUILD_RELEASE_NATIVE" = "true" ]; then
+            FLAGS+=(--release)
+          fi
+          cargo ndk \
+            -t arm64-v8a -t x86_64 -t armeabi-v7a \
+            -o apps/rvpn-android/android/app/src/main/jniLibs \
+            build --locked -p rvpn-android "${FLAGS[@]}"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build APK
+        working-directory: apps/rvpn-android/android
+        run: gradle assembleDebug --stacktrace
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist/android
+          cp apps/rvpn-android/android/app/build/outputs/apk/debug/app-debug.apk \
+            dist/android/rvpn-android-debug.apk
+
+      - name: Upload Android package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rvpn-android
+          path: dist/android/
+          if-no-files-found: error
+
+  publish-beta:
+    name: Package and publish beta release
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+
+      - name: Read registered workspace version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path("Cargo.toml").read_text()
+          match = re.search(
+              r"(?ms)^\\[workspace\\.package\\]\\s*(.*?)(?=^\\[|\\Z)",
+              text,
+          )
+          if not match:
+              raise SystemExit("Cargo.toml is missing [workspace.package]")
+          version = re.search(r'^\\s*version\\s*=\\s*"([^"]+)"', match.group(1), re.M)
+          if not version:
+              raise SystemExit("[workspace.package].version is missing")
+          print(version.group(1))
+          PY
+          )"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}-beta" >> "$GITHUB_OUTPUT"
+
+      - name: Create release ZIP
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          mkdir -p package
+          cp -a release-files/rvpn-linux-x86_64 package/
+          cp -a release-files/rvpn-android package/
+          cat > package/README.txt <<EOF
+          RVPN beta release ${VERSION}
+
+          Contents:
+            linux-x86_64/  rvpn-client, rvpn-server, rvpn-tray
+            android/       rvpn-android-debug.apk
+
+          The version is read from [workspace.package].version in Cargo.toml.
+          EOF
+          cd package
+          zip -r "../rvpn-${VERSION}-beta.zip" .
+
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "rvpn-${VERSION}-beta.zip" --clobber
+            gh release edit "$TAG" \
+              --title "RVPN ${VERSION} Beta" \
+              --notes "Beta build for RVPN ${VERSION}. Includes Linux client/server/tray binaries and the Android debug APK." \
+              --prerelease
+          else
+            gh release create "$TAG" "rvpn-${VERSION}-beta.zip" \
+              --title "RVPN ${VERSION} Beta" \
+              --notes "Beta build for RVPN ${VERSION}. Includes Linux client/server/tray binaries and the Android debug APK." \
+              --prerelease
+          fi
