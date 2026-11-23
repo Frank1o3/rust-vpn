@@ -177,43 +177,39 @@ jobs:
         shell: bash
         run: |
           VERSION="$(python3 - <<'PY'
-          import re
+          import tomllib
           from pathlib import Path
 
-          text = Path("Cargo.toml").read_text()
-          match = re.search(
-              r"(?ms)^\[workspace\.package\]\s*(.*?)(?=^\[|\Z)",
-              text,
-          )
-          if not match:
-              raise SystemExit("Cargo.toml is missing [workspace.package]")
-          version = re.search(r'^\s*version\s*=\s*"([^"]+)"', match.group(1), re.M)
+          manifest = tomllib.loads(Path("Cargo.toml").read_text())
+          version = manifest.get("workspace", {}).get("package", {}).get("version")
           if not version:
               raise SystemExit("[workspace.package].version is missing")
-          print(version.group(1))
+          print(version)
           PY
           )"
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}-beta" >> "$GITHUB_OUTPUT"
 
-      - name: Create release ZIP
+      - name: Stage individual release assets
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          mkdir -p package
-          cp -a release-files/rvpn-linux-x86_64 package/
-          cp -a release-files/rvpn-android package/
-          cat > package/README.txt <<EOF
+          mkdir -p release-assets
+          cp release-files/rvpn-linux-x86_64/rvpn-client "release-assets/rvpn-client-linux-x86_64"
+          cp release-files/rvpn-linux-x86_64/rvpn-server "release-assets/rvpn-server-linux-x86_64"
+          cp release-files/rvpn-linux-x86_64/rvpn-tray "release-assets/rvpn-tray-linux-x86_64"
+          cp release-files/rvpn-android/rvpn-android-debug.apk "release-assets/rvpn-android-debug.apk"
+          cat > release-assets/README.txt <<EOF
           RVPN beta release ${VERSION}
 
-          Contents:
-            linux-x86_64/  rvpn-client, rvpn-server, rvpn-tray
-            android/       rvpn-android-debug.apk
+          Linux x86_64:
+            rvpn-client-linux-x86_64
+            rvpn-server-linux-x86_64
+            rvpn-tray-linux-x86_64
 
-          The version is read from [workspace.package].version in Cargo.toml.
+          Android:
+            rvpn-android-debug.apk
           EOF
-          cd package
-          zip -r "../rvpn-${VERSION}-beta.zip" .
 
       - name: Publish GitHub prerelease
         env:
@@ -221,15 +217,22 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
+          ASSETS=(
+            "release-assets/rvpn-client-linux-x86_64"
+            "release-assets/rvpn-server-linux-x86_64"
+            "release-assets/rvpn-tray-linux-x86_64"
+            "release-assets/rvpn-android-debug.apk"
+            "release-assets/README.txt"
+          )
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "rvpn-${VERSION}-beta.zip" --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
             gh release edit "$TAG" \
               --title "RVPN ${VERSION} Beta" \
-              --notes "Beta build for RVPN ${VERSION}. Includes Linux client/server/tray binaries and the Android debug APK." \
+              --notes "Beta build for RVPN ${VERSION}. Assets are provided as individual Linux binaries and an Android debug APK." \
               --prerelease
           else
-            gh release create "$TAG" "rvpn-${VERSION}-beta.zip" \
+            gh release create "$TAG" "${ASSETS[@]}" \
               --title "RVPN ${VERSION} Beta" \
-              --notes "Beta build for RVPN ${VERSION}. Includes Linux client/server/tray binaries and the Android debug APK." \
+              --notes "Beta build for RVPN ${VERSION}. Assets are provided as individual Linux binaries and an Android debug APK." \
               --prerelease
           fi
