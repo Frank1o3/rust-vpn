@@ -29,9 +29,76 @@ retain that minimum while accounting for RVPN overhead.
 
 ## Tunnel ping works, internet access does not
 
-Check that `forwarding.external_interface` is the actual egress interface and
-that the server installed forwarding/NAT rules. Also ensure the server's UDP
-endpoint retains a physical route.
+A successful ping to the tunnel gateway proves only that the client can reach
+the server's tunnel interface. It does not prove that the server routes packets
+to the internet. DNS configuration is independent of IP forwarding.
+
+1. Confirm the server config explicitly enables forwarding. It is **disabled
+   by default**:
+
+   ```toml
+   [forwarding]
+   enabled = true
+   backend = "auto"
+   external_interface = "eth0" # replace with the real internet-facing interface
+   tunnel_cidr = "10.42.0.0/24"
+   # Include only if IPv6 is configured for the tunnel:
+   tunnel_cidr_v6 = "fd42::/64"
+   ```
+
+   The tunnel CIDRs must match the addresses assigned to RVPN peers. Find the
+   server's actual egress interface with `ip route get 1.1.1.1`; use the
+   interface shown after `dev`, not the RVPN tunnel interface.
+
+2. Enable forwarding on the server. The systemd unit intentionally protects
+   kernel tunables, so configure these persistently and apply them before
+   starting RVPN:
+
+   ```sh
+   sudo sysctl -w net.ipv4.ip_forward=1
+   # Only if forwarding IPv6:
+   sudo sysctl -w net.ipv6.conf.all.forwarding=1
+   ```
+
+   For persistence, add the enabled settings to a file under
+   `/etc/sysctl.d/` and run `sudo sysctl --system`.
+
+3. Check that the service installed its firewall/NAT rules:
+
+   ```sh
+   sudo nft list table inet rvpn
+   sudo iptables -S FORWARD
+   sudo iptables -t nat -S POSTROUTING
+   ```
+
+   The configured backend determines which ruleset is active. With nftables,
+   expect a forward chain allowing traffic from the tunnel interface to the
+   configured external interface, established return traffic, and a
+   postrouting masquerade rule for the tunnel CIDR. With iptables, check the
+   equivalent FORWARD and POSTROUTING rules. Do not flush unrelated host
+   firewall rules while diagnosing.
+
+4. Test by IP before testing DNS. From the client, ping the tunnel gateway,
+   then ping a public IP such as `1.1.1.1`. If the gateway responds but the
+   public IP does not, the failure is forwarding, firewall/NAT, or upstream
+   routing—not DNS. If the public IP works but domain names fail, inspect the
+   configured DNS server and the server-side DNS forwarder separately.
+
+5. Verify that the server's route to the VPN client's public UDP endpoint still
+   uses the physical network. A full-tunnel client must not route its own VPN
+   transport packets back into the tunnel.
+
+If forwarding is enabled and all of the above appear correct, capture traffic
+on both interfaces while pinging a public IP:
+
+```sh
+sudo tcpdump -ni <tunnel-interface> icmp
+sudo tcpdump -ni <external-interface> icmp
+```
+
+Packets visible on the tunnel interface but absent from the external interface
+point to server forwarding/firewall policy. Packets leaving externally without
+replies point toward upstream routing, provider filtering, or return-path NAT.
 
 ## Tray D-Bus `Broken pipe`
 
