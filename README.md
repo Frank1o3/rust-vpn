@@ -13,6 +13,16 @@ pre-beta: solid enough for personal and small-group use, not yet something
 to stake critical infrastructure on. Community review of the handshake and
 crypto is welcome and encouraged.
 
+## Community and contribution
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+RVPN is licensed under [GNU GPL-3.0-or-later](LICENSE). The VPN protocol and
+cryptographic implementation have not received an independent security audit;
+see [Important security notes](#important-security-notes) before deployment.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) — components, packet flow, and security boundaries.

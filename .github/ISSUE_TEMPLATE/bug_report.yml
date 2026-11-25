@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible RVPN client, server, Android, or networking problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search existing issues first. Never include private keys, identity seeds, obfuscation keys, credentials, or unredacted configs.
+  - type: input
+    id: version
+    attributes:
+      label: RVPN version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Linux client
+        - Linux server
+        - Android client
+        - Tray / IPC
+        - Shared protocol / crypto
+        - DNS / routing / firewall
+        - Build / release
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, kernel, architecture, client/server platform, firewall backend, and network type ( redact public addresses ).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and diagnostics
+      description: Include relevant redacted logs. For routing issues, state whether tunnel-IP ping and external-IP ping work separately.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Redacted configuration
+      description: Remove all keys, seeds, certificates, credentials, endpoint addresses, and personal identifiers.
+      render: toml
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed secrets and personal information.
+          required: true
