@@ -39,13 +39,11 @@ async fn main() -> Result<()> {
             )
         })?)?;
     if !config.forwarding.enabled {
-        tracing::warn!(
-            concat!(
-                "internet forwarding is disabled; peers can reach the VPN server and permitted peers, ",
-                "but cannot use this server as an internet gateway. Set [forwarding].enabled = true ",
-                "and configure external_interface plus the tunnel CIDR to enable egress"
-            )
-        );
+        tracing::warn!(concat!(
+            "internet forwarding is disabled; peers can reach the VPN server and permitted peers, ",
+            "but cannot use this server as an internet gateway. Set [forwarding].enabled = true ",
+            "and configure external_interface plus the tunnel CIDR to enable egress"
+        ));
     }
     let usage_history = if config.usage_history.enabled {
         Some(UsageHistory::open(

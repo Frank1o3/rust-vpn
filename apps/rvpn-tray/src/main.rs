@@ -1,4 +1,4 @@
-use std::{fs, time::Duration};
+use std::{fs, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use rvpn_ipc::{ControlRequest, ControlResponse, StatusSnapshot};
@@ -49,9 +49,9 @@ fn main() -> Result<()> {
 
     // Menu events.
     let proxy = event_loop.create_proxy();
-    MenuEvent::set_event_handler(Some(move |event| {
+    MenuEvent::set_event_handler(Some(Arc::new(move |event| {
         let _ = proxy.send_event(TrayEvent::Menu(event));
-    }));
+    })));
 
     // Menu.
     let menu = Menu::new();

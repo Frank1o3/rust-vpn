@@ -177,7 +177,12 @@ impl ServerConfig {
                 "dns.blocked_domains requires at least one DNS upstream",
             ));
         }
-        if self.dns.blocked_domains.iter().any(|domain| !valid_domain(domain)) {
+        if self
+            .dns
+            .blocked_domains
+            .iter()
+            .any(|domain| !valid_domain(domain))
+        {
             return Err(ConfigError::Invalid(
                 "dns.blocked_domains must contain valid DNS domain names",
             ));
@@ -202,7 +207,10 @@ impl ServerConfig {
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.obfuscation_key.as_deref().map(decode_key32).transpose()
+        self.obfuscation_key
+            .as_deref()
+            .map(decode_key32)
+            .transpose()
     }
 
     pub fn peer_identities(&self) -> Result<Vec<PeerIdentity>, ConfigError> {
@@ -291,7 +299,9 @@ fn valid_domain(domain: &str) -> bool {
                 && label.len() <= 63
                 && !label.starts_with('-')
                 && !label.ends_with('-')
-                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         })
 }
 

@@ -132,6 +132,9 @@ impl ClientConfig {
     }
 
     pub fn obfuscation_key_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
-        self.obfuscation_key.as_deref().map(decode_key32).transpose()
+        self.obfuscation_key
+            .as_deref()
+            .map(decode_key32)
+            .transpose()
     }
 }

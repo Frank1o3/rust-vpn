@@ -163,8 +163,10 @@ impl Router {
         let mut linked = HashSet::new();
         for (id, other) in self.peers.iter_mut() {
             if self.links.linked(&name, &other.name) {
-                other.linked.insert(session);
                 linked.insert(*id);
+            }
+            if self.links.linked(&other.name, &name) {
+                other.linked.insert(session);
             }
         }
         self.peers.insert(

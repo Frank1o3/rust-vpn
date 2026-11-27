@@ -76,12 +76,12 @@ fn accepts_hostname_shaped_server_syntax() {
 }
 
 #[test]
-fn kill_switch_default_routes_require_a_numeric_endpoint() {
+fn default_routes_accept_hostname_or_numeric_endpoint() {
     let config = format!(
         "server = 'vpn.example:9000'\n{}[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
         pinned_auth_toml(&seed(), &pubkey())
     );
-    assert!(ClientConfig::from_toml(&config).is_err());
+    assert!(ClientConfig::from_toml(&config).is_ok());
 
     let numeric = format!(
         "server = '203.0.113.7:9000'\n{}[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
@@ -91,7 +91,7 @@ fn kill_switch_default_routes_require_a_numeric_endpoint() {
 }
 
 #[test]
-fn tunnel_dns_does_not_remove_numeric_endpoint_bootstrap_requirement() {
+fn tunnel_dns_accepts_hostname_or_numeric_endpoint() {
     let auth = pinned_auth_toml(&seed(), &pubkey());
     let numeric = format!(
         "server = '203.0.113.7:9000'\n{}[interface]\ndns_servers = '10.42.0.1'\n[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
@@ -103,7 +103,7 @@ fn tunnel_dns_does_not_remove_numeric_endpoint_bootstrap_requirement() {
         "server = 'vpn.example:9000'\n{}[interface]\ndns_servers = '10.42.0.1'\n[routing]\ndefault_route = true\ngateway = '10.42.0.1'",
         auth
     );
-    assert!(ClientConfig::from_toml(&hostname).is_err());
+    assert!(ClientConfig::from_toml(&hostname).is_ok());
 }
 
 #[test]

@@ -203,11 +203,7 @@ pub async fn teardown_client_network(
     }
 }
 
-async fn remove_configured_routes(
-    net: &SystemNet,
-    config: &ClientConfig,
-    interface_index: u32,
-) {
+async fn remove_configured_routes(net: &SystemNet, config: &ClientConfig, interface_index: u32) {
     for route in &config.routing.routes {
         let destination = match route.parse::<IpNet>() {
             Ok(destination) => destination,
